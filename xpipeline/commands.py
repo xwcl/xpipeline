@@ -1,0 +1,179 @@
+import argparse
+import glob
+import os.path
+import logging
+from pprint import pformat
+
+from astropy.io import fits
+import dask
+import dask.array as da
+import pandas as pd
+
+from . import constants as const
+from .core import PipelineCollection
+from .tasks import obs_table, iofits, sky_model, detector
+from .instruments import clio
+
+log = logging.getLogger(__name__)
+
+def _files_from_source(source):
+    all_files = []
+    for entry in source:
+        if not os.path.exists(entry):
+            raise RuntimeError(f"Cannot find file or directory {entry}")
+        if os.path.isdir(entry):
+            all_files.extend(glob.glob(os.path.join(entry, "*.fit")))
+            all_files.extend(glob.glob(os.path.join(entry, "*.fits")))
+        else:
+            all_files.append(entry)
+    all_files.sort()
+    return all_files
+
+def _final_args_and_parse(parser):
+    parser.add_argument('source', nargs='+')
+    parser.add_argument('destination')
+    parser.add_argument('-v', '--verbose', help='Show all debugging output', action='store_true')
+    args = parser.parse_args()
+    if not os.path.isdir(args.destination):
+        raise RuntimeError("Destination {} doesn't exist".format(args.destination))
+    args.all_files = _files_from_source(args.source)
+    logging.basicConfig(level='DEBUG' if args.verbose else 'INFO')
+    return args
+
+def _generate_output_filenames(all_files, destination):
+    return [os.path.join(destination, os.path.basename(x)) for x in all_files]
+
+def ingest():
+    parser = argparse.ArgumentParser()
+    # add extra arguments
+    parser.add_argument('--obs-date-key', default='DATE-OBS')
+    parser.add_argument('--name-prefix', default='frame', help='Prefix for output filenames (default: "frame" -> "frame_00000.fits")')
+    # parse and generate list of `all_files`
+    args = _final_args_and_parse(parser)
+
+    destination = args.destination
+    all_files = args.all_files
+    observation_date_key = args.obs_date_key
+
+    log.info("Processing: %s", pformat(all_files))
+    d_names_to_hdulists = {fn: iofits.load_fits(fn) for fn in all_files}
+    table_path = os.path.join(destination, "obs.csv")
+    if os.path.exists(table_path):
+        log.info("Found existing 'obs.csv' table at %s, remove to regenerate", table_path)
+        table = pd.read_csv(table_path)
+    else:
+        table, = dask.compute(obs_table.construct_observations_table(
+            d_names_to_hdulists, 
+            observation_date_key=observation_date_key
+        ))
+        output_files = [
+            os.path.join(destination, f'frame_{i:06}.fits')
+            for i in range(len(all_files))
+        ]
+        table['output_name'] = output_files
+        table.to_csv(table_path)
+    
+    def normalize_one(row):
+        if os.path.exists(row['output_name']):
+            log.info(f'Found existing {row["output_name"]} for {row["original_name"]}')
+            return row['output_name']
+        orig_fn = row['original_name']
+        fn = row['output_name']
+        log.debug(d_names_to_hdulists[orig_fn])
+        log.debug(type(d_names_to_hdulists[orig_fn]))
+        return dask.compute(iofits.write_fits(d_names_to_hdulists[orig_fn], fn))
+    result = dask.compute(*table.apply(normalize_one, axis='columns'))
+    log.info(result)
+
+def compute_sky_model():
+    parser = argparse.ArgumentParser()
+    # add extra arguments
+    parser.add_argument('badpix', help='Path to FITS image of bad pixel map (1 is bad, 0 is good)')
+    parser.add_argument('--sky-n-components', type=int, default=6, help='Number of PCA components to calculate, default 6')
+    # parse and generate list of `all_files`
+    args = _final_args_and_parse(parser)
+    destination = args.destination
+    all_files = args.all_files
+    n_components = args.sky_n_components
+    badpix_path = args.badpix
+    # outputs
+    components_fn = os.path.join(destination, f'sky_model_{n_components}_components.fits')
+    mean_fn = os.path.join(destination, f'sky_model_mean.fits')
+    output_files = [components_fn, mean_fn]
+    if all(map(os.path.exists, output_files)):
+        log.info(f'All outputs exist: {output_files}')
+        log.info('Remove them to re-run')
+        return
+    # execute
+    coll = PipelineCollection(all_files)
+    sky_cube = (coll
+        .map(iofits.load_fits)
+        .map(iofits.ensure_dq)
+        .map(detector.set_dq_flag, iofits.load_fits(badpix_path)[0].data, const.DQ_BAD_PIXEL)
+        .map(clio.correct_linearity)
+        .collect(iofits.hdulists_to_dask_cube)
+    )
+    components, mean_sky = sky_model.compute_components(
+        sky_cube,
+        n_components
+    ).compute()
+    # save
+    fits.PrimaryHDU(
+        components,
+    ).writeto(components_fn)
+    log.info(f'{n_components} components written to {components_fn}')
+    fits.PrimaryHDU(
+        mean_sky
+    ).writeto(mean_fn)
+    log.info(f'Mean sky written to {mean_fn}')
+
+
+
+def clio_instrument_calibrate():
+    parser = argparse.ArgumentParser()
+    # parser.add_argument('--sky-components', help='Path to FITS cube of sky eigenimages')
+    # parser.add_argument('--sky-mean', help='Mean sky image')
+    # parser.add_argument('--sky-n-components', type=int, default=6, help='Number of PCA components to use in sky estimate (default: 6)')
+    parser.add_argument('badpix', help='Path to FITS image of bad pixel map (1 is bad, 0 is good)')
+    # parser.add_argument('psf_model', help='FITS image with unsaturated model PSF ("bottom" PSF for vAPP)')
+    # parse and generate list of `all_files`
+    args = _final_args_and_parse(parser)
+
+    output_files = _generate_output_filenames(args.all_files, args.destination)
+    if all(map(os.path.exists, output_files)):
+        log.info(f'All outputs exist: {output_files}')
+        log.info('Remove them to re-run')
+        return
+    coll = PipelineCollection([iofits.load_fits(fn) for fn in args.all_files])
+    d_results = (coll
+        .map(iofits.ensure_dq)
+        .map(badpix.apply_mask, iofits.load_fits(args.badpix))
+        .map(clio.correct_linearity)
+        # .zipmap(iofits.write_fits, output_files)
+        .collect(iofits.hdulists_to_cube)
+    )
+    # results = dask.compute(*d_results)
+    results = dask.compute([d_results])
+    log.info(results)
+    # databag = dask.bag.from_sequence(args.all_files)
+    # output_files_bag = dask.bag.from_sequence(output_files)
+    # outputs_delayed = (databag
+    #     .map(iofits.load_fits)
+    #     # .map(iofits.ensure_dq)
+    #     # .map(badpix.apply_mask, badpix_mask)
+    #     # .map(clio.correct_linearity)
+    #     # .map(clio.rough_centers, mean_sky)
+    #     # .map(clio.refine_centers, sky_model)
+    #     # .map(clio.background_subtract, sky_model)
+    #     # .map(clio.aligned_cutout)
+    #     # .map(iofits.write_fits, output_files_bag)
+    #     .map(lambda x: x[0].data)
+    # )
+    # # writes = [
+    # #     iofits.write_fits(fn, dhdul)
+    # #     for fn, dhdul
+    # #     in zip(output_files, outputs_delayed)
+    # # ]
+    # log.info(dask.compute(*da.stack(outputs_delayed)))
+    # # result_filenames = dask.compute(*databag)
+    # # log.info(f'Generated {result_filenames}')
