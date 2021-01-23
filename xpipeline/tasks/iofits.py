@@ -123,7 +123,7 @@ def load_fits_from_disk(filename):
         dask_hdul = DaskHDUList.from_fits(hdul)
     return dask_hdul
 
-def get_data(filename, ext=0):
+def get_data_from_disk(filename, ext=0):
     return load_fits_from_disk(filename)[ext].data
 
 @dask.delayed

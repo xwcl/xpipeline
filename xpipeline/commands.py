@@ -248,7 +248,7 @@ def clio_instrument_calibrate():
         log.info("Remove them to re-run")
         return
     badpix_arr = iofits.load_fits_from_disk(args.badpix)[0].data
-    sky_components_arr = iofits.get_data(args.sky_components)[:sky_n_components]
+    sky_components_arr = iofits.get_data_from_disk(args.sky_components)[:sky_n_components]
     coll = PipelineCollection(args.all_files)
     coll_prelim = (
         coll.map(iofits.load_fits_from_disk)
@@ -264,8 +264,8 @@ def clio_instrument_calibrate():
     delayed_prelim_data = coll_prelim.collect(iofits.hdulists_to_dask_cube)
     da_prelim = delayed_prelim_data.compute()
     # mean_star_arr = da.average(da_prelim, axis=0)
-    mean_bg_arr = iofits.get_data(args.sky_mean)
-    std_bg_arr = iofits.get_data(args.sky_std)
+    mean_bg_arr = iofits.get_data_from_disk(args.sky_mean)
+    std_bg_arr = iofits.get_data_from_disk(args.sky_std)
     # bg_goodpix = sky_model.generate_background_mask(
     #     mean_star_arr,
     #     mean_bg_arr,
