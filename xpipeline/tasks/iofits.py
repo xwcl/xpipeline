@@ -109,7 +109,7 @@ class DaskHDUList:
 register_generic(DaskHDUList)
 
 @dask.delayed
-def load_fits(filename):
+def load_fits_from_disk(filename):
     log.debug(f'Loading {filename}')
     with open(filename, 'rb') as f:
         hdul = fits.open(f)
@@ -124,7 +124,7 @@ def load_fits(filename):
     return dask_hdul
 
 def get_data(filename, ext=0):
-    return load_fits(filename)[ext].data
+    return load_fits_from_disk(filename)[ext].data
 
 @dask.delayed
 def write_fits(hdul, filename, overwrite=False):

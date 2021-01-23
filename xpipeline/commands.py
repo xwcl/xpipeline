@@ -72,7 +72,7 @@ def ingest():
     observation_date_key = args.obs_date_key
 
     log.info("Processing: %s", pformat(all_files))
-    d_names_to_hdulists = {fn: iofits.load_fits(fn) for fn in all_files}
+    d_names_to_hdulists = {fn: iofits.load_fits_from_disk(fn) for fn in all_files}
     table_path = os.path.join(destination, "obs.csv")
     if os.path.exists(table_path):
         log.info(
@@ -155,7 +155,9 @@ def compute_sky_model():
     test_fraction = args.test_fraction
     random_state = args.random_state
     # outputs
-    
+    components_fn = os.path.join(destination, f"sky_model_components.fits")
+    mean_fn = os.path.join(destination, f"sky_model_mean.fits")
+    stddev_fn = os.path.join(destination, f"sky_model_std.fits")
     # output_files = [components_fn, mean_fn, stddev_fn]
     # if all(map(os.path.exists, output_files)):
     #     log.info(f'All outputs exist: {output_files}')
@@ -163,8 +165,8 @@ def compute_sky_model():
     #     return
     # execute
     client = Client()
-    badpix_arr = iofits.load_fits(badpix_path)[0].data.persist()
-    inputs_coll = PipelineCollection(all_files).map(iofits.load_fits)
+    badpix_arr = iofits.load_fits_from_disk(badpix_path)[0].data.persist()
+    inputs_coll = PipelineCollection(all_files).map(iofits.load_fits_from_disk)
     # coll = PipelineCollection(all_files)
     # sky_cube = (
     #     coll.map(iofits.load_fits)
@@ -191,7 +193,8 @@ def compute_sky_model():
         random_state,
         n_components,
         mask_dilate_iters,
-    ).persist()
+    )
+    dask.persist([components, mean_sky, stddev_sky])
     # save
     fits.PrimaryHDU(
         np.asarray(components.compute())
@@ -244,11 +247,11 @@ def clio_instrument_calibrate():
         log.info(f"All outputs exist: {output_files}")
         log.info("Remove them to re-run")
         return
-    badpix_arr = iofits.load_fits(args.badpix)[0].data
+    badpix_arr = iofits.load_fits_from_disk(args.badpix)[0].data
     sky_components_arr = iofits.get_data(args.sky_components)[:sky_n_components]
     coll = PipelineCollection(args.all_files)
     coll_prelim = (
-        coll.map(iofits.load_fits)
+        coll.map(iofits.load_fits_from_disk)
         .map(iofits.ensure_dq)
         .map(data_quality.set_dq_flag, badpix_arr, const.DQ_BAD_PIXEL)
         .map(

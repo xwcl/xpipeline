@@ -98,7 +98,6 @@ def cross_validate(
     sky_cube_test, components_cube, std_bg_arr, mean_bg_arr, badpix_arr, iterations
 ):
     errs = []
-    errs_from_mean = []
     for idx, sky_img in enumerate(sky_cube_test):
         bad_bg_pix = generate_background_mask(
             std_bg_arr, mean_bg_arr, badpix_arr, iterations
