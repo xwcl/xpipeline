@@ -9,14 +9,17 @@ def _is_iterable_arg(obj):
     except TypeError:
         return False
 
+
 class PipelineCollection:
-    '''Construct sequences of delayed operations on a collection of
+    """Construct sequences of delayed operations on a collection of
     inputs with a chainable API to map callables to inputs
-    '''
+    """
+
     def __init__(self, d_inputs):
         self.d_inputs = d_inputs
+
     def zipmap(self, callable, *args, **kwargs):
-        '''Apply function to inputs with varying argument values
+        """Apply function to inputs with varying argument values
         selected from iterable arguments or keyword arguments
 
         Parameters
@@ -30,12 +33,12 @@ class PipelineCollection:
             on the i'th input. Non-iterable arguments are passed
             as-is. (Iterables that are not the same length as `d_inputs`
             are currently unsupported.)
-        
+
         Returns
         -------
         coll : PipelineCollection
             New PipelineCollection with results for chaining
-        '''
+        """
         out = []
         for idx, x in enumerate(self.d_inputs):
             new_args = []
@@ -48,8 +51,9 @@ class PipelineCollection:
                     new_kwargs[kw] = arg[idx]
             out.append(callable(x, *new_args, **new_kwargs))
         return PipelineCollection(out)
+
     def map(self, callable, *args, **kwargs):
-        '''Apply function individually to all inputs
+        """Apply function individually to all inputs
 
         Parameters
         ----------
@@ -58,15 +62,16 @@ class PipelineCollection:
             as its first argument. Will be passed *args and **kwargs
         *args, **kwargs
             Arguments passed through to `callable`
-        
+
         Returns
         -------
         coll : PipelineCollection
             New PipelineCollection with results for chaining
-        '''
+        """
         return PipelineCollection([callable(x, *args, **kwargs) for x in self.d_inputs])
+
     def collect(self, callable, *args, **kwargs):
-        '''
+        """
         Apply function to entire collection
 
         Parameters
@@ -76,7 +81,8 @@ class PipelineCollection:
             Will be passed *args and **kwargs
         *args, **kwargs
             Arguments passed through to `callable`
-        '''
+        """
         return callable(self.d_inputs, *args, **kwargs)
+
     def end(self):
         return self.d_inputs
