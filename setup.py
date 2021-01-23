@@ -14,8 +14,16 @@ setup(
     # package_data={
     #     'doodads.ref': ['3.9um_Clio.dat'],
     # },
-    install_requires=['pytest>=5.4.2', 'numpy>=1.18.4', 'scipy>=1.2.1',
-                      'matplotlib>=3.1.3', 'astropy>=4.0.1', 'dask>=2.30.0'],
+    install_requires=[
+        'pytest>=6.2.1',
+        'numpy>=1.19.5',
+        'scipy>=1.4.1',
+        'matplotlib>=3.2.2',
+        'astropy>=4.2',
+        'dask>=2021.1.1',
+        'distributed>=2021.1.1',
+        'python-irodsclient>=0.8.6',
+    ],
     entry_points={
         'console_scripts': [
             'xp_ingest=xpipeline.commands:ingest',
