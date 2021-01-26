@@ -46,9 +46,13 @@ class PipelineCollection:
             for arg in args:
                 if _is_iterable_arg(arg):
                     new_args.append(arg[idx])
+                else:
+                    new_args.append(arg)
             for kw, arg in kwargs.items():
                 if _is_iterable_arg(arg):
                     new_kwargs[kw] = arg[idx]
+                else:
+                    new_kwargs[kw] = arg
             out.append(callable(x, *new_args, **new_kwargs))
         return PipelineCollection(out)
 

@@ -13,7 +13,7 @@ import numpy as np
 
 from . import constants as const
 from .utils import unwrap
-from . import pipelines
+from . import pipelines, irods
 from .core import PipelineCollection
 from .tasks import obs_table, iofits, sky_model, detector, data_quality
 from .instruments import clio
@@ -45,7 +45,6 @@ def _final_args_and_parse(parser):
         "-s", "--sample", help="Sample every Nth file in source", type=int, default=1
     )
     args = parser.parse_args()
-    os.makedirs(args.destination, exist_ok=True)
     args.all_files = _files_from_source(args.source)[:: args.sample]
     logging.basicConfig(level="DEBUG" if args.verbose else "INFO")
     return args
@@ -70,7 +69,6 @@ def ingest():
     destination = args.destination
     all_files = args.all_files
     observation_date_key = args.obs_date_key
-
     log.info("Processing: %s", pformat(all_files))
     d_names_to_hdulists = {fn: iofits.load_fits_from_disk(fn) for fn in all_files}
     table_path = os.path.join(destination, "obs.csv")
@@ -100,10 +98,33 @@ def ingest():
         fn = row["output_name"]
         log.debug(d_names_to_hdulists[orig_fn])
         log.debug(type(d_names_to_hdulists[orig_fn]))
-        return dask.compute(iofits.write_fits(d_names_to_hdulists[orig_fn], fn))
+        return dask.compute(iofits.write_fits_to_disk(d_names_to_hdulists[orig_fn], fn))
 
     result = dask.compute(*table.apply(normalize_one, axis="columns"))
     log.info(result)
+
+
+def local_to_irods():
+    parser = argparse.ArgumentParser()
+    _ = Client()
+    # dask.config.set(scheduler='single-threaded')
+    # parse and generate list of `all_files`
+    args = _final_args_and_parse(parser)
+    destination = args.destination
+    irods.ensure_collection(destination)
+    all_files = args.all_files
+    output_files = _generate_output_filenames(args.all_files, args.destination)
+    # compute
+    inputs_coll = PipelineCollection(all_files)
+    destination_paths = (
+        inputs_coll
+        .map(iofits.load_fits_from_disk)
+        .zipmap(iofits.write_fits_to_irods, output_files, overwrite=True)
+        .end()
+    )
+    destination_paths = dask.compute(destination_paths)
+    log.info(f'Uploaded files to {destination} using iRODS')
+    log.info(destination_paths)
 
 
 def compute_sky_model():
@@ -148,6 +169,7 @@ def compute_sky_model():
     # parse and generate list of `all_files`
     args = _final_args_and_parse(parser)
     destination = args.destination
+    os.makedirs(destination, exist_ok=True)
     all_files = args.all_files
     n_components = args.sky_n_components
     badpix_path = args.badpix
@@ -238,6 +260,8 @@ def clio_instrument_calibrate():
     # parser.add_argument('psf_model', help='FITS image with unsaturated model PSF ("bottom" PSF for vAPP)')
     # parse and generate list of `all_files`
     args = _final_args_and_parse(parser)
+    destination = args.destination
+    os.makedirs(destination, exist_ok=True)
     sky_n_components = args.sky_n_components
     mask_dilate_iters = args.mask_dilate_iters
     mask_n_sigma = args.mask_n_sigma
@@ -276,7 +300,8 @@ def clio_instrument_calibrate():
     # )
     # Background subtraction and centering
     d_results = (
-        coll_prelim.map(
+        coll_prelim
+        .map(
             sky_model.background_subtract,
             mean_bg_arr,
             std_bg_arr,
@@ -288,7 +313,7 @@ def clio_instrument_calibrate():
         # .map(clio.rough_centers, mean_sky)
         # .map(clio.refine_centers, sky_model)
         # .map(clio.aligned_cutout)
-        .zipmap(iofits.write_fits, output_files).end()
+        .zipmap(iofits.write_fits_to_disk, output_files).end()
     )
     # results = dask.compute(*d_results)
     results = dask.compute(d_results)
