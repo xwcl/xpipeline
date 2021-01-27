@@ -198,6 +198,27 @@ def write_fits_to_irods(hdul, destination_path, overwrite=False):
 
 
 @dask.delayed
+def load_fits_from_irods(filename):
+    log.debug(f'Loading {filename}')
+    session = irods.get_session()
+    collection_path, data_object_name = os.path.split(filename)
+    data_object_exists = session.data_objects.exists(filename)
+    if not data_object_exists:
+        raise FileNotFoundError(f"No object at {filename} in iRODS")
+    srcfile = session.data_objects.get(filename)
+    with srcfile.open('rb') as f:
+        hdul = fits.open(f)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            log.debug(f'Validating {filename} FITS headers')
+            hdul.verify('fix')
+            for hdu in hdul:
+                hdu.header.add_history('xpipeline loaded and validated format')
+        log.debug(f'Converting {filename} to DaskHDUList')
+        dask_hdul = DaskHDUList.from_fits(hdul)
+    return dask_hdul
+
+@dask.delayed
 def ensure_dq(hdul, like_ext=0):
     if 'DQ' in hdul:
         log.debug('Existing DQ extension found')
