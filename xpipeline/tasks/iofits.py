@@ -6,14 +6,14 @@ This module reads `astropy.io.fits.HDUList` objects into `DaskHDUList`
 objects, converting `numpy.ndarray` data arrays to `dask.array` data arrays
 (but reusing `astropy.io.fits.header.Header`)
 '''
-from .. import irods
+
+from .. import utils
 from distributed.protocol import register_generic
 import numpy as np
 from astropy.io import fits
 import dask.array as da
 import dask
 import logging
-import os.path
 import warnings
 log = logging.getLogger(__name__)
 
@@ -78,6 +78,12 @@ class DaskHDUList:
             hdus = []
         self.hdus = hdus
 
+    def append(self, hdu):
+        self.hdus.append(hdu)
+
+    def extend(self, hdus):
+        self.hdus.extend(hdus)
+
     @classmethod
     def from_fits(cls, hdus, distributed=False):
         this_hdul = cls()
@@ -126,97 +132,39 @@ class DaskHDUList:
 
 register_generic(DaskHDUList)
 
-
 @dask.delayed
-def load_fits_from_disk(filename):
-    log.debug(f'Loading {filename}')
-    with open(filename, 'rb') as f:
-        hdul = fits.open(f)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            log.debug(f'Validating {filename} FITS headers')
-            hdul.verify('fix')
-            for hdu in hdul:
-                hdu.header.add_history('xpipeline loaded and validated format')
-        log.debug(f'Converting {filename} to DaskHDUList')
-        dask_hdul = DaskHDUList.from_fits(hdul)
+def load_fits(file_handle):
+    hdul = fits.open(file_handle, mode='readonly')
+    # with warnings.catch_warnings():
+    #     warnings.simplefilter("ignore")
+    #     log.debug(f'Validating FITS headers')
+    #     hdul.verify('fix')
+    #     for hdu in hdul:
+    #         hdu.header.add_history('xpipeline loaded and validated format')
+    log.debug(f'Converting to DaskHDUList')
+    dask_hdul = DaskHDUList.from_fits(hdul)
     return dask_hdul
 
 
-def get_data_from_disk(filename, ext=0):
-    return load_fits_from_disk(filename)[ext].data
+def load_fits_from_path(url_or_path):
+    log.debug(f'Loading {url_or_path}')
+    fs = utils.get_fs(url_or_path)
+    file_handle = fs.open(url_or_path, 'rb')
+    return load_fits(file_handle)
 
 
 @dask.delayed
-def write_fits_to_disk(hdul, filename, overwrite=False):
-    log.debug(f'Writing {filename}')
-    hdul.to_fits().writeto(filename, overwrite=overwrite)
-    return filename
-
-
-def flatten_single_header(hdu, prefix):
-    return {
-        f'{prefix}.{key}': val
-        for key, val
-        in hdu.header.items()
-    }
-
-
-def flatten_headers(hdul):
-    primary_hdu, rest_hdus = hdul.hdus[0], hdul.hdus[1:]
-    output = flatten_single_header(primary_hdu, 'fits')
-    for idx, hdu in enumerate(rest_hdus, start=1):
-        extname = hdu.header.get('EXTNAME', f'ext{idx}')
-        prefix = f'fits.{extname}'
-        output.update(flatten_single_header(hdu, prefix))
-    return output
-
-
-@dask.delayed
-def write_fits_to_irods(hdul, destination_path, overwrite=False):
+def write_fits(hdul, destination_path, overwrite=False):
     log.debug(f'Writing to {destination_path} on iRODS')
-    session = irods.get_session()
-    collection_path, data_object_name = os.path.split(destination_path)
-    data_object_exists = session.data_objects.exists(destination_path)
-    if not overwrite and data_object_exists:
-        raise RuntimeError(f"Found existing iRODS data object at {destination_path}")
-    if not data_object_exists:
-        log.debug(f'Creating iRODS data object {destination_path}')
-        destfile = session.data_objects.create(destination_path)
-    else:
-        log.debug(f'Reusing existing iRODS data object {destination_path}')
-        destfile = session.data_objects.get(destination_path)
+    fs = utils.get_fs(destination_path)
+    exists = fs.exists(destination_path)
+    if not overwrite and exists:
+        raise RuntimeError(f"Found existing file at {destination_path}")
     
-    with destfile.open(mode='w') as destfh:
-        log.info(f'Writing to iRODS data object at {destination_path} ({destfile})')
+    with fs.open(destination_path, mode='wb') as destfh:
+        log.info(f'Writing FITS HDUList to {destination_path}')
         hdul.to_fits().writeto(destfh)
-    irods.attach_metadata(
-        destfile,
-        flatten_headers(hdul)
-    )
     return destination_path
-
-
-@dask.delayed
-def load_fits_from_irods(filename):
-    log.debug(f'Loading {filename}')
-    session = irods.get_session()
-    collection_path, data_object_name = os.path.split(filename)
-    data_object_exists = session.data_objects.exists(filename)
-    if not data_object_exists:
-        raise FileNotFoundError(f"No object at {filename} in iRODS")
-    srcfile = session.data_objects.get(filename)
-    with srcfile.open('rb') as f:
-        hdul = fits.open(f)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            log.debug(f'Validating {filename} FITS headers')
-            hdul.verify('fix')
-            for hdu in hdul:
-                hdu.header.add_history('xpipeline loaded and validated format')
-        log.debug(f'Converting {filename} to DaskHDUList')
-        dask_hdul = DaskHDUList.from_fits(hdul)
-    return dask_hdul
 
 @dask.delayed
 def ensure_dq(hdul, like_ext=0):
@@ -242,3 +190,13 @@ def hdulists_to_dask_cube(all_hduls, ext=0):
     ])
     log.info('Inputs stacked into cube')
     return cube
+
+
+@dask.delayed
+def hdulists_keyword_to_dask_array(all_hduls, keyword, ext=0):
+    arr = da.from_array([
+        hdul[ext].header[keyword]
+        for hdul in all_hduls
+    ])
+    log.info(f'Header keyword {keyword} extracted to new {arr.shape} sequence')
+    return arr

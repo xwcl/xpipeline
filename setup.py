@@ -26,7 +26,7 @@ setup(
     ],
     entry_points={
         'console_scripts': [
-            'xp_ingest=xpipeline.commands:ingest',
+            'xp=xpipeline.cli:main',
             'xp_local_to_irods=xpipeline.commands:local_to_irods',
             'xp_compute_sky_model=xpipeline.commands:compute_sky_model',
             'xp_clio_instrument_calibrate=xpipeline.commands:clio_instrument_calibrate'

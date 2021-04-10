@@ -7,6 +7,8 @@ import logging
 import dask
 from irods.session import iRODSSession
 from irods.meta import iRODSMeta, AVUOperation
+import irods_fsspec
+irods_fsspec.register()
 
 log = logging.getLogger(__name__)
 _irods_global = threading.local()

@@ -6,6 +6,7 @@ import astropy.units as u
 
 from ..tasks import iofits, improc
 from .. import constants
+from . import magellan
 
 # Morzinski 2015 ApJ Table 18
 CLIO2_PIXEL_SCALE = 15.846e-3 * (u.arcsec / u.pixel)
@@ -25,6 +26,21 @@ VAPP_OFFSET_LAMD = 1.44
 # chosen to circumscribe dark hole region and barely touch first bright feature
 # on the dark hole edge
 VAPP_GLINT_FREE_RADIUS_LAMD = 10
+
+def lambda_over_d_to_arcsec(lambda_over_d, wavelength, d=magellan.PRIMARY_MIRROR_DIAMETER):
+    unit_lambda_over_d  = (wavelength.to(u.m) / d.to(u.m)).si.value * u.radian
+    return (lambda_over_d  * unit_lambda_over_d).to(u.arcsec)
+def arcsec_to_lambda_over_d(arcsec, wavelength, d=magellan.PRIMARY_MIRROR_DIAMETER):
+    unit_lambda_over_d = ((wavelength.to(u.m) / d.to(u.m)).si.value * u.radian).to(u.arcsec)
+    lambda_over_d = (arcsec / unit_lambda_over_d).si
+    return lambda_over_d
+
+def lambda_over_d_to_pixel(lambda_over_d, wavelength, d=magellan.PRIMARY_MIRROR_DIAMETER):
+    arcsec = lambda_over_d_to_arcsec(lambda_over_d, wavelength, d=d)
+    return (arcsec / CLIO2_PIXEL_SCALE).to(u.pixel)
+def pixel_to_lambda_over_d(px, wavelength, d=magellan.PRIMARY_MIRROR_DIAMETER):
+    arcsec = (px * CLIO2_PIXEL_SCALE).to(u.arcsec)
+    return arcsec_to_lambda_over_d(arcsec, wavelength, d=d)
 
 @dask.delayed
 def split_frames_cube(hdul):

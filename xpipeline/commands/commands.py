@@ -2,6 +2,8 @@ import argparse
 import glob
 import os.path
 import logging
+# import warnings
+# warnings.simplefilter('error')
 from pprint import pformat
 
 from astropy.io import fits
@@ -13,41 +15,13 @@ import numpy as np
 
 from . import constants as const
 from .utils import unwrap
+from . import utils
 from . import pipelines, irods
 from .core import PipelineCollection
 from .tasks import obs_table, iofits, sky_model, detector, data_quality
-from .instruments import clio
+from .ref import clio
 
 log = logging.getLogger(__name__)
-
-
-def _files_from_source(source):
-    all_files = []
-    for entry in source:
-        if not os.path.exists(entry):
-            raise RuntimeError(f"Cannot find file or directory {entry}")
-        if os.path.isdir(entry):
-            all_files.extend(glob.glob(os.path.join(entry, "*.fit")))
-            all_files.extend(glob.glob(os.path.join(entry, "*.fits")))
-        else:
-            all_files.append(entry)
-    all_files.sort()
-    return all_files
-
-
-def _final_args_and_parse(parser):
-    parser.add_argument("source", nargs="+")
-    parser.add_argument("destination")
-    parser.add_argument(
-        "-v", "--verbose", help="Show all debugging output", action="store_true"
-    )
-    parser.add_argument(
-        "-s", "--sample", help="Sample every Nth file in source", type=int, default=1
-    )
-    args = parser.parse_args()
-    args.all_files = _files_from_source(args.source)[:: args.sample]
-    logging.basicConfig(level="DEBUG" if args.verbose else "INFO")
-    return args
 
 
 def _generate_output_filenames(all_files, destination):
@@ -70,7 +44,7 @@ def ingest():
     all_files = args.all_files
     observation_date_key = args.obs_date_key
     log.info("Processing: %s", pformat(all_files))
-    d_names_to_hdulists = {fn: iofits.load_fits_from_disk(fn) for fn in all_files}
+    d_names_to_hdulists = {fn: iofits.load_fits(fn) for fn in all_files}
     table_path = os.path.join(destination, "obs.csv")
     if os.path.exists(table_path):
         log.info(
@@ -106,7 +80,7 @@ def ingest():
 
 def local_to_irods():
     parser = argparse.ArgumentParser()
-    _ = Client()
+    # _ = Client()
     # dask.config.set(scheduler='single-threaded')
     # parse and generate list of `all_files`
     args = _final_args_and_parse(parser)
@@ -118,8 +92,8 @@ def local_to_irods():
     inputs_coll = PipelineCollection(all_files)
     destination_paths = (
         inputs_coll
-        .map(iofits.load_fits_from_disk)
-        .zipmap(iofits.write_fits_to_irods, output_files, overwrite=True)
+        .map(iofits.load_fits)
+        .zip_map(iofits.write_fits_to_irods, output_files, overwrite=True)
         .end()
     )
     destination_paths = dask.compute(destination_paths)
@@ -186,9 +160,9 @@ def compute_sky_model():
     #     log.info('Remove them to re-run')
     #     return
     # execute
-    client = Client()
-    badpix_arr = iofits.load_fits_from_disk(badpix_path)[0].data.persist()
-    inputs_coll = PipelineCollection(all_files).map(iofits.load_fits_from_disk)
+    # client = Client()
+    badpix_arr = iofits.load_fits(badpix_path)[0].data.persist()
+    inputs_coll = PipelineCollection(all_files).map(iofits.load_fits)
     # coll = PipelineCollection(all_files)
     # sky_cube = (
     #     coll.map(iofits.load_fits)
@@ -271,11 +245,11 @@ def clio_instrument_calibrate():
         log.info(f"All outputs exist: {output_files}")
         log.info("Remove them to re-run")
         return
-    badpix_arr = iofits.load_fits_from_disk(args.badpix)[0].data
+    badpix_arr = iofits.load_fits(args.badpix)[0].data
     sky_components_arr = iofits.get_data_from_disk(args.sky_components)[:sky_n_components]
     coll = PipelineCollection(args.all_files)
     coll_prelim = (
-        coll.map(iofits.load_fits_from_disk)
+        coll.map(iofits.load_fits)
         .map(iofits.ensure_dq)
         .map(data_quality.set_dq_flag, badpix_arr, const.DQ_BAD_PIXEL)
         .map(
@@ -313,7 +287,7 @@ def clio_instrument_calibrate():
         # .map(clio.rough_centers, mean_sky)
         # .map(clio.refine_centers, sky_model)
         # .map(clio.aligned_cutout)
-        .zipmap(iofits.write_fits_to_disk, output_files).end()
+        .zip_map(iofits.write_fits_to_disk, output_files).end()
     )
     # results = dask.compute(*d_results)
     results = dask.compute(d_results)
