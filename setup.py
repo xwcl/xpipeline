@@ -23,6 +23,7 @@ setup(
         'dask>=2021.1.1',
         'distributed>=2021.1.1',
         'python-irodsclient>=0.8.6',
+        'coloredlogs>=15.0'
     ],
     entry_points={
         'console_scripts': [
