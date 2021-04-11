@@ -10,7 +10,7 @@ setup(
     description=description,
     author='Joseph D. Long',
     author_email='me@joseph-long.com',
-    packages=['xpipeline'],
+    packages=find_packages(),
     # package_data={
     #     'doodads.ref': ['3.9um_Clio.dat'],
     # },
