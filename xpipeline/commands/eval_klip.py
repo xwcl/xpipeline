@@ -10,7 +10,7 @@ import logging
 from ..utils import unwrap
 from .. import utils
 from .. import pipelines #, irods
-from ..core import PipelineCollection
+from ..core import LazyPipelineCollection
 from ..tasks import iofits # obs_table, iofits, sky_model, detector, data_quality
 # from .ref import clio
 from .klip import KLIP

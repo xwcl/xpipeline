@@ -1,10 +1,18 @@
-
+from inspect import unwrap
 import numpy as np
+import logging
+from numpy.core.numeric import count_nonzero
 from scipy.ndimage import binary_dilation
+import skimage.transform
 from astropy.convolution import convolve_fft
 from astropy.convolution.kernels import Gaussian2DKernel
 
 from .. import core
+cp = core.cupy
+da = core.dask_array
+torch = core.torch
+
+log = logging.getLogger(__name__)
 
 
 def gaussian_smooth(data, kernel_stddev_px):
@@ -56,7 +64,6 @@ def rough_peak_in_box(data, initial_guess, box_size):
     else:
         return initial_guess, False
 
-
 def unwrap_cube(cube, good_pix_mask):
     '''Unwrap a shape (planes, m, n) `cube` and transpose into
     a (pix, planes) matrix, where `pix` is the number of *True*
@@ -80,10 +87,25 @@ def unwrap_cube(cube, good_pix_mask):
         to each entry in the vectorized image
     '''
     xp = core.get_array_module(cube)
-    yy, xx = xp.indices(cube.shape[1:])
+    good_pix_mask = good_pix_mask == 1
+    yy, xx = np.indices(cube.shape[1:])
     x_indices = xx[good_pix_mask]
     y_indices = yy[good_pix_mask]
-    return cube[:, good_pix_mask].T, x_indices, y_indices
+    cube_to_vecs = lambda cube, good_pix_mask: cube[:,good_pix_mask].T
+    if xp is da:
+        chunk_size = cube.shape[0] // cube.numblocks[0]
+        # import IPython
+        # IPython.embed()
+        image_vecs = cube.map_blocks(
+            cube_to_vecs,
+            good_pix_mask,
+            dtype=cube.dtype,
+            chunks=(chunk_size, np.count_nonzero(good_pix_mask == 1),),
+            drop_axis=2
+        )
+    else:
+        image_vecs = cube_to_vecs(cube, good_pix_mask)
+    return image_vecs, x_indices, y_indices
 
 
 def unwrap_image(image, good_pix_mask):
@@ -109,9 +131,8 @@ def unwrap_image(image, good_pix_mask):
         to each entry in the vectorized image
     '''
     xp = core.get_array_module(image)
-    cube, x_indices, y_indices = unwrap_cube(image[xp.newaxis, :, :], good_pix_mask)
+    cube, x_indices, y_indices = unwrap_cube(image[core.newaxis, :, :], good_pix_mask)
     return cube[:, 0], x_indices, y_indices
-
 
 def wrap_matrix(matrix, shape, x_indices, y_indices):
     '''Wrap a (planes, pix) matrix into a shape `shape`
@@ -130,10 +151,24 @@ def wrap_matrix(matrix, shape, x_indices, y_indices):
     cube
     '''
     xp = core.get_array_module(matrix)
+    if xp is da:
+        chunk_size = matrix.shape[0] // matrix.numblocks[0]
+        return matrix.map_blocks(
+            wrap_matrix,
+            shape,
+            x_indices,
+            y_indices,
+            chunks=(chunk_size,) + shape[1:],
+            new_axis=2,
+            dtype=matrix.dtype
+        )
+    if matrix.shape[1] != shape[0]:
+        # handling a chunk from map_blocks. Since matrix is transposed before assignment
+        # we check that the number of *columns* is equal to the expected number of planes in the cube
+        shape = (matrix.shape[1],) + shape[1:]
     cube = xp.zeros(shape)
     cube[:, y_indices, x_indices] = matrix.T
     return cube
-
 
 def wrap_vector(image_vec, shape, x_indices, y_indices):
     '''Wrap a (pix,) vector into a shape `shape` image,
@@ -152,6 +187,17 @@ def wrap_vector(image_vec, shape, x_indices, y_indices):
     vector
     '''
     xp = core.get_array_module(image_vec)
-    matrix = image_vec[:, xp.newaxis]
+    matrix = image_vec[:, core.newaxis]
     cube = wrap_matrix(matrix, (1,) + shape, x_indices, y_indices)
     return cube[0]
+
+def quick_derotate(cube, angles):
+    outimg = np.zeros(cube.shape[1:])
+
+    for i in range(cube.shape[0]):
+        image = cube[i]
+        if core.get_array_module(image) is da:
+            image = image.get()
+        outimg += skimage.transform.rotate(image, -angles[i])
+
+    return outimg

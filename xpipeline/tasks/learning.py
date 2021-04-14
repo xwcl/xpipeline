@@ -112,13 +112,13 @@ def generic_svd(mtx_x, n_modes):
     '''Computes SVD of mtx_x returning U, s, and V such that
     allclose(mtx_x, U @ diag(s) @ V.T) (with some tolerance).
 
-    When supplied with CPU arrays, `torch` is used if available,
+    When supplied with CPU arrays, `torch` is used if available, TODO
     falling back to `numpy.linalg.svd`. When supplied with GPU arrays,
     `torch` is used if available, falling back to `cupy.linalg.svd`.
 
     When supplied with distributed arrays, those with total number of
     elements < `dask_size_threshold` are converted to local NumPy
-    arrays and processed as in the CPU array case.
+    arrays and processed as in the CPU array case. TODO
 
     Parameters
     ----------

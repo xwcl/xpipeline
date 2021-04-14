@@ -2,14 +2,13 @@ from astropy.io import fits
 import numpy as np
 import argparse
 import dask
-import fsspec.spec
 import os.path
 import logging
 # from . import constants as const
 from ..utils import unwrap
 from .. import utils
 from .. import pipelines #, irods
-from ..core import PipelineCollection
+from ..core import LazyPipelineCollection
 from ..tasks import iofits # obs_table, iofits, sky_model, detector, data_quality
 # from .ref import clio
 
@@ -60,13 +59,10 @@ class ComputeSkyModel(BaseCommand):
         return super(ComputeSkyModel, ComputeSkyModel).add_arguments(parser)
 
     def main(self):
-        destination = self.args.destination
-        dest_fs = utils.get_fs(destination)
-        assert isinstance(dest_fs, fsspec.spec.AbstractFileSystem)
-        dest_fs.makedirs(destination, exist_ok=True)
+        destination = self.destination
 
         # inputs
-        all_files = self.args.all_files
+        all_files = self.all_files
         n_components = self.args.sky_n_components
         badpix_path = self.args.badpix
         mask_dilate_iters = self.args.mask_dilate_iters
@@ -78,15 +74,13 @@ class ComputeSkyModel(BaseCommand):
         mean_fn = os.path.join(destination, "sky_model_mean.fits")
         stddev_fn = os.path.join(destination, "sky_model_std.fits")
         output_files = [components_fn, mean_fn, stddev_fn]
-        if all(map(dest_fs.exists, output_files)):
-            log.info(f'All outputs exist: {output_files}')
-            log.info('Remove them to re-run')
+        if self.check_for_outputs(output_files):
             return
 
         # execute
-        badpix_arr = iofits.load_fits_from_path(badpix_path)[0].data.persist()
-        inputs_coll = PipelineCollection(all_files).map(iofits.load_fits_from_path)
-        # coll = PipelineCollection(all_files)
+        badpix_arr = dask.delayed(iofits.load_fits_from_path)(badpix_path)[0].data.persist()
+        inputs_coll = LazyPipelineCollection(all_files).map(iofits.load_fits_from_path)
+        # coll = LazyPipelineCollection(all_files)
         # sky_cube = (
         #     coll.map(iofits.load_fits)
         #     .map(iofits.ensure_dq)

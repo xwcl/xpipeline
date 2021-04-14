@@ -6,7 +6,9 @@ This module reads `astropy.io.fits.HDUList` objects into `DaskHDUList`
 objects, converting `numpy.ndarray` data arrays to `dask.array` data arrays
 (but reusing `astropy.io.fits.header.Header`)
 '''
-
+import os
+import getpass
+import fsspec
 from .. import utils
 from distributed.protocol import register_generic
 import numpy as np
@@ -132,9 +134,8 @@ class DaskHDUList:
 
 register_generic(DaskHDUList)
 
-@dask.delayed
 def load_fits(file_handle):
-    hdul = fits.open(file_handle, mode='readonly')
+    hdul = fits.open(file_handle, mode='readonly', memmap=False)
     # with warnings.catch_warnings():
     #     warnings.simplefilter("ignore")
     #     log.debug(f'Validating FITS headers')
@@ -143,19 +144,19 @@ def load_fits(file_handle):
     #         hdu.header.add_history('xpipeline loaded and validated format')
     log.debug(f'Converting to DaskHDUList')
     dask_hdul = DaskHDUList.from_fits(hdul)
+    log.debug(f'Loaded {file_handle}')
     return dask_hdul
 
 
 def load_fits_from_path(url_or_path):
     log.debug(f'Loading {url_or_path}')
     fs = utils.get_fs(url_or_path)
-    file_handle = fs.open(url_or_path, 'rb')
-    return load_fits(file_handle)
+    with fsspec.open(url_or_path, 'rb') as file_handle:
+        return load_fits(file_handle)
 
 
-@dask.delayed
 def write_fits(hdul, destination_path, overwrite=False):
-    log.debug(f'Writing to {destination_path} on iRODS')
+    log.debug(f'Writing to {destination_path}')
     fs = utils.get_fs(destination_path)
     exists = fs.exists(destination_path)
     if not overwrite and exists:
@@ -163,10 +164,19 @@ def write_fits(hdul, destination_path, overwrite=False):
     
     with fs.open(destination_path, mode='wb') as destfh:
         log.info(f'Writing FITS HDUList to {destination_path}')
-        hdul.to_fits().writeto(destfh)
+        real_hdul = hdul.to_fits()
+        # OSG jobs have a variable OSGVO_SUBMITTER=josephlong@services.ci-connect.net
+        if 'OSGVO_SUBMTITER' in os.environ:
+            pipeline_user = os.environ['OSGVO_SUBMITTER'].split('@')[0]
+        else:
+            pipeline_user = getpass.getuser()
+        history_msg = f'written from xpipeline by {pipeline_user}'
+        log.debug(history_msg)
+        real_hdul[0].header.add_history(history_msg)
+        real_hdul.writeto(destfh)
     return destination_path
 
-@dask.delayed
+
 def ensure_dq(hdul, like_ext=0):
     if 'DQ' in hdul:
         log.debug('Existing DQ extension found')
@@ -181,21 +191,31 @@ def ensure_dq(hdul, like_ext=0):
     hdul['DQ'].header.add_history(msg)
     return hdul
 
+@dask.delayed
+def _pick_exts_data(all_hduls, ext):
+    return 
 
 @dask.delayed
-def hdulists_to_dask_cube(all_hduls, ext=0):
-    cube = da.stack([
-        hdul[ext].data
+def _pick_ext_keyword(all_hduls, ext, keyword):
+    return [
+        hdul[ext].header[keyword]
         for hdul in all_hduls
-    ])
-    log.info('Inputs stacked into cube')
+    ]
+
+def hdulists_to_dask_cube(all_hduls, plane_shape, ext=0, dtype=float):
+    cube = da.stack(
+        [da.from_delayed(hdul[ext].data, shape=plane_shape, dtype=dtype) for hdul in all_hduls]
+    )
+    log.info(f'Dask Array of shape {cube.shape} created from HDULists')
     return cube
 
-
 @dask.delayed
-def hdulists_keyword_to_dask_array(all_hduls, keyword, ext=0):
-    arr = da.from_array([
-        hdul[ext].header[keyword]
+def _kw_to_0d_seq(hdul, ext, keyword):
+    return np.asarray(hdul[ext].header[keyword])
+
+def hdulists_keyword_to_dask_array(all_hduls, keyword, ext=0, dtype=float):
+    arr = da.stack([
+        da.from_delayed(_kw_to_0d_seq(hdul, ext, keyword), shape=(), dtype=dtype)
         for hdul in all_hduls
     ])
     log.info(f'Header keyword {keyword} extracted to new {arr.shape} sequence')

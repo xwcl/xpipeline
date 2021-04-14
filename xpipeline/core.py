@@ -25,7 +25,7 @@ except ImportError:
     dask_array_core = None
     HAVE_DASK = False
 
-
+newaxis = numpy.newaxis
 
 def get_array_module(arr):
     '''Returns `dask.array` if `arr` is a `dask.array.core.Array`, or
@@ -58,13 +58,13 @@ def _is_iterable_arg(obj):
         return False
 
 
-class PipelineCollection:
+class LazyPipelineCollection:
     """Construct sequences of delayed operations on a collection of
     inputs with a chainable API to map callables to inputs
     """
 
-    def __init__(self, d_inputs):
-        self.d_inputs = d_inputs
+    def __init__(self, inputs):
+        self.collection = inputs
 
     def zip_map(self, callable, *args, **kwargs):
         """Apply function to inputs with varying argument values
@@ -79,16 +79,16 @@ class PipelineCollection:
             If an argument is iterable, its i'th entry will
             be supplied as that argument when calling `callable`
             on the i'th input. Non-iterable arguments are passed
-            as-is. (Iterables that are not the same length as `d_inputs`
+            as-is. (Iterables that are not the same length as `inputs`
             are currently unsupported.)
 
         Returns
         -------
-        coll : PipelineCollection
-            New PipelineCollection with results for chaining
+        coll : LazyPipelineCollection
+            New LazyPipelineCollection with results for chaining
         """
         out = []
-        for idx, x in enumerate(self.d_inputs):
+        for idx, x in enumerate(self.collection):
             new_args = []
             new_kwargs = {}
             for arg in args:
@@ -101,8 +101,8 @@ class PipelineCollection:
                     new_kwargs[kw] = arg[idx]
                 else:
                     new_kwargs[kw] = arg
-            out.append(callable(x, *new_args, **new_kwargs))
-        return PipelineCollection(out)
+            out.append(dask.delayed(callable)(x, *new_args, **new_kwargs))
+        return LazyPipelineCollection(out)
 
     def map(self, callable, *args, **kwargs):
         """Apply function individually to all inputs
@@ -117,14 +117,14 @@ class PipelineCollection:
 
         Returns
         -------
-        coll : PipelineCollection
-            New PipelineCollection with results for chaining
+        coll : LazyPipelineCollection
+            New LazyPipelineCollection with results for chaining
         """
-        return PipelineCollection([callable(x, *args, **kwargs) for x in self.d_inputs])
+        return LazyPipelineCollection([dask.delayed(callable)(x, *args, **kwargs) for x in self.collection])
 
     def collect(self, callable, *args, **kwargs):
         """
-        Apply function to entire collection
+        Apply function to entire collection, returning Delayed
 
         Parameters
         ----------
@@ -134,12 +134,15 @@ class PipelineCollection:
         *args, **kwargs
             Arguments passed through to `callable`
         """
-        return callable(self.d_inputs, *args, **kwargs)
+        return dask.delayed(callable)(self.collection, *args, **kwargs)
 
     def compute(self):
-        '''Shortcut for ``PipelineCollection.collect(dask.compute)``
+        '''Pass `self.inputs` to `dask.compute` and return the result
+        of executing the pipeline
         '''
-        return dask.compute(self.d_inputs)
+        return dask.compute(self.collection)
 
     def end(self):
-        return self.d_inputs
+        '''Return the Delayed instances for the pipeline outputs
+        '''
+        return self.collection

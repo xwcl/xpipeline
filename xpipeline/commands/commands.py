@@ -17,7 +17,7 @@ from . import constants as const
 from .utils import unwrap
 from . import utils
 from . import pipelines, irods
-from .core import PipelineCollection
+from .core import LazyPipelineCollection
 from .tasks import obs_table, iofits, sky_model, detector, data_quality
 from .ref import clio
 
@@ -89,7 +89,7 @@ def local_to_irods():
     all_files = args.all_files
     output_files = _generate_output_filenames(args.all_files, args.destination)
     # compute
-    inputs_coll = PipelineCollection(all_files)
+    inputs_coll = LazyPipelineCollection(all_files)
     destination_paths = (
         inputs_coll
         .map(iofits.load_fits)
@@ -162,8 +162,8 @@ def compute_sky_model():
     # execute
     # client = Client()
     badpix_arr = iofits.load_fits(badpix_path)[0].data.persist()
-    inputs_coll = PipelineCollection(all_files).map(iofits.load_fits)
-    # coll = PipelineCollection(all_files)
+    inputs_coll = LazyPipelineCollection(all_files).map(iofits.load_fits)
+    # coll = LazyPipelineCollection(all_files)
     # sky_cube = (
     #     coll.map(iofits.load_fits)
     #     .map(iofits.ensure_dq)
@@ -247,7 +247,7 @@ def clio_instrument_calibrate():
         return
     badpix_arr = iofits.load_fits(args.badpix)[0].data
     sky_components_arr = iofits.get_data_from_disk(args.sky_components)[:sky_n_components]
-    coll = PipelineCollection(args.all_files)
+    coll = LazyPipelineCollection(args.all_files)
     coll_prelim = (
         coll.map(iofits.load_fits)
         .map(iofits.ensure_dq)

@@ -10,16 +10,16 @@ import logging
 from ..utils import unwrap
 from .. import utils
 from .. import pipelines #, irods
-from ..core import PipelineCollection
+from ..core import LazyPipelineCollection
 from ..tasks import iofits # obs_table, iofits, sky_model, detector, data_quality
 # from .ref import clio
 
-from .base import BaseCommand
+from .base import DaskCommand
 
 log = logging.getLogger(__name__)
 
 
-class KLIP(BaseCommand):
+class KLIP(DaskCommand):
     name = "klip"
     help = "Subtract starlight with KLIP"
 
@@ -48,10 +48,16 @@ class KLIP(BaseCommand):
             help="Constant factor added to (scale * keyword value) to get angle in degrees needed to rotate image North-up (default: 0.0)"
         )
         parser.add_argument(
-            "--k-klip-value",
+            "--k-klip",
             type=int,
             default=10,
             help="Number of modes to subtract in starlight subtraction (default: 10)"
+        )
+        parser.add_argument(
+            "--exclude-nearest-n-frames",
+            type=int,
+            default=0,
+            help="Number of frames to exclude from the observations used to compute the target"
         )
         return super(KLIP, KLIP).add_arguments(parser)
 
@@ -62,22 +68,28 @@ class KLIP(BaseCommand):
         dest_fs.makedirs(destination, exist_ok=True)
 
         output_klip_final = utils.join(destination, "klip_final.fits")
-        inputs = self.inputs_coll.map(iofits.load_fits)
+        inputs = self.inputs_coll.map(iofits.load_fits_from_path)
 
         if self.args.region_mask is not None:
-            region_mask = iofits.load_fits_from_path(self.args.region_mask)[0].data.persist()
+            region_mask = iofits.load_fits_from_path(self.args.region_mask)[0].data.compute()
         else:
-            first = dask.persist(inputs[0]).compute()
-            region_mask = da.ones_like(first[0].data)
+            first_hdul = dask.persist(inputs.collection[0])[0].compute()
+            region_mask = np.ones_like(first_hdul[0].data)
 
         out_image = pipelines.klip_adi(
             inputs,
             region_mask,
-            self.args.rotation_keyword,
-            self.args.rotation_scale,
-            self.args.rotation_offset,
-            self.args.rotation_exclusion_frames,
+            self.args.angle_keyword,
+            self.args.angle_scale,
+            self.args.angle_constant,
+            self.args.exclude_nearest_n_frames,
             self.args.k_klip
         )
+        import time
+        start = time.perf_counter()
+        log.info(f"Computing klip pipeline result...")
+        out_image = out_image.compute()
+        elapsed = time.perf_counter() - start
+        log.info(f"Computed in {elapsed} sec")
         output_file = iofits.write_fits(out_image, output_klip_final)
         return dask.compute(output_file)

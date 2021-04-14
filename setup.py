@@ -11,9 +11,12 @@ setup(
     author='Joseph D. Long',
     author_email='me@joseph-long.com',
     packages=find_packages(),
-    # package_data={
-    #     'doodads.ref': ['3.9um_Clio.dat'],
-    # },
+    package_data={
+        'xpipeline.ref': [
+            '3.9um_Clio.dat',
+            'naco_betapic_preproc_absil2013_gonzalez2017.npz'
+        ],
+    },
     install_requires=[
         'pytest>=6.2.1',
         'numpy>=1.19.5',
@@ -23,7 +26,10 @@ setup(
         'dask>=2021.1.1',
         'distributed>=2021.1.1',
         'python-irodsclient>=0.8.6',
-        'coloredlogs>=15.0'
+        'coloredlogs>=15.0',
+        'scikit-image>=0.18.1',
+        'irods_fsspec',
+        'fsspec>=0.8.7',
     ],
     entry_points={
         'console_scripts': [

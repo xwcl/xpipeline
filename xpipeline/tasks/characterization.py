@@ -95,8 +95,6 @@ def reduce_apertures(image, r_px, starting_pa_deg, resolution_element_px, operat
         results.append(operation(image[mask] / np.count_nonzero(mask & np.isfinite(image))))
     return locations, results
 
-
-@dask.delayed
 def calculate_snr(image, r_px, pa_deg, resolution_element_px, exclude_nearest):
     locations, results = reduce_apertures(
         image,

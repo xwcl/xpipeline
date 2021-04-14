@@ -5,7 +5,6 @@ from .. import constants as const
 
 log = logging.getLogger(__name__)
 
-@dask.delayed
 def correct_linearity(hdul, coeffs, correctable_domain, ext=0, dq_ext='DQ'):
     log.info(f'Correcting linearity')
     data = hdul[ext].data

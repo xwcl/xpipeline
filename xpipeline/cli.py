@@ -8,7 +8,7 @@ import numpy
 from dask.distributed import Client
 
 from exao_dap_client.data_store import get_fs
-from .commands import compute_sky_model, copy_test, klip, eval_klip
+from .commands import compute_sky_model, copy_test, klip, eval_klip, local_klip, diagnostic
 
 from . import utils
 
@@ -19,6 +19,8 @@ COMMANDS = {
     copy_test.CopyTest,
     klip.KLIP,
     eval_klip.EvalKLIP,
+    local_klip.LocalKLIP,
+    diagnostic.Diagnostic,
 }
 
 def main():
