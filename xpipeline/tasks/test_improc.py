@@ -1,6 +1,6 @@
 import numpy as np
 
-from .improc import rough_peak_in_box, unwrap_image, wrap_vector
+from .improc import rough_peak_in_box, unwrap_image, wrap_vector, cartesian_coords
 
 
 def test_rough_peak():
@@ -41,3 +41,10 @@ def test_unwrap():
     assert xx.shape[0] == 8
     assert yy.shape[0] == 8
     assert np.max(mtx) == 0
+
+def test_cartesian_coords():
+    xx, yy = cartesian_coords((0.5, 0.5), (2, 2))
+    ref_xx = np.asarray([[-0.5, 0.5], [-0.5, 0.5]])
+    ref_yy = np.asarray([[-0.5, -0.5], [0.5, 0.5]])
+    assert np.allclose(xx, ref_xx)
+    assert np.allclose(yy, ref_yy)

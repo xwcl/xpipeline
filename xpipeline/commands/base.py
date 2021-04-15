@@ -58,25 +58,25 @@ def _files_from_source(source, extensions):
 
 
 class BaseCommand(base.BaseCommand):
-    def __init__(self, args: argparse.Namespace):
-        super().__init__(args)
+    def __init__(self, cli_args: argparse.Namespace):
+        super().__init__(cli_args)
         for name in ['xpipeline', 'irods_fsspec', 'exao_dap_client']:
             logger = logging.getLogger(name)
             coloredlogs.install(level='DEBUG', logger=logger)
-            logger.setLevel(logging.DEBUG if args.verbose else logging.INFO)
-        log.debug(f'Verbose logging: {args.verbose}')
+            logger.setLevel(logging.DEBUG if cli_args.verbose else logging.INFO)
+        log.debug(f'Verbose logging: {cli_args.verbose}')
 
-        numpy.random.seed(args.random_state)
-        log.debug(f'Set random seed to {args.random_state}')
+        numpy.random.seed(cli_args.random_state)
+        log.debug(f'Set random seed to {cli_args.random_state}')
         
 
-        extensions = args.extension if len(args.extension) else DEFAULT_EXTENSIONS
-        self.all_files = _files_from_source(args.source, extensions)[:: args.sample]
+        extensions = cli_args.extension if len(cli_args.extension) else DEFAULT_EXTENSIONS
+        self.all_files = _files_from_source(cli_args.source, extensions)[:: cli_args.sample]
         
-        self.dest_fs = utils.get_fs(args.destination)
+        self.dest_fs = utils.get_fs(cli_args.destination)
         assert isinstance(self.dest_fs, AbstractFileSystem)
-        self.dest_fs.makedirs(args.destination, exist_ok=True)
-        self.destination = args.destination
+        self.dest_fs.makedirs(cli_args.destination, exist_ok=True)
+        self.destination = cli_args.destination
         
         self.inputs_coll = LazyPipelineCollection(self.all_files)
 
@@ -126,11 +126,11 @@ class DaskCommand(BaseCommand):
             "-d","--dask-scheduler", help="Address of existing dask-scheduler process as host:port"
         )
         return super(DaskCommand, DaskCommand).add_arguments(parser)
-    def __init__(self, args: argparse.Namespace):
-        super().__init__(args)
-        if args.dask_scheduler is not None:
-            log.info(f'Connecting to dask-scheduler at {args.dask_scheduler}')
-            c = Client(args.dask_scheduler)  # registers with dask as a side-effect
+    def __init__(self, cli_args: argparse.Namespace):
+        super().__init__(cli_args)
+        if cli_args.dask_scheduler is not None:
+            log.info(f'Connecting to dask-scheduler at {cli_args.dask_scheduler}')
+            c = Client(cli_args.dask_scheduler)  # registers with dask as a side-effect
         else:
             log.info('Starting Dask LocalCluster')
             c = Client()  # registers with dask as a side-effect

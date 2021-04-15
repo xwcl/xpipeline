@@ -5,7 +5,9 @@ description = 'The eXtreme (and eXtensible) pipeline for analysis of high contra
 
 setup(
     name='xpipeline',
-    version='0.0.1.dev',
+    # version='0.0.1.dev',
+    use_scm_version=True,
+    setup_requires=['setuptools_scm'],
     url='https://github.com/magao-x/xpipeline',
     description=description,
     author='Joseph D. Long',

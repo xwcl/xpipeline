@@ -11,7 +11,7 @@ log = logging.getLogger(__name__)
 
 def drop_idx_range_cols(arr, min_excluded_idx, max_excluded_idx):
     '''Note exclusive upper bound: [min_excluded_idx, max_excluded_idx)'''
-    xp = cp.get_array_module(arr)
+    xp = core.get_array_module(arr)
     rows, cols = arr.shape
     n_drop = max_excluded_idx - min_excluded_idx
     out_shape = (rows, cols - n_drop)

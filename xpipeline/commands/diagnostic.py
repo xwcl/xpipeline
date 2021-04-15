@@ -19,7 +19,7 @@ class Diagnostic:
     name = "diagnostic"
     help = "Power on, self-test"
 
-    def __init__(self, args: argparse.Namespace):
+    def __init__(self, cli_args: argparse.Namespace):
         logger = logging.getLogger('xpipeline')
         coloredlogs.install(level='DEBUG', logger=logger)
 

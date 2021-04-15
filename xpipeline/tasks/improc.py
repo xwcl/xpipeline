@@ -1,4 +1,5 @@
-from inspect import unwrap
+from typing import Tuple
+from functools import partial
 import numpy as np
 import logging
 from numpy.core.numeric import count_nonzero
@@ -201,3 +202,111 @@ def quick_derotate(cube, angles):
         outimg += skimage.transform.rotate(image, -angles[i])
 
     return outimg
+
+def mask_arc(center: Tuple[float, float],
+             data_shape: Tuple[int, int],
+             from_radius: float, to_radius: float,
+             from_radians: float, to_radians: float,
+             overall_rotation_radians: float=0) -> np.ndarray:
+    '''Mask an arc beginning `from_radius` pixels from `center`
+    and going out to `to_radius` pixels, beginning at `from_radians`
+    from the +X direction (CCW when 0,0 at lower left) and going
+    to `to_radians`. For cases where it's easier to adjust the overall
+    rotation than the bounds, `overall_rotation_radians` can be set to
+    offset the `from_radians` and `to_radians` values
+
+    Parameters
+    ----------
+    center: tuple[float, float]
+        x, y pixel coordinates of the center of the grid
+    data_shape: tuple[int, int]
+        height, width shape (Python / NumPy order)
+    from_radius: float
+        pixel distance from center where mask `True` region
+        should start
+    to_radius: float
+        pixel distance from center where mask `True` region
+        should end
+    from_radians: float
+        angle in radians from +X where mask `True` region
+        should start
+    to_radians: float
+        angle in radians from +X where mask `True` region
+        should end
+    overall_rotation_radians: float (default: 0)
+        amount to rotate coordinate grid from +X
+    '''
+    rho, phi = polar_coords(center, data_shape)
+    phi = (phi + overall_rotation_radians) % (2 * np.pi)
+    mask = (from_radius <= rho) & (rho <= to_radius)
+    from_radians %= (2 * np.pi)
+    to_radians %= (2 * np.pi)
+    if from_radians != to_radians:
+        mask &= (from_radians <= phi) & (phi <= to_radians)
+    return mask
+
+def cartesian_coords(center: Tuple[float, float],
+                     data_shape: Tuple[int, int]) -> np.ndarray:
+    '''center in x,y order; data_shape in (h, w); returns coord arrays xx, yy of data_shape
+
+    Matrix layout ((0,0) at upper left) for (2, 2) matrix
+
+       ----------+X---------->
+
+    |  +---------+ +---------+
+    |  |  [0,0]  | |  [0,1]  |
+   +Y  +---------+ +---------+
+    |  +---------+ +---------+
+    |  |  [1,0]  | |  [1,1]  |
+    V  +---------+ +---------+
+
+    With sample locations defined as the centers of pixels, [0,0]
+    represents the value from x = -0.5 to x = 0.5;
+    [0,1] from x = 0.5 to x = 1.5.
+
+    Placing the center at (0.5, 0.5) puts it at the corner of all four
+    pixels. The coordinates of the centers in the new system are then
+
+       ---------------+X---------------->
+
+    |  +--------------+ +--------------+
+    |  | (-0.5, -0.5) | |  (0.5, -0.5) |
+   +Y  +--------------+ +--------------+
+    |  +--------------+ +--------------+
+    |  | (-0.5, 0.5)  | |  (0.5, 0.5)  |
+    |  +--------------+ +--------------+
+    V
+
+    Which means coordinate arrays of
+
+    xx = [[-0.5, 0.5], [-0.5, 0.5]]
+    yy = [[-0.5, -0.5], [0.5, 0.5]]
+    '''
+    yy, xx = np.indices(data_shape, dtype=float)
+    center_x, center_y = center
+    yy -= center_y
+    xx -= center_x
+    return xx, yy
+
+
+def polar_coords(center: Tuple[float, float],
+                 data_shape: Tuple[int, int]) -> np.ndarray:
+    '''center in x,y order; data_shape in (h, w); returns coord arrays rho, phi of data_shape'''
+    xx, yy = cartesian_coords(center, data_shape)
+    rho = np.sqrt(yy**2 + xx**2)
+    phi = np.arctan2(yy, xx)
+    return rho, phi
+
+
+def max_radius(center: Tuple[float, float],
+               data_shape: Tuple[int, int]) -> float:
+    '''Given an (x, y) center location and a data shape of
+    (height, width) return the largest circle radius from that center
+    that is completely within the data bounds'''
+    if center[0] > (data_shape[1] - 1) or center[1] > (data_shape[0] - 1):
+        raise ValueError("Coordinates for center are outside data_shape")
+    bottom_left = np.sqrt(center[0]**2 + center[1]**2)
+    data_height, data_width = data_shape
+    top_right = np.sqrt(
+        (data_height - center[0])**2 + (data_width - center[1])**2)
+    return min(bottom_left, top_right)
