@@ -108,7 +108,7 @@ def torch_svd(array, full_matrices=False, n_modes=None):
         return mtx_u, diag_s, mtx_v
 
 
-def generic_svd(mtx_x, n_modes):
+def generic_svd(mtx_x, n_modes, n_power_iter=4):
     '''Computes SVD of mtx_x returning U, s, and V such that
     allclose(mtx_x, U @ diag(s) @ V.T) (with some tolerance).
 
@@ -130,6 +130,9 @@ def generic_svd(mtx_x, n_modes):
     n_modes : int or None
         Whether to truncate the decomposition, keeping the top
         `n_modes` greatest singular values and corresponding vectors
+    n_power_iter : int
+        Number of power iterations when using
+        `da.linalg.svd_compressed` to compute Halko approximate SVD.
 
     Returns
     -------
@@ -139,7 +142,7 @@ def generic_svd(mtx_x, n_modes):
     '''
     xp = core.get_array_module(mtx_x)
     if xp is da:
-        mtx_u, diag_s, mtx_v = da.linalg.svd_compressed(mtx_x, k=n_modes)
+        mtx_u, diag_s, mtx_v = da.linalg.svd_compressed(mtx_x, k=n_modes, n_power_iter=n_power_iter)
     elif xp in (np, cp):
         mtx_u, diag_s, mtx_vt = xp.linalg.svd(mtx_x, full_matrices=False)
         mtx_v = mtx_vt.T

@@ -14,17 +14,25 @@ from ..core import LazyPipelineCollection
 from ..tasks import iofits # obs_table, iofits, sky_model, detector, data_quality
 # from .ref import clio
 
-from .base import DaskCommand
+from .base import BaseCommand
 
 log = logging.getLogger(__name__)
 
 
-class KLIP(DaskCommand):
+class KLIP(BaseCommand):
     name = "klip"
     help = "Subtract starlight with KLIP"
 
     @staticmethod
     def add_arguments(parser: argparse.ArgumentParser):
+        parser.add_argument(
+            "--extname",
+            default="SCI",
+            help=unwrap("""
+                FITS extension name containing data cube planes
+                (used when single combined input file provided)
+            """)
+        )
         parser.add_argument(
             "--region-mask",
             default=None,
@@ -34,6 +42,14 @@ class KLIP(DaskCommand):
             "--angle-keyword",
             default='ROTOFF',
             help="FITS keyword with rotation information (default: 'ROTOFF')"
+        )
+        parser.add_argument(
+            "--angle-extname",
+            default="ANGLES",
+            help=unwrap("""
+                FITS extension name containing 1D array of angles corresponding to
+                data cube planes (used when single combined input file provided)
+            """)
         )
         parser.add_argument(
             "--angle-scale",
@@ -68,16 +84,33 @@ class KLIP(DaskCommand):
         dest_fs.makedirs(destination, exist_ok=True)
 
         output_klip_final = utils.join(destination, "klip_final.fits")
-        inputs = self.inputs_coll.map(iofits.load_fits_from_path)
+        output_exptime_map = utils.join(destination, "klip_exptime_map.fits")
+        if self.check_for_outputs([output_klip_final, output_exptime_map]):
+            return
+        if len(self.all_files) == 1:
+            extname = self.args.extname
+            rotation_extname = self.args.angle_extname
+            input_cube_hdul = iofits.load_fits_from_path(self.all_files[0])
+            sci_arr = da.from_array(input_cube_hdul[self.args.extname].data.astype('=f8')[::self.args.sample])
+            rot_arr = da.from_array(input_cube_hdul[self.args.angle_extname].data.astype('=f8')[::self.args.sample])
+            default_region_mask = np.ones_like(input_cube_hdul[extname].data[0])
+        else:
+            inputs = self.inputs_coll.map(iofits.load_fits_from_path)
+            first_hdul = dask.persist(inputs.collection[0])[0].compute()
+            plane_shape = first_hdul[0].data.shape
+            sci_arr = sorted_inputs_collection.collect(iofits.hdulists_to_dask_cube, plane_shape)
+            rot_arr = sorted_inputs_collection.collect(iofits.hdulists_keyword_to_dask_array, self.args.angle_keyword)
+            default_region_mask = np.ones_like(first_hdul[0].data)
 
         if self.args.region_mask is not None:
-            region_mask = iofits.load_fits_from_path(self.args.region_mask)[0].data.compute()
+            with open(self.args.region_mask, 'rb') as fh:
+                region_mask = fits.open(fh)[0].data
         else:
-            first_hdul = dask.persist(inputs.collection[0])[0].compute()
-            region_mask = np.ones_like(first_hdul[0].data)
+            region_mask = default_region_mask
 
         out_image = pipelines.klip_adi(
-            inputs,
+            sci_arr,
+            rot_arr,
             region_mask,
             self.args.angle_keyword,
             self.args.angle_scale,
@@ -91,5 +124,5 @@ class KLIP(DaskCommand):
         out_image = out_image.compute()
         elapsed = time.perf_counter() - start
         log.info(f"Computed in {elapsed} sec")
-        output_file = iofits.write_fits(out_image, output_klip_final)
+        output_file = iofits.write_fits(iofits.DaskHDUList([iofits.DaskHDU(out_image)]), output_klip_final)
         return dask.compute(output_file)

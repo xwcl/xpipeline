@@ -69,6 +69,18 @@ class BaseCommand(base.BaseCommand):
         numpy.random.seed(cli_args.random_state)
         log.debug(f'Set random seed to {cli_args.random_state}')
         
+        if not cli_args.disable_dask:
+            if cli_args.dask_scheduler is not None:
+                log.info(f'Connecting to dask-scheduler at {cli_args.dask_scheduler}')
+                c = Client(cli_args.dask_scheduler)  # registers with dask as a side-effect
+            else:
+                log.info('Starting Dask LocalCluster')
+                # registers with dask as a side-effect
+                c = Client(
+                    silence_logs=logging.INFO if not cli_args.verbose else logging.DEBUG,
+                    processes=False
+                )
+            log.info(f'Dask cluster: {c.scheduler.address} ({c.dashboard_link})')
 
         extensions = cli_args.extension if len(cli_args.extension) else DEFAULT_EXTENSIONS
         self.all_files = _files_from_source(cli_args.source, extensions)[:: cli_args.sample]
@@ -81,8 +93,9 @@ class BaseCommand(base.BaseCommand):
         self.inputs_coll = LazyPipelineCollection(self.all_files)
 
     def check_for_outputs(self, output_files):
-        if all(map(self.dest_fs.exists, output_files)):
-            log.info(f'All outputs exist: {output_files}')
+        existing_files = [fn for fn in output_files if self.dest_fs.exists(fn)]
+        if len(existing_files):
+            log.info(f'Existing outputs: {existing_files}')
             log.info('Remove them to re-run')
             return True
         else:
@@ -115,23 +128,13 @@ class BaseCommand(base.BaseCommand):
             default=0,
             help="Random seed state for reproducibility (default: 0)",
         )
-        parser.add_argument("source", nargs="+")
-        parser.add_argument("destination")
-        return super(BaseCommand, BaseCommand).add_arguments(parser)
-
-class DaskCommand(BaseCommand):
-    @staticmethod
-    def add_arguments(parser: argparse.ArgumentParser):
         parser.add_argument(
             "-d","--dask-scheduler", help="Address of existing dask-scheduler process as host:port"
         )
-        return super(DaskCommand, DaskCommand).add_arguments(parser)
-    def __init__(self, cli_args: argparse.Namespace):
-        super().__init__(cli_args)
-        if cli_args.dask_scheduler is not None:
-            log.info(f'Connecting to dask-scheduler at {cli_args.dask_scheduler}')
-            c = Client(cli_args.dask_scheduler)  # registers with dask as a side-effect
-        else:
-            log.info('Starting Dask LocalCluster')
-            c = Client()  # registers with dask as a side-effect
-        log.info(f'Dask cluster: {c.scheduler.address} ({c.dashboard_link})')
+        parser.add_argument(
+            "-D", "--disable-dask", help="Skip initializing dask, overrides --dask-scheduler",
+            action="store_true"
+        )
+        parser.add_argument("source", nargs="+")
+        parser.add_argument("destination")
+        return super(BaseCommand, BaseCommand).add_arguments(parser)

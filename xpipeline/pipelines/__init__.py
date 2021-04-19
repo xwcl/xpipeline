@@ -55,7 +55,8 @@ def compute_sky_model(
 
 
 def klip_adi(
-    sorted_inputs_collection: LazyPipelineCollection,
+    sci_arr,
+    rot_arr,
     region_mask: np.ndarray,
     rotation_keyword: str,
     rotation_scale: float,
@@ -77,24 +78,21 @@ def klip_adi(
         pixels should be kept and False elsewhere
     '''
     log.debug('Assembling pipeline...')
-    if plane_shape is None:
-        first_frame, = dask.compute(sorted_inputs_collection.collection[0])
-        plane_shape = first_frame[0].data.shape
-    sci_arr = iofits.hdulists_to_dask_cube(sorted_inputs_collection.collection, plane_shape)
-    rot_arr = iofits.hdulists_keyword_to_dask_array(sorted_inputs_collection.collection, rotation_keyword)
+
     derotation_angles = rotation_scale * rot_arr + rotation_offset
     mtx_x, x_indices, y_indices = improc.unwrap_cube(sci_arr, region_mask)
+    log.debug(f'{mtx_x.shape=}')
 
     subtracted_mtx = starlight_subtraction.klip_cube(
         mtx_x,
         k_klip_value,
         exclude_nearest_n_frames
     )
-    return subtracted_mtx
-    # outcube = improc.wrap_matrix(subtracted_mtx, sci_arr.shape, x_indices, y_indices)
-    # out_image = dask.delayed(improc.quick_derotate)(outcube, derotation_angles)
-    # log.debug('done assembling')
-    # return out_image
+    outcube = improc.wrap_matrix(subtracted_mtx, sci_arr.shape, x_indices, y_indices)
+    log.debug(f'{outcube.shape=}')
+    out_image = dask.delayed(improc.quick_derotate)(outcube, derotation_angles)
+    log.debug('done assembling')
+    return out_image
 
 def evaluate_starlight_subtraction(
     inputs_collection,

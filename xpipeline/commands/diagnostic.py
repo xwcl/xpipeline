@@ -9,6 +9,7 @@ import logging
 from .. import utils
 from .. import tasks, ref
 # from .ref import clio
+from .. import version
 
 from .base import BaseCommand
 
@@ -28,6 +29,7 @@ class Diagnostic:
         pass
 
     def main(self):
+        log.info(f'xpipeline {version.version}')
         task_names = [x for x in dir(tasks) if x[0] != '_']
         log.info(f'task modules: {task_names}')
         ref_names = [x for x in dir(ref) if x[0] != '_']

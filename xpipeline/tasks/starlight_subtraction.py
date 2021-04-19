@@ -1,9 +1,12 @@
 from dataclasses import dataclass
 import numpy as np
+from joblib import Parallel, delayed
 import dask
 import dask.array as da
 from .. import core, utils
+from typing import Union
 from . import learning
+
 
 import logging
 log = logging.getLogger(__name__)
@@ -105,7 +108,7 @@ def klip_to_modes(image_vecs, decomp_class, n_modes, exclude_nearest=0):
     return output
 
 def klip_chunk(image_vecs_meansub, mtx_u0, diag_s0, mtx_v0, k_klip, exclude_nearest_n_frames):
-    log.debug(f"Klipping a chunk")
+    log.debug(f"Klipping a chunk {image_vecs_meansub.shape=}")
     n_frames = image_vecs_meansub.shape[1]
     total_n_frames = mtx_v0.shape[0]
     output = np.zeros_like(image_vecs_meansub)
@@ -120,6 +123,7 @@ def klip_chunk(image_vecs_meansub, mtx_u0, diag_s0, mtx_v0, k_klip, exclude_near
         eigenimages = new_u[:,:k_klip]
         meansub_target = image_vecs_meansub[:,i]
         output[:,i] = meansub_target - eigenimages @ (eigenimages.T @ meansub_target)
+    log.debug('klipped!')
     return output
 
 def klip_cube(image_vecs, k_klip: int, exclude_nearest_n_frames: int):
@@ -132,10 +136,12 @@ def klip_cube(image_vecs, k_klip: int, exclude_nearest_n_frames: int):
     # to remove 1 image vector by downdating, the initial decomposition
     # should retain k_klip + 1 singular value triplets. 
     initial_k = k_klip + exclude_nearest_n_frames + 1
+    log.debug(f'{image_vecs.shape=}, {k_klip=}, {exclude_nearest_n_frames=}, {initial_k=}')
     if image_vecs.shape[0] < initial_k or image_vecs.shape[1] < initial_k:
         raise ValueError(f"Number of modes requested exceeds dimensions of input")
     image_vecs_meansub, mean_vec = mean_subtract_vecs(image_vecs)
     mtx_u0, diag_s0, mtx_v0 = learning.generic_svd(image_vecs, initial_k)
+    log.debug(f'{image_vecs_meansub.shape=}, {mtx_u0.shape=}, {diag_s0.shape=}, {mtx_v0.shape=}')
     if xp is da:
         output = image_vecs_meansub.map_blocks(
             klip_chunk,
@@ -144,7 +150,7 @@ def klip_cube(image_vecs, k_klip: int, exclude_nearest_n_frames: int):
             mtx_v0,
             k_klip,
             exclude_nearest_n_frames,
-            dtype=image_vecs_meansub.dtype,
+            dtype=image_vecs_meansub.dtype
         )
     else:
         output = klip_chunk(image_vecs_meansub, mtx_u0, diag_s0, mtx_v0, k_klip, exclude_nearest_n_frames)

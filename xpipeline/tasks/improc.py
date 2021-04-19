@@ -92,20 +92,28 @@ def unwrap_cube(cube, good_pix_mask):
     yy, xx = np.indices(cube.shape[1:])
     x_indices = xx[good_pix_mask]
     y_indices = yy[good_pix_mask]
-    cube_to_vecs = lambda cube, good_pix_mask: cube[:,good_pix_mask].T
+
+    def cube_to_rows(cube, good_pix_mask):
+        # log.debug(f'{cube.shape=} {good_pix_mask.shape=}')
+        res = cube[:,good_pix_mask]
+        # log.debug(f'{res.shape=}')
+        return res
+
+    # cube_to_vecs = lambda cube, good_pix_mask: cube[:,good_pix_mask]
     if xp is da:
         chunk_size = cube.shape[0] // cube.numblocks[0]
         # import IPython
         # IPython.embed()
         image_vecs = cube.map_blocks(
-            cube_to_vecs,
+            cube_to_rows,
             good_pix_mask,
             dtype=cube.dtype,
             chunks=(chunk_size, np.count_nonzero(good_pix_mask == 1),),
             drop_axis=2
         )
+        image_vecs = image_vecs.T
     else:
-        image_vecs = cube_to_vecs(cube, good_pix_mask)
+        image_vecs = cube_to_rows(cube, good_pix_mask).T
     return image_vecs, x_indices, y_indices
 
 
@@ -153,20 +161,22 @@ def wrap_matrix(matrix, shape, x_indices, y_indices):
     '''
     xp = core.get_array_module(matrix)
     if xp is da:
-        chunk_size = matrix.shape[0] // matrix.numblocks[0]
-        return matrix.map_blocks(
-            wrap_matrix,
+        chunk_size = matrix.shape[1] // matrix.numblocks[1]
+        def _wrap_matrix(block, shape, x_indices, y_indices):
+            shape = (block.shape[0],) + shape[1:]
+            cube = np.zeros(shape)
+            cube[:, y_indices, x_indices] = block
+            return cube
+        return matrix.T.map_blocks(
+            _wrap_matrix,
             shape,
             x_indices,
             y_indices,
             chunks=(chunk_size,) + shape[1:],
             new_axis=2,
-            dtype=matrix.dtype
+            dtype=matrix.dtype,
+            meta=np.array((), dtype=matrix.dtype)
         )
-    if matrix.shape[1] != shape[0]:
-        # handling a chunk from map_blocks. Since matrix is transposed before assignment
-        # we check that the number of *columns* is equal to the expected number of planes in the cube
-        shape = (matrix.shape[1],) + shape[1:]
     cube = xp.zeros(shape)
     cube[:, y_indices, x_indices] = matrix.T
     return cube

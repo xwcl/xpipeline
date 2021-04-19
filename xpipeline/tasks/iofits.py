@@ -9,6 +9,7 @@ objects, converting `numpy.ndarray` data arrays to `dask.array` data arrays
 import os
 import getpass
 import fsspec
+from fsspec.implementations.local import LocalFileSystem
 from .. import utils
 from distributed.protocol import register_generic
 import numpy as np
@@ -36,7 +37,7 @@ class DaskHDU:
         if distributed:
             data = da.from_array(hdu.data)
         else:
-            data = hdu.data.copy()
+            data = hdu.data.copy() if hdu.data is not None else None
         header = hdu.header
         this_hdu = cls(data, header)
         return this_hdu
@@ -151,8 +152,14 @@ def load_fits(file_handle):
 def load_fits_from_path(url_or_path):
     log.debug(f'Loading {url_or_path}')
     fs = utils.get_fs(url_or_path)
-    with fsspec.open(url_or_path, 'rb') as file_handle:
-        return load_fits(file_handle)
+    if isinstance(fs, LocalFileSystem):
+        # Workaround for https://github.com/astropy/astropy/issues/11586
+        path = fs._strip_protocol(url_or_path)
+        with open(path, 'rb') as file_handle:
+            return load_fits(file_handle)
+    else:
+        with fsspec.open(url_or_path, 'rb') as file_handle:
+            return load_fits(file_handle)
 
 
 def write_fits(hdul, destination_path, overwrite=False):
