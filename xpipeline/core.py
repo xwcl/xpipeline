@@ -1,29 +1,27 @@
-import warnings
 import numpy
 import dask
+
+class YellingProxy:
+    def __init__(self, package):
+        self.package = package
+    def __getattr__(self, name: str):
+        raise AttributeError(f"Package {self.package} is not installed (or failed to import)")
+
 try:
     import torch
     HAVE_TORCH = True
 except ImportError:
-    warnings.warn('PyTorch is unavailable, attempts to use PyTorch features will error')
-    torch = None
+    torch = YellingProxy("PyTorch")
     HAVE_TORCH = False
 try:
     import cupy
     HAVE_CUPY = True
 except ImportError:
-    warnings.warn('CuPy is unavailable, attempts to use GPU features will error')
-    cupy = None
+    cupy = YellingProxy("CuPy")
     HAVE_CUPY = False
-try:
-    import dask.array as dask_array
-    from dask.array import core as dask_array_core
-    HAVE_DASK = True
-except ImportError:
-    warnings.warn('Dask is unavailable, attempts to use distributed features will error')
-    dask_array = None
-    dask_array_core = None
-    HAVE_DASK = False
+
+import dask.array as dask_array
+from dask.array import core as dask_array_core
 
 newaxis = numpy.newaxis
 
@@ -36,7 +34,7 @@ def get_array_module(arr):
         xp = get_array_module(input_array)
         xp.sum(input_array)
     '''
-    if HAVE_DASK and isinstance(arr, dask_array_core.Array):
+    if isinstance(arr, dask_array_core.Array):
         return dask_array
     elif HAVE_CUPY and isinstance(arr, cupy.ndarray):
         return cupy
@@ -65,6 +63,9 @@ class LazyPipelineCollection:
 
     def __init__(self, inputs):
         self.collection = inputs
+
+    def _wrap_callable(self, callable):
+        return dask.delayed(callable)
 
     def zip_map(self, callable, *args, **kwargs):
         """Apply function to inputs with varying argument values
@@ -101,8 +102,8 @@ class LazyPipelineCollection:
                     new_kwargs[kw] = arg[idx]
                 else:
                     new_kwargs[kw] = arg
-            out.append(dask.delayed(callable)(x, *new_args, **new_kwargs))
-        return LazyPipelineCollection(out)
+            out.append(self._wrap_callable(callable)(x, *new_args, **new_kwargs))
+        return self.__class__(out)
 
     def map(self, callable, *args, **kwargs):
         """Apply function individually to all inputs
@@ -120,7 +121,7 @@ class LazyPipelineCollection:
         coll : LazyPipelineCollection
             New LazyPipelineCollection with results for chaining
         """
-        return LazyPipelineCollection([dask.delayed(callable)(x, *args, **kwargs) for x in self.collection])
+        return self.__class__([self._wrap_callable(callable)(x, *args, **kwargs) for x in self.collection])
 
     def collect(self, callable, *args, **kwargs):
         """
@@ -134,7 +135,7 @@ class LazyPipelineCollection:
         *args, **kwargs
             Arguments passed through to `callable`
         """
-        return dask.delayed(callable)(self.collection, *args, **kwargs)
+        return self._wrap_callable(callable)(self.collection, *args, **kwargs)
 
     def compute(self):
         '''Pass `self.inputs` to `dask.compute` and return the result
@@ -146,3 +147,9 @@ class LazyPipelineCollection:
         '''Return the Delayed instances for the pipeline outputs
         '''
         return self.collection
+
+class EagerPipelineCollection(LazyPipelineCollection):
+    def _wrap_callable(self, callable):
+        return callable
+    def compute(self):
+        raise NotImplementedError("EagerPipelineCollection computes as it goes; access instance.collection for contents")

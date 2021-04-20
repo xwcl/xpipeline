@@ -19,6 +19,9 @@ from .base import BaseCommand
 
 log = logging.getLogger(__name__)
 
+def _docs_args(parser):
+    # needed for sphinx-argparse support
+    return EvalKLIP.add_arguments(parser)
 
 class EvalKLIP(KLIP):
     name = "eval_klip"
@@ -28,13 +31,26 @@ class EvalKLIP(KLIP):
     def add_arguments(parser: argparse.ArgumentParser):
         parser.add_argument(
             "template_psf",
-            help="Path to FITS image of template PSF, scaled to the average amplitude of the host star signal"
+            help=unwrap("""
+                Path to FITS image of template PSF, scaled to the
+                average amplitude of the host star signal such that
+                multiplying by the contrast gives an appropriately
+                scaled planet PSF
+            """)
         )
         parser.add_argument(
             "--companion-spec",
             action='append',
             required=True,
-            help="specification of the form 'contrast,r,theta', can be repeated (e.g. '0.0001,34,100' for 10^-4 contrast, 34 px, 100 deg E of N)"
+            help=unwrap("""
+                specification of the form ``scale,r,theta``, can be
+                repeated (e.g. ``0.0001,34,100`` for 10^-4 contrast,
+                34 px, 100 deg E of N). Negative injections are
+                supported too (to remove biasing effect of true
+                companions) as is a scale of ``?`` as a shorthand for
+                zero-scaled specs (for measuring true SNR without
+                injection)
+            """)
         )
         return super(EvalKLIP, EvalKLIP).add_arguments(parser)
 

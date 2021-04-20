@@ -11,6 +11,9 @@ from .klip import KLIP
 
 log = logging.getLogger(__name__)
 
+def _docs_args(parser):
+    # needed for sphinx-argparse support
+    return LocalKLIP.add_arguments(parser)
 
 class LocalKLIP(KLIP):
     name = "local_klip"

@@ -19,6 +19,11 @@ from .base import BaseCommand
 log = logging.getLogger(__name__)
 
 
+def _docs_args(parser):
+    # needed for sphinx-argparse support
+    return KLIP.add_arguments(parser)
+
+
 class KLIP(BaseCommand):
     name = "klip"
     help = "Subtract starlight with KLIP"
@@ -98,8 +103,8 @@ class KLIP(BaseCommand):
             inputs = self.inputs_coll.map(iofits.load_fits_from_path)
             first_hdul = dask.persist(inputs.collection[0])[0].compute()
             plane_shape = first_hdul[0].data.shape
-            sci_arr = sorted_inputs_collection.collect(iofits.hdulists_to_dask_cube, plane_shape)
-            rot_arr = sorted_inputs_collection.collect(iofits.hdulists_keyword_to_dask_array, self.args.angle_keyword)
+            sci_arr = self.inputs_coll.collect(iofits.hdulists_to_dask_cube, plane_shape)
+            rot_arr = self.inputs_coll.collect(iofits.hdulists_keyword_to_dask_array, self.args.angle_keyword)
             default_region_mask = np.ones_like(first_hdul[0].data)
 
         if self.args.region_mask is not None:

@@ -1,6 +1,9 @@
 import numpy as np
 
-from .improc import rough_peak_in_box, unwrap_image, wrap_vector, cartesian_coords
+from .improc import (
+    rough_peak_in_box, unwrap_image, wrap_vector, cartesian_coords,
+    f_test, shift2    
+)
 
 
 def test_rough_peak():
@@ -48,3 +51,13 @@ def test_cartesian_coords():
     ref_yy = np.asarray([[-0.5, -0.5], [0.5, 0.5]])
     assert np.allclose(xx, ref_xx)
     assert np.allclose(yy, ref_yy)
+
+def test_shift2():
+    orig = f_test(128)
+    outshape = (3 * 128, 3 * 128)
+    result = shift2(orig, 0, 0, output_shape=outshape)
+    assert result.shape == outshape
+    assert np.allclose(orig, result[128:2*128,128:2*128])
+
+    result2 = shift2(orig, -128, -128, output_shape=outshape)
+    assert np.allclose(orig, result[:128,:128])

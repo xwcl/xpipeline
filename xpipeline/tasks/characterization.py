@@ -1,20 +1,51 @@
 import numpy as np
 import dask
-
+from typing import List
 from dataclasses import dataclass
 
+from . import improc
+from .. import core
+da = core.dask_array
 
 @dataclass
 class CompanionSpec:
     pa_deg: float
     r_px: float
-    amplitude: float
+    scale: float
+
+    @classmethod
+    def from_str(cls, value):
+        scale_str, r_px_str, pa_deg_str = value.split(',')
+        if scale_str == '?':
+            scale_str = '0'
+        return cls(scale=float(scale_str), r_px=float(r_px_str), pa_deg=float(pa_deg_str))
 
 
 @dataclass
 class RecoveredSignal(CompanionSpec):
     snr: float
 
+
+def inject_signals(cube: np.ndarray, angles: np.ndarray, specs: List[CompanionSpec], template: np.ndarray):
+    xp = core.get_array_module(cube)
+    if xp is da:
+        return cube.map_blocks(
+            inject_signals,
+            angles,
+            specs,
+            template
+        )
+    frame_shape = cube.shape[1:]
+    outcube = cube.copy()
+    for frame_idx in range(cube.shape[0]):
+        for spec in specs:
+            if spec.scale == 0:
+                continue
+            theta = np.deg2rad(90 + spec.pa_deg - angles[frame_idx])
+            dx, dy = spec.r_px * np.cos(theta), spec.r_px * np.sin(theta)
+            addition = spec.scale * improc.shift2(template, dx, dy, output_shape=frame_shape)
+            outcube[frame_idx] += addition
+    return outcube
 
 
 def simple_aperture_locations_r_theta(r_px, pa_deg, resolution_element_px,

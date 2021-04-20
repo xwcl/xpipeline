@@ -28,10 +28,10 @@ RUN conda install --quiet --yes -c conda-forge \
     && conda clean --all -f -y 
 RUN pip install git+https://github.com/xwcl/irods_fsspec.git#egg=irods_fsspec
 RUN pip install git+https://github.com/xwcl/exao_dap_client.git#egg=exao_dap_client
-RUN mkdir -p /tmp/xpipeline
-ADD setup.cfg README.md setup.py /tmp/xpipeline/
-ADD ./xpipeline /tmp/xpipeline/xpipeline
-RUN pip install /tmp/xpipeline
+RUN mkdir -p /opt/xpipeline
+ADD . /opt/xpipeline/
+# ADD ./xpipeline /opt/xpipeline/xpipeline
+RUN pip install -e /opt/xpipeline
 RUN mkdir -p /srv
 WORKDIR /srv
 ENV DEBIAN_FRONTEND interactive

@@ -13,6 +13,7 @@ import os.path
 
 from ..core import LazyPipelineCollection
 from .. import utils
+from ..utils import unwrap
 
 
 log = logging.getLogger(__name__)
@@ -132,9 +133,24 @@ class BaseCommand(base.BaseCommand):
             "-d","--dask-scheduler", help="Address of existing dask-scheduler process as host:port"
         )
         parser.add_argument(
-            "-D", "--disable-dask", help="Skip initializing dask, overrides --dask-scheduler",
+            "-D", "--disable-dask", help="Skip initializing dask, overrides ``--dask-scheduler``",
             action="store_true"
         )
-        parser.add_argument("source", nargs="+")
-        parser.add_argument("destination")
+        parser.add_argument("source", nargs="+", help=unwrap('''
+            One or more source files or directories to process.
+            directories are globbed using the value of the 
+            ``--extension`` option to determine valid file extensions.
+            Note that some commands may operate differently when
+            a single input file is provided rather than a collection,
+            i.e., interpreting it as a data cube.
+
+            Paths may be given as local filesystem paths, or as any
+            protocol supported by fsspec (including ``irods://``)
+        '''))
+        parser.add_argument("destination", help=unwrap('''
+            Destination where command outputs are to be saved. Commands
+            will check for existing outputs and fail fast if they are found.
+            Path may be given as local filesystem paths, or as any
+            protocol supported by fsspec (including ``irods://``)
+        '''))
         return super(BaseCommand, BaseCommand).add_arguments(parser)

@@ -58,13 +58,10 @@ def klip_adi(
     sci_arr,
     rot_arr,
     region_mask: np.ndarray,
-    rotation_keyword: str,
     rotation_scale: float,
     rotation_offset: float,
-    # rotation_exclusion_frames: int,
     exclude_nearest_n_frames: int,
-    k_klip_value: int,
-    plane_shape: tuple=None,
+    k_klip_value: int
 ):
     '''Perform KLIP starlight subtraction on 2D ADI data
 

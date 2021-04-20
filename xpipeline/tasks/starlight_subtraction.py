@@ -1,10 +1,7 @@
 from dataclasses import dataclass
 import numpy as np
-from joblib import Parallel, delayed
-import dask
 import dask.array as da
 from .. import core, utils
-from typing import Union
 from . import learning
 
 
@@ -123,7 +120,8 @@ def klip_chunk(image_vecs_meansub, mtx_u0, diag_s0, mtx_v0, k_klip, exclude_near
         eigenimages = new_u[:,:k_klip]
         meansub_target = image_vecs_meansub[:,i]
         output[:,i] = meansub_target - eigenimages @ (eigenimages.T @ meansub_target)
-    log.debug('klipped!')
+    mem_mb = utils.get_memory_use_mb()
+    log.debug('klipped! {mem_mb} MB RAM in use')
     return output
 
 def klip_cube(image_vecs, k_klip: int, exclude_nearest_n_frames: int):
