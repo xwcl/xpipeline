@@ -9,9 +9,9 @@ da = core.dask_array
 
 @dataclass
 class CompanionSpec:
-    pa_deg: float
-    r_px: float
     scale: float
+    r_px: float
+    pa_deg: float
 
     @classmethod
     def from_str(cls, value):
@@ -24,6 +24,10 @@ class CompanionSpec:
 @dataclass
 class RecoveredSignal(CompanionSpec):
     snr: float
+
+    @classmethod
+    def from_spec_snr(cls, spec: CompanionSpec, snr: float):
+        return cls(scale=spec.scale, r_px=spec.r_px, pa_deg=spec.pa_deg, snr=snr)
 
 
 def inject_signals(cube: np.ndarray, angles: np.ndarray, specs: List[CompanionSpec], template: np.ndarray):
@@ -47,6 +51,21 @@ def inject_signals(cube: np.ndarray, angles: np.ndarray, specs: List[CompanionSp
             outcube[frame_idx] += addition
     return outcube
 
+
+def recover_signals(image: np.ndarray, specs: List[CompanionSpec], aperture_diameter_px: float, apertures_to_exclude: int) -> List[RecoveredSignal]:
+    signals = []
+    for spec in specs:
+        _, vals = reduce_apertures(
+            image,
+            spec.r_px,
+            spec.pa_deg,
+            aperture_diameter_px,
+            np.sum,
+            exclude_nearest=apertures_to_exclude
+        )
+        snr = calc_snr_mawet(vals[0], vals[1:])
+        signals.append(RecoveredSignal.from_spec_snr(spec, snr))
+    return signals
 
 def simple_aperture_locations_r_theta(r_px, pa_deg, resolution_element_px,
                                       exclude_nearest=0, exclude_planet=False):

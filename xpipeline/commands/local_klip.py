@@ -53,10 +53,10 @@ class LocalKLIP(KLIP):
         else:
             region_mask = np.ones_like(sci_arr[0])
         plane_shape = region_mask.shape
-        rotation_scale = self.args.angle_scale
-        rotation_offset = self.args.angle_constant
+        angle_scale = self.args.angle_scale
+        angle_offset = self.args.angle_constant
 
-        derotation_angles = rotation_scale * rot_arr + rotation_offset
+        derotation_angles = angle_scale * rot_arr + angle_offset
         
         log.info(f"Computing klip pipeline result...")
         import time

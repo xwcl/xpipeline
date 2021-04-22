@@ -8,8 +8,10 @@ from dask.distributed import Client
 
 from fsspec.spec import AbstractFileSystem
 from fsspec.implementations.local import LocalFileSystem
+import os
 import os.path
 
+import dask
 
 from ..core import LazyPipelineCollection
 from .. import utils
@@ -58,7 +60,20 @@ def _files_from_source(source, extensions):
     return sorted_files_paths
 
 
+def _determine_temporary_directory():
+    if 'OSG_WN_TMP' in os.environ:
+        temp_dir = os.environ['OSG_WN_TMP']
+    elif 'TMPDIR' in os.environ:
+        temp_dir = os.environ['TMPDIR']
+    elif os.path.exists('/tmp'):
+        temp_dir = '/tmp'
+    else:
+        temp_dir = None  # default behavior: use pwd
+    return temp_dir
+
 class BaseCommand(base.BaseCommand):
+    """Base class for CLI commands
+    """
     def __init__(self, cli_args: argparse.Namespace):
         super().__init__(cli_args)
         for name in ['xpipeline', 'irods_fsspec', 'exao_dap_client']:
@@ -71,6 +86,11 @@ class BaseCommand(base.BaseCommand):
         log.debug(f'Set random seed to {cli_args.random_state}')
         
         if not cli_args.disable_dask:
+            temp_dir = _determine_temporary_directory()
+            if temp_dir is not None:
+                os.environ['DASK_TEMPORARY_DIRECTORY'] = temp_dir
+                dask.config.refresh()
+            log.debug(f'{dask.config.config=}')
             if cli_args.dask_scheduler is not None:
                 log.info(f'Connecting to dask-scheduler at {cli_args.dask_scheduler}')
                 c = Client(cli_args.dask_scheduler)  # registers with dask as a side-effect

@@ -105,6 +105,9 @@ def klip_to_modes(image_vecs, decomp_class, n_modes, exclude_nearest=0):
     return output
 
 def klip_chunk(image_vecs_meansub, mtx_u0, diag_s0, mtx_v0, k_klip, exclude_nearest_n_frames):
+    if image_vecs_meansub.shape == (0, 0):
+        # called by dask to infer dtype
+        return np.zeros_like(image_vecs_meansub)
     log.debug(f"Klipping a chunk {image_vecs_meansub.shape=}")
     n_frames = image_vecs_meansub.shape[1]
     total_n_frames = mtx_v0.shape[0]
@@ -121,7 +124,7 @@ def klip_chunk(image_vecs_meansub, mtx_u0, diag_s0, mtx_v0, k_klip, exclude_near
         meansub_target = image_vecs_meansub[:,i]
         output[:,i] = meansub_target - eigenimages @ (eigenimages.T @ meansub_target)
     mem_mb = utils.get_memory_use_mb()
-    log.debug('klipped! {mem_mb} MB RAM in use')
+    log.debug(f'klipped! {mem_mb} MB RAM in use')
     return output
 
 def klip_cube(image_vecs, k_klip: int, exclude_nearest_n_frames: int):

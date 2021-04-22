@@ -82,16 +82,7 @@ class KLIP(BaseCommand):
         )
         return super(KLIP, KLIP).add_arguments(parser)
 
-    def main(self):
-        destination = self.args.destination
-        dest_fs = utils.get_fs(destination)
-        assert isinstance(dest_fs, fsspec.spec.AbstractFileSystem)
-        dest_fs.makedirs(destination, exist_ok=True)
-
-        output_klip_final = utils.join(destination, "klip_final.fits")
-        output_exptime_map = utils.join(destination, "klip_exptime_map.fits")
-        if self.check_for_outputs([output_klip_final, output_exptime_map]):
-            return
+    def _load_inputs(self):
         if len(self.all_files) == 1:
             extname = self.args.extname
             rotation_extname = self.args.angle_extname
@@ -106,18 +97,25 @@ class KLIP(BaseCommand):
             sci_arr = self.inputs_coll.collect(iofits.hdulists_to_dask_cube, plane_shape)
             rot_arr = self.inputs_coll.collect(iofits.hdulists_keyword_to_dask_array, self.args.angle_keyword)
             default_region_mask = np.ones_like(first_hdul[0].data)
-
         if self.args.region_mask is not None:
-            with open(self.args.region_mask, 'rb') as fh:
-                region_mask = fits.open(fh)[0].data
+            hdul = iofits.load_fits_from_path(self.args.region_mask)
+            region_mask = hdul[0].data
         else:
             region_mask = default_region_mask
+        return sci_arr, rot_arr, region_mask
+
+    def main(self):
+        output_klip_final = utils.join(self.destination, "klip_final.fits")
+        output_exptime_map = utils.join(self.destination, "klip_exptime_map.fits")
+        if self.check_for_outputs([output_klip_final, output_exptime_map]):
+            return
+
+        sci_arr, rot_arr, region_mask = self._load_inputs()
 
         out_image = pipelines.klip_adi(
             sci_arr,
             rot_arr,
             region_mask,
-            self.args.angle_keyword,
             self.args.angle_scale,
             self.args.angle_constant,
             self.args.exclude_nearest_n_frames,

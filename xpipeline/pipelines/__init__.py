@@ -9,6 +9,7 @@ from astropy.io import fits
 import dask
 import dask.array as da
 import pandas as pd
+from typing import List
 
 from .. import constants as const
 from ..core import LazyPipelineCollection
@@ -55,11 +56,11 @@ def compute_sky_model(
 
 
 def klip_adi(
-    sci_arr,
-    rot_arr,
+    sci_arr: da.core.Array,
+    rot_arr: da.core.Array,
     region_mask: np.ndarray,
-    rotation_scale: float,
-    rotation_offset: float,
+    angle_scale: float,
+    angle_offset: float,
     exclude_nearest_n_frames: int,
     k_klip_value: int
 ):
@@ -76,7 +77,7 @@ def klip_adi(
     '''
     log.debug('Assembling pipeline...')
 
-    derotation_angles = rotation_scale * rot_arr + rotation_offset
+    derotation_angles = angle_scale * rot_arr + angle_offset
     mtx_x, x_indices, y_indices = improc.unwrap_cube(sci_arr, region_mask)
     log.debug(f'{mtx_x.shape=}')
 
@@ -92,18 +93,17 @@ def klip_adi(
     return out_image
 
 def evaluate_starlight_subtraction(
-    inputs_collection,
-    date_keyword,
-    rotation_keyword,
-    rotation_scale,
-    rotation_offset,
-    rotation_exclusion_deg,
-    rotation_exclusion_frames,
-    k_klip_values,
-    signal_injection_array,
-    target_signal_spec,
-    other_signal_specs,
-    matched_filter,
+    sci_arr: da.core.Array,
+    rot_arr: da.core.Array,
+    region_mask: np.ndarray,
+    specs: List[characterization.CompanionSpec],
+    template_psf: np.ndarray,
+    angle_scale: float,
+    angle_offset: float,
+    exclude_nearest_n_frames: int,
+    k_klip_value: int,
+    aperture_diameter_px: float,
+    apertures_to_exclude: int
 ):
     '''Take an input LazyPipelineCollection and first inject signals at
     one or more locations, then apply `klip_adi`, then
@@ -113,4 +113,25 @@ def evaluate_starlight_subtraction(
 
     See `subtract_starlight` for other input parameters.
     '''
-    pass
+    injected_sci_arr = characterization.inject_signals(
+        sci_arr,
+        rot_arr,
+        specs,
+        template_psf
+    )
+    out_image = klip_adi(
+        injected_sci_arr,
+        rot_arr,
+        region_mask,
+        angle_scale,
+        angle_offset,
+        exclude_nearest_n_frames,
+        k_klip_value,
+    )
+    recovered_signals = dask.delayed(characterization.recover_signals)(
+        out_image,
+        specs,
+        aperture_diameter_px,
+        apertures_to_exclude
+    )
+    return recovered_signals

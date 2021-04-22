@@ -60,4 +60,4 @@ def test_shift2():
     assert np.allclose(orig, result[128:2*128,128:2*128])
 
     result2 = shift2(orig, -128, -128, output_shape=outshape)
-    assert np.allclose(orig, result[:128,:128])
+    assert np.allclose(orig, result2[:128,:128])
