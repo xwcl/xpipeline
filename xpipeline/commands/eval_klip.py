@@ -58,6 +58,7 @@ class EvalKLIP(KLIP):
         parser.add_argument(
             "--aperture-diameter-px",
             type=float,
+            required=True,
             help=unwrap("""
                 Diameter of the SNR estimation aperture (~lambda/D) in pixels
             """)
@@ -114,8 +115,12 @@ class EvalKLIP(KLIP):
         recovered_signals = dask.compute(d_recovered_signals)[0]
         payload = {
             'inputs': self.all_files,
+            'template_psf': self.args.template_psf,
             'k_klip': k_klip,
             'exclude_nearest_n_frames': exclude_nearest_n_frames,
+            'aperture_diameter_px': aperture_diameter_px,
+            'apertures_to_exclude': apertures_to_exclude,
+            'region_mask': self.args.region_mask,
             'companions': [
                 {'scale': rs.scale, 'r_px': rs.r_px, 'pa_deg': rs.pa_deg, 'snr': rs.snr}
                 for rs in recovered_signals
@@ -123,9 +128,9 @@ class EvalKLIP(KLIP):
         }
         log.info(f'Result of KLIP + ADI signal injection and recovery:')
         log.info(pformat(payload))
-        with fsspec.open(output_result, 'w') as fh:
-            payload_str = orjson.dumps(payload)
-            fh.write()
-            fh.write('\n')
+        with fsspec.open(output_result, 'wb') as fh:
+            payload_str = orjson.dumps(payload, option=orjson.OPT_SERIALIZE_NUMPY | orjson.OPT_INDENT_2)
+            fh.write(payload_str)
+            fh.write(b'\n')
 
         return output_result
