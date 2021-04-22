@@ -33,7 +33,7 @@ setup(
         'irods_fsspec',
         'fsspec>=0.8.7',
         'sphinx-argparse>=0.2.5',
-        'sphinx-rtd-thing>=0.4.3'
+        'sphinx-rtd-theme>=0.4.3'
     ],
     entry_points={
         'console_scripts': [

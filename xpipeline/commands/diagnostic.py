@@ -29,7 +29,10 @@ class Diagnostic:
         pass
 
     def main(self):
+        from .. import cli  # avoid circular import
         log.info(f'xpipeline {version.version}')
+        command_names = [cls.name for cls in cli.COMMANDS]
+        log.info(f'cli commands: {command_names}')
         task_names = [x for x in dir(tasks) if x[0] != '_']
         log.info(f'task modules: {task_names}')
         ref_names = [x for x in dir(ref) if x[0] != '_']
