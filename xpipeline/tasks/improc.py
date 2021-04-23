@@ -198,7 +198,7 @@ def wrap_vector(image_vec, shape, subset_idxs):
 
     Returns
     -------
-    vector
+    image : array of shape ``shape``
     '''
     xp = core.get_array_module(image_vec)
     matrix = image_vec[:, core.newaxis]
@@ -206,12 +206,25 @@ def wrap_vector(image_vec, shape, subset_idxs):
     return cube[0]
 
 def quick_derotate(cube, angles):
-    outimg = np.zeros(cube.shape[1:])
+    '''Rotate each plane of `cube` by the corresponding entry
+    in `angles`, interpreted as deg E of N when N +Y and E +X
+    (CCW when 0, 0 at lower left)
 
+    Parameters
+    ----------
+    cube : array (planes, xpix, ypix)
+    angles : array (planes,)
+
+    Returns
+    -------
+    outimg : array (xpix, ypix)
+    '''
+    outimg = np.zeros(cube.shape[1:])
     for i in range(cube.shape[0]):
         image = cube[i]
         if core.get_array_module(image) is da:
             image = image.get()
+        # n.b. skimage rotates CW by default, so we negate
         outimg += skimage.transform.rotate(image, -angles[i])
 
     return outimg
