@@ -1,4 +1,6 @@
 import numpy as np
+import pytest
+import dask.array as da
 
 from .improc import (
     rough_peak_in_box, unwrap_image, wrap_vector, cartesian_coords,
@@ -27,22 +29,51 @@ def test_rough_peak():
     assert loc_y == peak_y
 
 
-def test_wrap():
-    image = np.arange(9).reshape(3, 3)
-    mask = np.ones_like(image, dtype=bool)
-    mtx, xx, yy = unwrap_image(image, mask)
-    assert np.all(image == wrap_vector(mtx, image.shape, xx, yy))
+@pytest.mark.parametrize('xp', [np, da])
+def test_wrap_2d(xp):
+    image = xp.arange(9).reshape(3, 3)
+    mask = np.ones(image.shape, dtype=bool)
+    vec, subset_idxs = unwrap_image(image, mask)
+    assert np.all(image == wrap_vector(vec, image.shape, subset_idxs))
 
+@pytest.mark.parametrize('xp', [np, da])
+def test_wrap_3d(xp):
+    imcube = xp.arange(27).reshape(3, 3, 3)
+    mask = np.ones(imcube.shape, dtype=bool)
+    vec, subset_idxs = unwrap_image(imcube, mask)
+    assert np.all(imcube == wrap_vector(vec, imcube.shape, subset_idxs))
 
-def test_unwrap():
+@pytest.mark.parametrize('xp', [np, da])
+def test_unwrap_2d(xp):
     image = np.zeros((3, 3))
     mask = np.ones((3, 3), dtype=bool)
     image[1, 1] = 1
+    if xp is da:
+        image = da.from_array(image)
     mask[1, 1] = False
-    mtx, xx, yy = unwrap_image(image, mask)
+    mtx, subset_idxs = unwrap_image(image, mask)
     assert mtx.shape[0] == 8
-    assert xx.shape[0] == 8
-    assert yy.shape[0] == 8
+    assert subset_idxs[1].shape[0] == 8, "Not the right number of X indices"
+    assert subset_idxs[0].shape[0] == 8, "Not the right number of Y indices"
+    assert np.max(mtx) == 0
+
+@pytest.mark.parametrize('xp', [np, da])
+def test_unwrap_3d(xp):
+    imcube = np.zeros((3, 3, 3))
+    mask = np.ones(imcube.shape, dtype=bool)
+
+    # set one nonzero pixel, and mask it out so we can tell if
+    # masking worked when it's not present in the output
+    imcube[1, 1, 1] = 1
+    mask[1, 1, 1] = False
+    if xp is da:
+        imcube = da.from_array(imcube)
+    mtx, subset_idxs = unwrap_image(imcube, mask)
+    nonzero_pix = 3 * 3 * 3 - 1
+    assert mtx.shape[0] == nonzero_pix
+    assert subset_idxs[0].shape[0] == nonzero_pix, "Not the right number of Z indices"
+    assert subset_idxs[1].shape[0] == nonzero_pix, "Not the right number of Y indices"
+    assert subset_idxs[2].shape[0] == nonzero_pix, "Not the right number of X indices"
     assert np.max(mtx) == 0
 
 def test_cartesian_coords():

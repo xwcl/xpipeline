@@ -23,7 +23,7 @@ def test_end_to_end(xp, decomposer, snr_threshold):
     threshold = 2200  # fake, just to test masking
     good_pix_mask = xp.asarray(np.average(data['cube'], axis=0) < threshold)
     cube = xp.asarray(data['cube'])
-    image_vecs, xx, yy = improc.unwrap_cube(cube, good_pix_mask)
+    image_vecs, subset_idxs = improc.unwrap_cube(cube, good_pix_mask)
     # image_vecs_meansub, mean_vec = starbgone.mean_subtract_vecs(image_vecs)
     starlight_subtracted = starlight_subtraction.klip_to_modes(
         image_vecs,
@@ -32,7 +32,7 @@ def test_end_to_end(xp, decomposer, snr_threshold):
         # solver=solver
     )
         
-    outcube = improc.wrap_matrix(starlight_subtracted, cube.shape, xx, yy)
+    outcube = improc.wrap_matrix(starlight_subtracted, cube.shape, subset_idxs)
     final_image = improc.quick_derotate(outcube, data['angles'])
 
     r_px, pa_deg = 18.4, -42.8

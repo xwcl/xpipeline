@@ -78,7 +78,7 @@ def klip_adi(
     log.debug('Assembling pipeline...')
 
     derotation_angles = angle_scale * rot_arr + angle_offset
-    mtx_x, x_indices, y_indices = improc.unwrap_cube(sci_arr, region_mask)
+    mtx_x, subset_idxs = improc.unwrap_cube(sci_arr, region_mask)
     log.debug(f'{mtx_x.shape=}')
 
     subtracted_mtx = starlight_subtraction.klip_cube(
@@ -86,7 +86,7 @@ def klip_adi(
         k_klip_value,
         exclude_nearest_n_frames
     )
-    outcube = improc.wrap_matrix(subtracted_mtx, sci_arr.shape, x_indices, y_indices)
+    outcube = improc.wrap_matrix(subtracted_mtx, sci_arr.shape, subset_idxs)
     log.debug(f'{outcube.shape=}')
     out_image = dask.delayed(improc.quick_derotate)(outcube, derotation_angles)
     log.debug('done assembling')

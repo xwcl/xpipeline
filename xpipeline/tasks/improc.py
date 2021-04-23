@@ -65,128 +65,136 @@ def rough_peak_in_box(data, initial_guess, box_size):
     else:
         return initial_guess, False
 
-def unwrap_cube(cube, good_pix_mask):
-    '''Unwrap a shape (planes, m, n) `cube` and transpose into
+def unwrap_cube(ndcube, good_pix_mask):
+    '''Unwrap a shape (planes, *idxs) `ndcube` and transpose into
     a (pix, planes) matrix, where `pix` is the number of *True*
-    entries in a (m, n) `mask` (i.e. False entries are removed)
+    entries in a (*idxs) `mask` (i.e. False entries are removed)
 
     Parameters
     ----------
-    cube : array (planes, m, n)
-    good_pix_mask : array (m, n)
-        Pixels to include in `matrix`
+    ndcube : array (planes, *idxs)
+        N-dimensional sequence where *idxs are the last (N-1) dimensions
+    good_pix_mask : array (*idxs)
+        Indices from a single slice to include in `matrix`, matching
+        last (N-1) dimensions of ndcube
 
     Returns
     -------
     matrix : array (pix, planes)
         Vectorized images, one per column
-    x_indices : array (pix,)
-        The x indices into the original image that correspond
-        to each entry in the vectorized image
-    y_indices : array (pix,)
-        The y indices into the original image that correspond
+    subset_idxs : array of shape (N-1, pix)
+        The z, y, x (etc) indices into the original image that correspond
         to each entry in the vectorized image
     '''
-    xp = core.get_array_module(cube)
+    if len(good_pix_mask.shape) != len(ndcube.shape) - 1:
+        raise ValueError(f"To mask a {len(ndcube.shape)}-D cube, {len(ndcube.shape) - 1}-D masks are needed")
+    xp = core.get_array_module(ndcube)
     good_pix_mask = good_pix_mask == 1
-    yy, xx = np.indices(cube.shape[1:])
-    x_indices = xx[good_pix_mask]
-    y_indices = yy[good_pix_mask]
+    n_good_pix = np.count_nonzero(good_pix_mask)
+    print(f'{n_good_pix=}')
+    all_idxs = np.indices(ndcube.shape[1:])
+    subset_idxs = all_idxs[:,good_pix_mask]
 
-    def cube_to_rows(cube, good_pix_mask):
+    def ndcube_to_rows(cube, good_pix_mask):
         res = cube[:,good_pix_mask]
         return res
 
     if xp is da:
-        chunk_size = cube.shape[0] // cube.numblocks[0]
-        image_vecs = cube.map_blocks(
-            cube_to_rows,
+        chunk_size = ndcube.shape[0] // ndcube.numblocks[0]
+        axes_to_drop = tuple(range(2, len(ndcube.shape)))
+        # if len(axes_to_drop) == 1:
+        #     axes_to_drop = axes_to_drop[0]
+        # print(axes_to_drop)
+        image_vecs = ndcube.map_blocks(
+            ndcube_to_rows,
             good_pix_mask,
-            dtype=cube.dtype,
-            chunks=(chunk_size, np.count_nonzero(good_pix_mask == 1),),
-            drop_axis=2
+            dtype=ndcube.dtype,
+            chunks=(chunk_size, n_good_pix,),
+            drop_axis=axes_to_drop
         )
         image_vecs = image_vecs.T
     else:
-        image_vecs = cube_to_rows(cube, good_pix_mask).T
-    return image_vecs, x_indices, y_indices
+        image_vecs = ndcube_to_rows(ndcube, good_pix_mask).T
+    return image_vecs, subset_idxs
 
 
 def unwrap_image(image, good_pix_mask):
-    '''Unwrap a shape (m, n) `image` and transpose into a (pix,)
-    vector, where `pix` is the number of *True* entries in a (m, n)
-    `mask` (i.e. False entries are removed)
+    '''Unwrap a shape (*idxs) `image` and transpose into a (pix,)
+    vector, where `pix` is the number of *True* entries in
+    `good_pix_mask` (i.e. False entries are removed)
 
     Parameters
     ----------
-    image : array (m, n)
-    good_pix_mask : array (m, n)
+    image : array (*idxs)
+    good_pix_mask : array (*idxs)
         Pixels to include in `vector`
 
     Returns
     -------
     vector : array (pix,)
         Vectorized image
-    x_indices : array (pix,)
-        The x indices into the original image that correspond
-        to each entry in the vectorized image
-    y_indices : array (pix,)
-        The y indices into the original image that correspond
+    subset_idxs : array of shape (N-1, pix)
+        The z, y, x (etc) indices into the original image that correspond
         to each entry in the vectorized image
     '''
     xp = core.get_array_module(image)
-    cube, x_indices, y_indices = unwrap_cube(image[core.newaxis, :, :], good_pix_mask)
-    return cube[:, 0], x_indices, y_indices
+    indexer = (core.newaxis,) + tuple(slice(None, None) for _ in image.shape)
+    cube, subset_idxs = unwrap_cube(image[indexer], good_pix_mask)
+    return cube[:, 0], subset_idxs
 
-def wrap_matrix(matrix, shape, x_indices, y_indices):
-    '''Wrap a (planes, pix) matrix into a shape `shape`
-    data cube, where pix is the number of entries in `x_indices`
-    and `y_indices`
+def wrap_matrix(matrix, shape, subset_idxs):
+    '''Wrap a (N, pix) matrix into a shape `shape`
+    data cube using the indexes from `subset_idxs`
 
     Parameters
     ----------
-    matrix
-    shape
-    x_indices
-    y_indices
+    matrix : array (N, pix)
+    shape : tuple of length dims + 1
+    subset_idxs : array (dims,) + dims * (pix,)
+        pixel indices to map each vector entry to
+        for each of `dims` dimensions
 
     Returns
     -------
-    cube
+    cube : array of shape ``shape``
     '''
     xp = core.get_array_module(matrix)
     if xp is da:
         chunk_size = matrix.shape[1] // matrix.numblocks[1]
-        def _wrap_matrix(block, shape, x_indices, y_indices):
+        def _wrap_matrix(block, shape, subset_idxs):
             shape = (block.shape[0],) + shape[1:]
+            # construct an indexing expression like [:,zz,yy,xx]
+            # but support arbitrary numbers of dimensions:
+            indexer = (slice(None,None),) + tuple(x for x in subset_idxs)
             cube = np.zeros(shape)
-            cube[:, y_indices, x_indices] = block
+            cube[indexer] = block
             return cube
+        new_axes = tuple(range(2, len(shape)))
         return matrix.T.map_blocks(
             _wrap_matrix,
             shape,
-            x_indices,
-            y_indices,
+            subset_idxs,
             chunks=(chunk_size,) + shape[1:],
-            new_axis=2,
+            new_axis=new_axes,
             dtype=matrix.dtype,
             meta=np.array((), dtype=matrix.dtype)
         )
     cube = xp.zeros(shape)
-    cube[:, y_indices, x_indices] = matrix.T
+    indexer = (slice(None,None),) + tuple(x for x in subset_idxs)
+    cube[indexer] = matrix.T
     return cube
 
-def wrap_vector(image_vec, shape, x_indices, y_indices):
-    '''Wrap a (pix,) vector into a shape `shape` image,
-    where pix is the number of entries in `x_indices`
-    and `y_indices`
+def wrap_vector(image_vec, shape, subset_idxs):
+    '''Wrap a (pix,) vector into a shape `shape` image using the
+    indexes from `subset_idxs`
 
     Parameters
     ----------
-    vector
-    shape
-    x_indices
-    y_indices
+    image_vec : array (pix,)
+    shape : tuple of length dims
+    subset_idxs : array (dims,) + dims * (pix,)
+        pixel indices to map each vector entry to
+        for each of `dims` dimensions
 
     Returns
     -------
@@ -194,7 +202,7 @@ def wrap_vector(image_vec, shape, x_indices, y_indices):
     '''
     xp = core.get_array_module(image_vec)
     matrix = image_vec[:, core.newaxis]
-    cube = wrap_matrix(matrix, (1,) + shape, x_indices, y_indices)
+    cube = wrap_matrix(matrix, (1,) + shape, subset_idxs)
     return cube[0]
 
 def quick_derotate(cube, angles):
