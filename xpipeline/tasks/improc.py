@@ -91,9 +91,6 @@ def unwrap_cube(ndcube, good_pix_mask):
     xp = core.get_array_module(ndcube)
     good_pix_mask = good_pix_mask == 1
     n_good_pix = np.count_nonzero(good_pix_mask)
-    print(f'{n_good_pix=}')
-    all_idxs = np.indices(ndcube.shape[1:])
-    subset_idxs = all_idxs[:,good_pix_mask]
 
     def ndcube_to_rows(cube, good_pix_mask):
         res = cube[:,good_pix_mask]
@@ -102,9 +99,6 @@ def unwrap_cube(ndcube, good_pix_mask):
     if xp is da:
         chunk_size = ndcube.shape[0] // ndcube.numblocks[0]
         axes_to_drop = tuple(range(2, len(ndcube.shape)))
-        # if len(axes_to_drop) == 1:
-        #     axes_to_drop = axes_to_drop[0]
-        # print(axes_to_drop)
         image_vecs = ndcube.map_blocks(
             ndcube_to_rows,
             good_pix_mask,
@@ -115,6 +109,9 @@ def unwrap_cube(ndcube, good_pix_mask):
         image_vecs = image_vecs.T
     else:
         image_vecs = ndcube_to_rows(ndcube, good_pix_mask).T
+
+    all_idxs = np.indices(ndcube.shape[1:])
+    subset_idxs = all_idxs[:,good_pix_mask]
     return image_vecs, subset_idxs
 
 
@@ -379,12 +376,12 @@ def f_test(npix):
 
 def shift2(image, dx, dy, how='bicubic', output_shape=None):
     '''Wraps scikit-image for 2D shifts with bicubic or bilinear interpolation
-    
+
     Direction convention: feature at (0, 0) moves to (dx, dy)
     '''
     if output_shape is not None:
         # compute center-to-center displacement such that
-        # supplying dx == dy == 0.0 will be a no-op (aside 
+        # supplying dx == dy == 0.0 will be a no-op (aside
         # from changing shape)
         orig_ctr_x, orig_ctr_y = (image.shape[1] - 1) / 2, (image.shape[0] - 1) / 2
         new_ctr_x, new_ctr_y = (output_shape[1] - 1) / 2, (output_shape[0] - 1) / 2
@@ -394,4 +391,50 @@ def shift2(image, dx, dy, how='bicubic', output_shape=None):
     order = {'bicubic': 3, 'bilinear': 1}
     tform = skimage.transform.AffineTransform(translation=(-(dx + base_dx), -(dy + base_dy)))
     output = skimage.transform.warp(image, tform, order=order[how], output_shape=output_shape)
+    return output
+
+def combine_paired_cubes(cube_1, cube_2, mask_1, mask_2, fill_value=np.nan):
+    xp = core.get_array_module(cube_1)
+    if cube_1.shape != cube_2.shape:
+        raise ValueError("cube_1 and cube_2 must be the same shape")
+    if mask_1.shape != cube_1.shape[1:] or mask_1.shape != mask_2.shape:
+        raise ValueError("mask_1 and mask_2 must be the same shape as the last dimensions of cube_1")
+    if xp is da:
+        output = da.blockwise(
+            combine_paired_cubes,
+            'ijk',
+            cube_1,
+            'ijk',
+            cube_2,
+            'ijk',
+            mask_1,
+            'jk',
+            mask_2,
+            'jk',
+            fill_value=fill_value,
+            dtype=cube_1.dtype,
+        )
+    else:
+        output = fill_value * xp.ones_like(cube_1)
+        output[:,mask_1] = cube_1[:,mask_1]
+        output[:,mask_2] = cube_2[:,mask_2]
+    return output
+
+def derotate_cube(cube, derotation_angles):
+    xp = core.get_array_module(cube)
+    if cube.shape[0] != derotation_angles.shape[0]:
+        raise ValueError("Number of cube planes and derotation angles must match")
+    if xp is da:
+        return da.blockwise(
+            derotate_cube,
+            'ijk',
+            cube,
+            'ijk',
+            derotation_angles,
+            'i'
+        )
+    output = np.zeros_like(cube)
+    for idx in range(cube.shape[0]):
+        # n.b. skimage rotates CW by default, so we negate
+        output[idx] = skimage.transform.rotate(cube[idx], -derotation_angles[idx])
     return output

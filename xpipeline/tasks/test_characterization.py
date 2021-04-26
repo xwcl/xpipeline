@@ -62,15 +62,16 @@ def test_end_to_end_dask():
     sci_arr = da.asarray(data['cube'])
     rot_arr = da.asarray(data['angles'])
 
-    d_output_image = pipelines.klip_adi(
+
+
+    d_outcube = pipelines.klip(
         sci_arr,
-        rot_arr,
-        good_pix_mask,
-        angle_scale=1,
-        angle_offset=0,
+        estimation_mask=good_pix_mask,
+        combination_mask=good_pix_mask,
         exclude_nearest_n_frames=0,
         k_klip_value=n_modes,
     )
+    d_output_image = pipelines.adi(d_outcube, rot_arr)
     output_image = dask.compute(d_output_image)[0]
     r_px, pa_deg = 18.4, -42.8
     fwhm_naco = data['fwhm']
@@ -99,10 +100,9 @@ def test_end_to_end_dask():
         sci_arr,
         rot_arr,
         good_pix_mask,
+        good_pix_mask,
         specs,
         template_psf,
-        angle_scale=1,
-        angle_offset=0,
         exclude_nearest_n_frames=0,
         k_klip_value=n_modes,
         aperture_diameter_px=data['fwhm'],
@@ -117,10 +117,9 @@ def test_end_to_end_dask():
         sci_arr,
         rot_arr,
         good_pix_mask,
+        good_pix_mask,
         specs,
         template_psf,
-        angle_scale=1,
-        angle_offset=0,
         exclude_nearest_n_frames=0,
         k_klip_value=n_modes,
         aperture_diameter_px=data['fwhm'],

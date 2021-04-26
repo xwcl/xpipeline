@@ -80,6 +80,12 @@ class KLIP(BaseCommand):
             default=0,
             help="Number of frames to exclude from the observations used to compute the target"
         )
+        parser.add_argument(
+            "--combine-by",
+            default="sum",
+            choices=["sum", "average"],
+            help="Operation used to combine final derotated frames into a single output frame"
+        )
         return super(KLIP, KLIP).add_arguments(parser)
 
     def _load_inputs(self):
@@ -102,25 +108,25 @@ class KLIP(BaseCommand):
             region_mask = hdul[0].data
         else:
             region_mask = default_region_mask
-        return sci_arr, rot_arr, region_mask
+        derotation_angles = self.args.angle_scale * rot_arr + self.args.angle_constant
+        return sci_arr, derotation_angles, region_mask
 
     def main(self):
         output_klip_final = utils.join(self.destination, "klip_final.fits")
-        output_exptime_map = utils.join(self.destination, "klip_exptime_map.fits")
+        output_exptime_map = utils.join(self.destination, "exptime_map.fits")
         if self.check_for_outputs([output_klip_final, output_exptime_map]):
             return
 
-        sci_arr, rot_arr, region_mask = self._load_inputs()
+        sci_arr, derotation_angles, region_mask = self._load_inputs()
 
-        out_image = pipelines.klip_adi(
+        outcube = pipelines.klip(
             sci_arr,
-            rot_arr,
             region_mask,
-            self.args.angle_scale,
-            self.args.angle_constant,
+            region_mask,
             self.args.exclude_nearest_n_frames,
             self.args.k_klip
         )
+        out_image = pipelines.adi(outcube, derotation_angles, operation=self.args.combine_by)
         import time
         start = time.perf_counter()
         log.info(f"Computing klip pipeline result...")

@@ -80,10 +80,7 @@ class EvalKLIP(KLIP):
         template_psf = iofits.load_fits_from_path(self.args.template_psf)[0].data
         return sci_arr, rot_arr, region_mask, template_psf
 
-    def main(self):
-        output_result = utils.join(self.destination, "result.json")
-        if self.check_for_outputs([output_result]):
-            return
+    def _load_companions(self):
         specs = []
         for spec_str in self.args.companion_spec:
             try:
@@ -91,17 +88,24 @@ class EvalKLIP(KLIP):
             except ValueError:
                 log.error(f"Couldn't parse {spec_str} into scale, r_px, and pa_deg")
                 sys.exit(1)
+        return specs
+
+    def main(self):
+        output_result = utils.join(self.destination, "result.json")
+        if self.check_for_outputs([output_result]):
+            return
+        specs = self._load_companions()
 
         aperture_diameter_px = self.args.aperture_diameter_px
         apertures_to_exclude = self.args.apertures_to_exclude
         k_klip = self.args.k_klip
         exclude_nearest_n_frames = self.args.exclude_nearest_n_frames
 
-        sci_arr, rot_arr, region_mask, template_psf = self._load_inputs()
+        sci_arr, derotation_angles, region_mask, template_psf = self._load_inputs()
 
         d_recovered_signals = pipelines.evaluate_starlight_subtraction(
             sci_arr,
-            rot_arr,
+            derotation_angles,
             region_mask,
             specs,
             template_psf,

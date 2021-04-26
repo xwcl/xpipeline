@@ -55,12 +55,24 @@ def compute_sky_model(
     return components, mean_sky, stddev_sky, min_err, max_err, avg_err
 
 
-def klip_adi(
+def adi(
+    cube: da.core.Array,
+    derotation_angles: da.core.Array,
+    operation='sum'
+):
+    derotated_cube = improc.derotate_cube(cube, derotation_angles)
+    if operation == 'average':
+        out_image = da.nanmean(derotated_cube, axis=0)
+    elif operation == 'sum':
+        out_image = da.nansum(derotated_cube, axis=0)
+    else:
+        raise ValueError("Supported operations: average, sum")
+    return out_image
+
+def klip(
     sci_arr: da.core.Array,
-    rot_arr: da.core.Array,
-    region_mask: np.ndarray,
-    angle_scale: float,
-    angle_offset: float,
+    estimation_mask: np.ndarray,
+    combination_mask: np.ndarray,
     exclude_nearest_n_frames: int,
     k_klip_value: int
 ):
@@ -71,35 +83,37 @@ def klip_adi(
     sorted_inputs_collection : LazyPipelineCollection
         inputs already sorted by date such that
         adjacent frames are adjacent in time (single epoch)
-    region_mask : ndarray
+    estimation_mask : ndarray
         mask shaped like one input image that is True where
-        pixels should be kept and False elsewhere
+        pixels should be kept for starlight estimation
+        and False elsewhere
+    combination_mask : ndarray
+        mask shaped like one input image that is True where
+        pixels should be kept for image combination
+        and False elsewhere
     '''
     log.debug('Assembling pipeline...')
-
-    derotation_angles = angle_scale * rot_arr + angle_offset
-    mtx_x, subset_idxs = improc.unwrap_cube(sci_arr, region_mask)
+    mtx_x, subset_idxs = improc.unwrap_cube(sci_arr, estimation_mask)
     log.debug(f'{mtx_x.shape=}')
 
-    subtracted_mtx = starlight_subtraction.klip_cube(
+    subtracted_mtx = starlight_subtraction.klip_mtx(
         mtx_x,
         k_klip_value,
         exclude_nearest_n_frames
     )
     outcube = improc.wrap_matrix(subtracted_mtx, sci_arr.shape, subset_idxs)
+    # TODO apply combination_mask
     log.debug(f'{outcube.shape=}')
-    out_image = dask.delayed(improc.quick_derotate)(outcube, derotation_angles)
     log.debug('done assembling')
-    return out_image
+    return outcube
 
 def evaluate_starlight_subtraction(
     sci_arr: da.core.Array,
-    rot_arr: da.core.Array,
-    region_mask: np.ndarray,
+    derotation_angles: da.core.Array,
+    estimation_mask: np.ndarray,
+    combination_mask: np.ndarray,
     specs: List[characterization.CompanionSpec],
     template_psf: np.ndarray,
-    angle_scale: float,
-    angle_offset: float,
     exclude_nearest_n_frames: int,
     k_klip_value: int,
     aperture_diameter_px: float,
@@ -115,19 +129,22 @@ def evaluate_starlight_subtraction(
     '''
     injected_sci_arr = characterization.inject_signals(
         sci_arr,
-        rot_arr,
+        derotation_angles,
         specs,
         template_psf
     )
-    out_image = klip_adi(
+    outcube = klip(
         injected_sci_arr,
-        rot_arr,
-        region_mask,
-        angle_scale,
-        angle_offset,
+        estimation_mask,
+        combination_mask,
         exclude_nearest_n_frames,
         k_klip_value,
     )
+    out_image = adi(
+        outcube,
+        derotation_angles
+    )
+
     recovered_signals = dask.delayed(characterization.recover_signals)(
         out_image,
         specs,

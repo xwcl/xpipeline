@@ -2,7 +2,7 @@ from dataclasses import dataclass
 import numpy as np
 import dask.array as da
 from .. import core, utils
-from . import learning
+from . import learning, improc
 
 
 import logging
@@ -127,7 +127,7 @@ def klip_chunk(image_vecs_meansub, mtx_u0, diag_s0, mtx_v0, k_klip, exclude_near
     log.debug(f'klipped! {mem_mb} MB RAM in use')
     return output
 
-def klip_cube(image_vecs, k_klip: int, exclude_nearest_n_frames: int):
+def klip_mtx(image_vecs, k_klip: int, exclude_nearest_n_frames: int):
     xp = core.get_array_module(image_vecs)
 
     output = xp.zeros_like(image_vecs)
@@ -135,7 +135,7 @@ def klip_cube(image_vecs, k_klip: int, exclude_nearest_n_frames: int):
     idxs = xp.arange(total_n_frames)
     # extra modes:
     # to remove 1 image vector by downdating, the initial decomposition
-    # should retain k_klip + 1 singular value triplets. 
+    # should retain k_klip + 1 singular value triplets.
     initial_k = k_klip + exclude_nearest_n_frames + 1
     log.debug(f'{image_vecs.shape=}, {k_klip=}, {exclude_nearest_n_frames=}, {initial_k=}')
     if image_vecs.shape[0] < initial_k or image_vecs.shape[1] < initial_k:
@@ -156,3 +156,23 @@ def klip_cube(image_vecs, k_klip: int, exclude_nearest_n_frames: int):
     else:
         output = klip_chunk(image_vecs_meansub, mtx_u0, diag_s0, mtx_v0, k_klip, exclude_nearest_n_frames)
     return output
+
+def make_good_pix_mask(shape, inner_radius=None, outer_radius=None, center=None, existing_mask=None):
+    if existing_mask is not None:
+        if existing_mask.shape != shape:
+            raise ValueError(f"Cannot mix {shape=} and {existing_mask.shape=}")
+        mask = existing_mask.copy()
+    else:
+        mask = np.ones(shape, dtype=bool)
+
+    if center is None:
+        center = (shape[1] - 1) / 2, (shape[0] - 1) / 2
+
+    if any(map(lambda x: x is None, (outer_radius, inner_radius))):
+        rho, phi = improc.polar_coords(center, shape)
+        if inner_radius is not None:
+            mask &= rho >= inner_radius
+        if outer_radius is not None:
+            mask &= rho <= outer_radius
+
+    return mask
