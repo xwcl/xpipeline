@@ -44,12 +44,13 @@ def test_inject_signals():
     assert (derot_result[128//2,128-r_px] - n_frames) < 0.1
 
     # With Dask
-    d_cube = core.dask_array.from_array(cube)
-    d_angles = core.dask_array.from_array(angles)
+    d_cube = da.from_array(cube).rechunk((n_frames, -1, -1))
+    d_angles = da.from_array(angles).rechunk((25,))  # provoke mismatch in dimensions
     outcube = inject_signals(d_cube, d_angles, specs, template)
     outcube = outcube.compute()
+    angles = d_angles.compute()
     derot_result = improc.quick_derotate(outcube, angles)
-    assert (derot_result[128//2,128-r_px] - n_frames) < 0.1
+    assert (derot_result[128//2,128-r_px] - d_cube.shape[0]) < 0.1
 
 
 

@@ -33,11 +33,17 @@ class RecoveredSignal(CompanionSpec):
 def inject_signals(cube: np.ndarray, angles: np.ndarray, specs: List[CompanionSpec], template: np.ndarray):
     xp = core.get_array_module(cube)
     if xp is da:
-        return cube.map_blocks(
+        return da.blockwise(
             inject_signals,
+            'ijk',
+            cube,
+            'ijk',
             angles,
+            'i',
             specs,
-            template
+            None,
+            template,
+            None
         )
     frame_shape = cube.shape[1:]
     outcube = cube.copy()
