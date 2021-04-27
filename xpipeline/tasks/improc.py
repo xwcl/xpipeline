@@ -23,6 +23,15 @@ def gaussian_smooth(data, kernel_stddev_px):
         boundary='wrap'
     )
 
+def center(arr_or_shape):
+    '''Center coordinates for a 2D image (or shape) using the
+    convention that indices are the coordinates of the centers
+    of pixels, which run from (idx - 0.5) to (idx + 0.5)
+    '''
+    shape = getattr(arr_or_shape, 'shape', arr_or_shape)
+    if len(shape) != 2:
+        raise ValueError("Only do this on 2D images")
+    return (shape[1] - 1) / 2, (shape[0] - 1) / 2
 
 def rough_peak_in_box(data, initial_guess, box_size):
     '''
@@ -139,7 +148,7 @@ def unwrap_image(image, good_pix_mask):
     cube, subset_idxs = unwrap_cube(image[indexer], good_pix_mask)
     return cube[:, 0], subset_idxs
 
-def wrap_matrix(matrix, shape, subset_idxs):
+def wrap_matrix(matrix, shape, subset_idxs, fill_value=np.nan):
     '''Wrap a (N, pix) matrix into a shape `shape`
     data cube using the indexes from `subset_idxs`
 
@@ -150,6 +159,9 @@ def wrap_matrix(matrix, shape, subset_idxs):
     subset_idxs : array (dims,) + dims * (pix,)
         pixel indices to map each vector entry to
         for each of `dims` dimensions
+    fill_value : float
+        default value for pixels without corresponding
+        `subset_idxs` entries
 
     Returns
     -------
@@ -163,7 +175,7 @@ def wrap_matrix(matrix, shape, subset_idxs):
             # construct an indexing expression like [:,zz,yy,xx]
             # but support arbitrary numbers of dimensions:
             indexer = (slice(None,None),) + tuple(x for x in subset_idxs)
-            cube = np.zeros(shape)
+            cube = fill_value * np.ones(shape)
             cube[indexer] = block
             return cube
         new_axes = tuple(range(2, len(shape)))
@@ -176,12 +188,12 @@ def wrap_matrix(matrix, shape, subset_idxs):
             dtype=matrix.dtype,
             meta=np.array((), dtype=matrix.dtype)
         )
-    cube = xp.zeros(shape)
+    cube = fill_value * xp.ones(shape)
     indexer = (slice(None,None),) + tuple(x for x in subset_idxs)
     cube[indexer] = matrix.T
     return cube
 
-def wrap_vector(image_vec, shape, subset_idxs):
+def wrap_vector(image_vec, shape, subset_idxs, fill_value=np.nan):
     '''Wrap a (pix,) vector into a shape `shape` image using the
     indexes from `subset_idxs`
 
@@ -192,6 +204,9 @@ def wrap_vector(image_vec, shape, subset_idxs):
     subset_idxs : array (dims,) + dims * (pix,)
         pixel indices to map each vector entry to
         for each of `dims` dimensions
+    fill_value : float
+        default value for pixels without corresponding
+        `subset_idxs` entries
 
     Returns
     -------
@@ -199,7 +214,7 @@ def wrap_vector(image_vec, shape, subset_idxs):
     '''
     xp = core.get_array_module(image_vec)
     matrix = image_vec[:, core.newaxis]
-    cube = wrap_matrix(matrix, (1,) + shape, subset_idxs)
+    cube = wrap_matrix(matrix, (1,) + shape, subset_idxs, fill_value=fill_value)
     return cube[0]
 
 def quick_derotate(cube, angles):

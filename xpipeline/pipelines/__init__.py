@@ -76,22 +76,6 @@ def klip(
     exclude_nearest_n_frames: int,
     k_klip_value: int
 ):
-    '''Perform KLIP starlight subtraction on 2D ADI data
-
-    Parameters
-    ----------
-    sorted_inputs_collection : LazyPipelineCollection
-        inputs already sorted by date such that
-        adjacent frames are adjacent in time (single epoch)
-    estimation_mask : ndarray
-        mask shaped like one input image that is True where
-        pixels should be kept for starlight estimation
-        and False elsewhere
-    combination_mask : ndarray
-        mask shaped like one input image that is True where
-        pixels should be kept for image combination
-        and False elsewhere
-    '''
     log.debug('Assembling pipeline...')
     mtx_x, subset_idxs = improc.unwrap_cube(sci_arr, estimation_mask)
     log.debug(f'{mtx_x.shape=}')
@@ -119,14 +103,6 @@ def evaluate_starlight_subtraction(
     aperture_diameter_px: float,
     apertures_to_exclude: int
 ):
-    '''Take an input LazyPipelineCollection and first inject signals at
-    one or more locations, then apply `klip_adi`, then
-    attempt recovery of the injected signal(s).
-    Produces (delayed) sequence of `RecoveredSignal` instances
-    giving the SNR at each `k_klip_values` value.
-
-    See `subtract_starlight` for other input parameters.
-    '''
     injected_sci_arr = characterization.inject_signals(
         sci_arr,
         derotation_angles,

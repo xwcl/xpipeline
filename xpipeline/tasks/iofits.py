@@ -2,7 +2,7 @@
 
 Astropy FITS support creates objects with memory-mapped arrays and locks,
 neither of which can be shipped over the network for distributed execution.
-This module reads `astropy.io.fits.HDUList` objects into `DaskHDUList` 
+This module reads `astropy.io.fits.HDUList` objects into `DaskHDUList`
 objects, converting `numpy.ndarray` data arrays to `dask.array` data arrays
 (but reusing `astropy.io.fits.header.Header`)
 '''
@@ -14,11 +14,72 @@ from .. import utils
 from distributed.protocol import register_generic
 import numpy as np
 from astropy.io import fits
+from collections import defaultdict
 import dask.array as da
 import dask
 import logging
 import warnings
 log = logging.getLogger(__name__)
+
+_IGNORED_METADATA_KEYWORDS = set(('BITPIX', 'COMMENT', 'HISTORY', 'SIMPLE', 'XTENSION', 'EXTEND', 'GCOUNT', 'PCOUNT', 'EXTNAME'))
+def _is_ignored_metadata_keyword(kw):
+    return kw in _IGNORED_METADATA_KEYWORDS or kw.startswith('NAXIS')
+
+def _construct_dtype(varying_kw, columns):
+    dtype = []
+    for kw in varying_kw:
+        example = columns[kw][0]
+        kind = type(example)
+        if kind is str:
+            max_length = max([len(entry) for entry in columns[kw]])
+            dtype.append((kw, kind, max_length))
+        else:
+            dtype.append((kw, kind))
+    return dtype
+
+def construct_headers_table(all_headers):
+    '''Given an iterable of astropy.io.fits.Header objects, identify
+    repeated and varying keywords, extracting the former to a
+    "static header" and the latter to a structured array
+
+    Returns
+    -------
+    static_header : astropy.io.fits.Header
+    tbl_data : np.recarray
+    '''
+    columns = defaultdict(list)
+
+    for header in all_headers:
+        for kw in header.keys():
+            if not _is_ignored_metadata_keyword(kw):
+                columns[kw].append(header[kw])
+
+    non_varying_kw = set()
+    varying_kw = set()
+    for kw, val in columns.items():
+        n_different = np.unique(val).size
+        if n_different == 1 and not _is_ignored_metadata_keyword(kw):
+            non_varying_kw.add(kw)
+        else:
+            if len(val) != len(all_headers):
+                log.warn(f'mismatched lengths {kw=}: {len(val)=}, {len(all_headers)}')
+            varying_kw.add(kw)
+
+    # for keywords that vary:
+    tbl_data = np.zeros(len(all_headers), _construct_dtype(varying_kw, columns))
+    for idx, header in enumerate(all_headers):
+        for kw in varying_kw:
+            if kw in header:
+                tbl_data[idx][kw] = header[kw]
+
+    # for keywords that are static:
+    static_header = fits.Header()
+    for card in all_headers[0].cards:
+        if card.keyword in non_varying_kw:
+            static_header.append(card)
+
+    return static_header, tbl_data
+
 
 
 class DaskHDU:
@@ -26,20 +87,32 @@ class DaskHDU:
     convenient for Dask to serialize and deserialize
     '''
 
-    def __init__(self, data, header=None):
+    def __init__(self, data, header=None, kind='image'):
         if header is None:
             header = {}
         self.data = data
         self.header = fits.Header(header)
+        self.kind = kind
+
+    def __repr__(self):
+        shape_dtype = f'{self.data.shape} {self.data.dtype} ' if self.data is not None else ''
+        return f'<{self.__class__.__name__}: {shape_dtype}{self.kind=}>'
 
     @classmethod
     def from_fits(cls, hdu, distributed=False):
+        data = np.asarray(hdu.data).byteswap().newbyteorder()
         if distributed:
-            data = da.from_array(hdu.data)
-        else:
-            data = hdu.data.copy() if hdu.data is not None else None
+            data = da.from_array(data)
         header = hdu.header
-        this_hdu = cls(data, header)
+        if isinstance(hdu, fits.ImageHDU):
+            kind = 'image'
+        elif isinstance(hdu, fits.BinTableHDU):
+            kind = 'bintable'
+        elif isinstance(hdu, fits.PrimaryHDU):
+            kind = 'primary'
+        else:
+            raise ValueError(f"Cannot handle instance of {type(hdu)}")
+        this_hdu = cls(data, header, kind=kind)
         return this_hdu
 
     def copy(self):
@@ -53,11 +126,15 @@ class DaskHDU:
             new_header.add_history(history)
         return self.__class__(new_data, new_header)
 
-    def to_image_hdu(self):
-        return fits.ImageHDU(self.data, self.header)
-
-    def to_primary_hdu(self):
-        return fits.PrimaryHDU(self.data, self.header)
+    def to_fits(self):
+        if self.kind == 'image':
+            return fits.ImageHDU(self.data, self.header)
+        elif self.kind == 'bintable':
+            return fits.BinTableHDU(self.data, self.header)
+        elif self.kind == 'primary':
+            return fits.PrimaryHDU(self.data, self.header)
+        else:
+            raise ValueError(f"Unknown kind: {self.kind}")
 
 
 register_generic(DaskHDU)
@@ -95,9 +172,9 @@ class DaskHDUList:
         return this_hdul
 
     def to_fits(self):
-        hdul = fits.HDUList([self.hdus[0].to_primary_hdu()])
-        for imghdu in self.hdus[1:]:
-            hdul.append(imghdu.to_image_hdu())
+        hdul = fits.HDUList([])
+        for imghdu in self.hdus:
+            hdul.append(imghdu.to_fits())
         return hdul
 
     def copy(self):
@@ -133,6 +210,7 @@ class DaskHDUList:
         raise KeyError(f"No HDU {key}")
 
 
+
 register_generic(DaskHDUList)
 
 def load_fits(file_handle):
@@ -145,7 +223,7 @@ def load_fits(file_handle):
     #         hdu.header.add_history('xpipeline loaded and validated format')
     log.debug(f'Converting to DaskHDUList')
     dask_hdul = DaskHDUList.from_fits(hdul)
-    log.debug(f'Loaded {file_handle}')
+    log.debug(f'Loaded {file_handle}: {dask_hdul.hdus}')
     return dask_hdul
 
 
@@ -168,7 +246,7 @@ def write_fits(hdul, destination_path, overwrite=False):
     exists = fs.exists(destination_path)
     if not overwrite and exists:
         raise RuntimeError(f"Found existing file at {destination_path}")
-    
+
     with fs.open(destination_path, mode='wb') as destfh:
         log.info(f'Writing FITS HDUList to {destination_path}')
         real_hdul = hdul.to_fits()

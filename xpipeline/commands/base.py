@@ -84,7 +84,7 @@ class BaseCommand(base.BaseCommand):
 
         numpy.random.seed(cli_args.random_state)
         log.debug(f'Set random seed to {cli_args.random_state}')
-        
+
         if not cli_args.disable_dask:
             temp_dir = _determine_temporary_directory()
             if temp_dir is not None:
@@ -103,16 +103,6 @@ class BaseCommand(base.BaseCommand):
                 )
             log.info(f'Dask cluster: {c.scheduler.address} ({c.dashboard_link})')
 
-        extensions = cli_args.extension if len(cli_args.extension) else DEFAULT_EXTENSIONS
-        self.all_files = _files_from_source(cli_args.source, extensions)[:: cli_args.sample]
-        
-        self.dest_fs = utils.get_fs(cli_args.destination)
-        assert isinstance(self.dest_fs, AbstractFileSystem)
-        self.dest_fs.makedirs(cli_args.destination, exist_ok=True)
-        self.destination = cli_args.destination
-        
-        self.inputs_coll = LazyPipelineCollection(self.all_files)
-
     def check_for_outputs(self, output_files):
         existing_files = [fn for fn in output_files if self.dest_fs.exists(fn)]
         if len(existing_files):
@@ -129,21 +119,6 @@ class BaseCommand(base.BaseCommand):
             "-v", "--verbose", help="Show all debugging output", action="store_true"
         )
         parser.add_argument(
-            "-s", "--sample", help="Sample every Nth file in source", type=int, default=1
-        )
-        parser.add_argument(
-            "-x", "--extension",
-            help=utils.unwrap(
-                '''
-                Override file extensions to include in source, can be
-                specified multiple times. Specify '' to match all.
-                (default: ['fit', 'fits'])
-                '''
-            ),
-            default=[],
-            action='append'
-        )
-        parser.add_argument(
             "--random-state",
             type=int,
             default=0,
@@ -156,9 +131,28 @@ class BaseCommand(base.BaseCommand):
             "-D", "--disable-dask", help="Skip initializing dask, overrides ``--dask-scheduler``",
             action="store_true"
         )
+        return super(BaseCommand, BaseCommand).add_arguments(parser)
+
+class MultiInputCommand(BaseCommand):
+    def __init__(self, cli_args: argparse.Namespace):
+        extensions = cli_args.extension if len(cli_args.extension) else DEFAULT_EXTENSIONS
+        self.all_files = _files_from_source(cli_args.source, extensions)[:: cli_args.sample]
+
+        self.dest_fs = utils.get_fs(cli_args.destination)
+        assert isinstance(self.dest_fs, AbstractFileSystem)
+        self.dest_fs.makedirs(cli_args.destination, exist_ok=True)
+        self.destination = cli_args.destination
+
+        self.inputs_coll = LazyPipelineCollection(self.all_files)
+        super().__init__(cli_args)
+    @staticmethod
+    def add_arguments(parser: argparse.ArgumentParser):
+        parser.add_argument(
+            "-s", "--sample", help="Sample every Nth file in source", type=int, default=1
+        )
         parser.add_argument("source", nargs="+", help=unwrap('''
             One or more source files or directories to process.
-            directories are globbed using the value of the 
+            directories are globbed using the value of the
             ``--extension`` option to determine valid file extensions.
             Note that some commands may operate differently when
             a single input file is provided rather than a collection,
@@ -173,4 +167,16 @@ class BaseCommand(base.BaseCommand):
             Path may be given as local filesystem paths, or as any
             protocol supported by fsspec (including ``irods://``)
         '''))
-        return super(BaseCommand, BaseCommand).add_arguments(parser)
+        parser.add_argument(
+            "-x", "--extension",
+            help=utils.unwrap(
+                '''
+                Override file extensions to include in source, can be
+                specified multiple times. Specify '' to match all.
+                (default: ['fit', 'fits'])
+                '''
+            ),
+            default=[],
+            action='append'
+        )
+        return super(MultiInputCommand, MultiInputCommand).add_arguments(parser)

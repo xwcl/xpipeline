@@ -64,10 +64,11 @@ class LazyPipelineCollection:
     def __init__(self, inputs):
         self.collection = inputs
 
-    def _wrap_callable(self, callable):
-        return dask.delayed(callable)
+    def _wrap_callable(self, callable, _delayed_kwargs):
+        kwargs = _delayed_kwargs if _delayed_kwargs is not None else {}
+        return dask.delayed(callable, **kwargs)
 
-    def zip_map(self, callable, *args, **kwargs):
+    def zip_map(self, callable, *args, _delayed_kwargs=None, **kwargs):
         """Apply function to inputs with varying argument values
         selected from iterable arguments or keyword arguments
 
@@ -102,10 +103,10 @@ class LazyPipelineCollection:
                     new_kwargs[kw] = arg[idx]
                 else:
                     new_kwargs[kw] = arg
-            out.append(self._wrap_callable(callable)(x, *new_args, **new_kwargs))
+            out.append(self._wrap_callable(callable, _delayed_kwargs)(x, *new_args, **new_kwargs))
         return self.__class__(out)
 
-    def map(self, callable, *args, **kwargs):
+    def map(self, callable, *args, _delayed_kwargs=None, **kwargs):
         """Apply function individually to all inputs
 
         Parameters
@@ -121,9 +122,9 @@ class LazyPipelineCollection:
         coll : LazyPipelineCollection
             New LazyPipelineCollection with results for chaining
         """
-        return self.__class__([self._wrap_callable(callable)(x, *args, **kwargs) for x in self.collection])
+        return self.__class__([self._wrap_callable(callable, _delayed_kwargs)(x, *args, **kwargs) for x in self.collection])
 
-    def collect(self, callable, *args, **kwargs):
+    def collect(self, callable, *args, _delayed_kwargs=None, **kwargs):
         """
         Apply function to entire collection, returning Delayed
 
@@ -135,7 +136,7 @@ class LazyPipelineCollection:
         *args, **kwargs
             Arguments passed through to `callable`
         """
-        return self._wrap_callable(callable)(self.collection, *args, **kwargs)
+        return self._wrap_callable(callable, _delayed_kwargs)(self.collection, *args, **kwargs)
 
     def compute(self):
         '''Pass `self.inputs` to `dask.compute` and return the result
@@ -149,7 +150,7 @@ class LazyPipelineCollection:
         return self.collection
 
 class EagerPipelineCollection(LazyPipelineCollection):
-    def _wrap_callable(self, callable):
+    def _wrap_callable(self, callable, **kwargs):
         return callable
     def compute(self):
         raise NotImplementedError("EagerPipelineCollection computes as it goes; access instance.collection for contents")

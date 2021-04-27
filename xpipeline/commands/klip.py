@@ -88,6 +88,9 @@ class KLIP(BaseCommand):
         )
         return super(KLIP, KLIP).add_arguments(parser)
 
+    def _calc_derotation_angles(self, rot_arr):
+        return self.args.angle_scale * rot_arr + self.args.angle_constant
+
     def _load_inputs(self):
         if len(self.all_files) == 1:
             extname = self.args.extname
@@ -108,7 +111,7 @@ class KLIP(BaseCommand):
             region_mask = hdul[0].data
         else:
             region_mask = default_region_mask
-        derotation_angles = self.args.angle_scale * rot_arr + self.args.angle_constant
+        derotation_angles = self._calc_derotation_angles(rot_arr)
         return sci_arr, derotation_angles, region_mask
 
     def main(self):

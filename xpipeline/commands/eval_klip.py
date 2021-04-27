@@ -69,7 +69,7 @@ class EvalKLIP(KLIP):
                 Number of apertures on *each side* of the specified target
                 location to exclude when calculating the noise (in other
                 words, a value of 1 excludes two apertures total,
-                one on each side
+                one on each side)
             """),
             default=2
         )

@@ -13,7 +13,7 @@ CLIO2_PIXEL_SCALE = 15.846e-3 * (u.arcsec / u.pixel)
 # HAWAII-H1RG (http://www.teledyne-si.com/products/Documents/H1RG%20Brochure%20-%20September%202017.pdf)
 CLIO2_PIXEL_PITCH = 18 * u.um
 # From Otten+ 2017
-VAPP_PSF_ROTATION_DEG = -26
+VAPP_PSF_ROTATION_DEG = 26
 VAPP_PSF_OFFSET_LAMBDA_OVER_D = 35 / 2
 VAPP_IWA_LAMD, VAPP_OWA_LAMD = 2, 7
 VAPP_LEAKAGE_RATIO = 0.00636
