@@ -8,7 +8,7 @@ import numpy
 from dask.distributed import Client
 
 from exao_dap_client.data_store import get_fs
-from .commands import compute_sky_model, copy_test, klip, eval_klip, local_klip, diagnostic
+from .commands import compute_sky_model, copy_test, klip, eval_klip, local_klip, diagnostic, collect_dataset
 
 from . import utils
 
@@ -17,6 +17,7 @@ log = logging.getLogger(__name__)
 COMMANDS = {
     compute_sky_model.ComputeSkyModel,
     copy_test.CopyTest,
+    collect_dataset.CollectDataset,
     klip.KLIP,
     eval_klip.EvalKLIP,
     local_klip.LocalKLIP,
