@@ -17,7 +17,7 @@ def make_dark_hole_masks(shape, owa_px, offset_px, psf_rotation_deg):
     psf_rotation_deg : float
         Amount by which the flat edges of the masks (and the offset
         from center) are rotated E of N (CCW when 0,0 at lower left)
-    
+
     Returns
     -------
     left_mask : np.ndarray
@@ -65,7 +65,7 @@ def mask_along_angle(shape, deg_e_of_n):
     deg_e_of_n : float
         Amount by which the dividing line is rotated E of N
         (CCW when 0,0 at lower left)
-    
+
     Returns
     -------
     left_half : np.ndarray
@@ -84,3 +84,37 @@ def mask_along_angle(shape, deg_e_of_n):
     )
     right_half = ~left_half
     return left_half, right_half
+
+def _count_nans(arr):
+    return np.count_nonzero(np.isnan(arr))
+
+def determine_frames_crop_amount(frame_a, frame_b):
+    the_slice = slice(0,frame_a.shape[1])
+    crop_px = 0
+    while (
+        _count_nans(frame_a[the_slice,the_slice]) != 0 or
+        _count_nans(frame_b[the_slice,the_slice]) != 0
+    ):
+        crop_px += 1
+        the_slice = slice(crop_px,-crop_px)
+    return crop_px
+
+def determine_cubes_crop_amount(left_cube, right_cube):
+    # note *not* nansum, since we want nans to propagate
+    left_combined = np.sum(left_cube, axis=0)
+    right_combined = np.sum(right_cube, axis=0)
+    return determine_frames_crop_amount(left_combined, right_combined)
+
+def crop_paired_frames(left_frame, right_frame):
+    crop_px = determine_frames_crop_amount(left_frame, right_frame)
+    if crop_px > 0:
+        return left_frame[crop_px:-crop_px,crop_px:-crop_px], right_frame[crop_px:-crop_px,crop_px:-crop_px]
+    return left_frame, right_frame
+
+def crop_paired_cubes(left_cube, right_cube):
+    crop_px = determine_cubes_crop_amount(left_cube, right_cube)
+    if crop_px > 0:
+        cropped_left_cube = left_cube[:,crop_px:-crop_px,crop_px:-crop_px]
+        cropped_right_cube = right_cube[:,crop_px:-crop_px,crop_px:-crop_px]
+        return cropped_left_cube, cropped_right_cube
+    return left_cube, right_cube
