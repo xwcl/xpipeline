@@ -37,6 +37,7 @@ class KLIPInput:
 class KLIPParams:
     k_klip_value: int
     exclude_nearest_n_frames: int
+    missing_data_value: float = np.nan
 
 distributed.protocol.register_generic(KLIPInput)
 distributed.protocol.register_generic(KLIPParams)
@@ -102,13 +103,14 @@ def klip(
             cube = improc.wrap_matrix(
                 submatrix,
                 input_data.sci_arr.shape,
-                subset_idxs
+                subset_idxs,
+                fill_value=klip_params.missing_data_value,
             )
             log.debug(f'after slicing submatrix and rewrapping with indices from estimation mask: {cube=}')
             # TODO is there a better way?
             unwrapped, subset_idxs = improc.unwrap_cube(cube, input_data.combination_mask)
             log.debug(f'{unwrapped=} {subset_idxs.shape=}')
-            cube = improc.wrap_matrix(unwrapped, cube.shape, subset_idxs)
+            cube = improc.wrap_matrix(unwrapped, cube.shape, subset_idxs, fill_value=klip_params.missing_data_value)
             log.debug(f'after rewrapping with combination mask indices: {cube=}')
         else:
             cube = None

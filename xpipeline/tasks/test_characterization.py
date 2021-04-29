@@ -57,13 +57,11 @@ def test_inject_signals():
 def test_end_to_end_dask():
     res_handle = resources.open_binary('xpipeline.ref', 'naco_betapic_preproc_absil2013_gonzalez2017.npz')
     data = np.load(res_handle)
-    n_modes = 9
+    n_modes = 50
     threshold = 2200  # fake, just to test masking
     good_pix_mask = np.average(data['cube'], axis=0) < threshold
     sci_arr = da.asarray(data['cube'])
     rot_arr = da.asarray(data['angles'])
-
-
 
     d_outcube = pipelines.klip_one(
         pipelines.KLIPInput(sci_arr, good_pix_mask, good_pix_mask),
@@ -72,7 +70,7 @@ def test_end_to_end_dask():
     d_output_image = pipelines.adi(d_outcube, rot_arr)
     output_image = dask.compute(d_output_image)[0]
     r_px, pa_deg = 18.4, -42.8
-    fwhm_naco = data['fwhm']
+    fwhm_naco = 4 # data['fwhm']
 
     _, results = reduce_apertures(
         output_image,

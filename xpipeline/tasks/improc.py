@@ -74,6 +74,17 @@ def rough_peak_in_box(data, initial_guess, box_size):
     else:
         return initial_guess, False
 
+
+def _dask_ndcube_to_rows(ndcube_list, good_pix_mask):
+    parts = []
+    if isinstance(ndcube_list[0], list):
+        for ndcube_list_entry in ndcube_list:
+            parts.append(_dask_ndcube_to_rows(ndcube_list_entry, good_pix_mask))
+    else:
+        for ndcube in ndcube_list:
+            parts.append(ndcube[:, good_pix_mask])
+    return np.concatenate(parts)
+
 def unwrap_cube(ndcube, good_pix_mask):
     '''Unwrap a shape (planes, *idxs) `ndcube` and transpose into
     a (pix, planes) matrix, where `pix` is the number of *True*
@@ -102,18 +113,29 @@ def unwrap_cube(ndcube, good_pix_mask):
     n_good_pix = np.count_nonzero(good_pix_mask)
 
     def ndcube_to_rows(cube, good_pix_mask):
-        res = cube[:,good_pix_mask]
+        res = cube[:, good_pix_mask]
         return res
 
     if xp is da:
-        chunk_size = ndcube.shape[0] // ndcube.numblocks[0]
-        axes_to_drop = tuple(range(2, len(ndcube.shape)))
-        image_vecs = ndcube.map_blocks(
-            ndcube_to_rows,
+        # chunk_size = ndcube.shape[0] // ndcube.numblocks[0]
+        # axes_to_drop = tuple(range(2, len(ndcube.shape)))
+        # image_vecs = ndcube.map_blocks(
+        #     ndcube_to_rows,
+        #     good_pix_mask,
+        #     dtype=ndcube.dtype,
+        #     chunks=(chunk_size, n_good_pix,),
+        #     drop_axis=axes_to_drop
+        # )
+        extra_axes = tuple(range(2, 2 + len(ndcube.shape[1:])))
+        image_vecs = da.blockwise(
+            _dask_ndcube_to_rows,
+            (0, 1),
+            ndcube,
+            (0,) + extra_axes,
             good_pix_mask,
-            dtype=ndcube.dtype,
-            chunks=(chunk_size, n_good_pix,),
-            drop_axis=axes_to_drop
+            None,
+            new_axes={1: n_good_pix},
+            dtype=ndcube.dtype
         )
         image_vecs = image_vecs.T
     else:
