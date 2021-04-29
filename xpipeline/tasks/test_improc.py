@@ -35,7 +35,11 @@ def test_wrap_2d(xp):
     image = xp.arange(9).reshape(3, 3)
     mask = np.ones(image.shape, dtype=bool)
     vec, subset_idxs = unwrap_image(image, mask)
-    assert np.all(image == wrap_vector(vec, image.shape, subset_idxs))
+    wrap_result = wrap_vector(vec, image.shape, subset_idxs)
+    if xp is da:
+        image = image.compute()
+        wrap_result = wrap_result.compute()
+    assert np.all(image == wrap_result)
 
 
 @pytest.mark.parametrize('xp', [np, da])
@@ -43,26 +47,37 @@ def test_wrap_3d(xp):
     imcube = xp.arange(27).reshape(3, 3, 3)
     mask = np.ones(imcube.shape, dtype=bool)
     vec, subset_idxs = unwrap_image(imcube, mask)
-    assert np.all(imcube == wrap_vector(vec, imcube.shape, subset_idxs))
+    wrap_result = wrap_vector(vec, imcube.shape, subset_idxs)
+    if xp is da:
+        imcube = imcube.compute()
+        wrap_result = wrap_result.compute()
+    assert np.all(imcube == wrap_result)
 
+    imcube = xp.arange(27).reshape(3, 3, 3)
     imcube = xp.repeat(imcube[core.newaxis,:,:,:], 3, axis=0)
     mtx, subset_idxs = unwrap_cube(imcube, mask)
-    assert np.all(imcube == wrap_matrix(mtx, imcube.shape, subset_idxs))
+    wrap_result = wrap_matrix(mtx, imcube.shape, subset_idxs)
+    if xp is da:
+        imcube = imcube.compute()
+        wrap_result = wrap_result.compute()
+    assert np.all(imcube == wrap_result)
 
 
 @pytest.mark.parametrize('xp', [np, da])
 def test_unwrap_2d(xp):
-    image = np.zeros((3, 3))
+    image = np.arange(9, dtype=float).reshape((3, 3))
     mask = np.ones((3, 3), dtype=bool)
-    image[1, 1] = 1
+    image[1, 1] = np.infty  # make a bogus value to change the max
     if xp is da:
         image = da.from_array(image)
-    mask[1, 1] = False
+    mask[1, 1] = False  # mask it out so it doesn't change the max
     mtx, subset_idxs = unwrap_image(image, mask)
+    if xp is da:
+        mtx = mtx.compute()
+    assert np.max(mtx) == 8
     assert mtx.shape[0] == 8
     assert subset_idxs[1].shape[0] == 8, "Not the right number of X indices"
     assert subset_idxs[0].shape[0] == 8, "Not the right number of Y indices"
-    assert np.max(mtx) == 0
 
 
 @pytest.mark.parametrize('xp', [np, da])
