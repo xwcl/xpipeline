@@ -135,6 +135,7 @@ class BaseCommand(base.BaseCommand):
 
 class MultiInputCommand(BaseCommand):
     def __init__(self, cli_args: argparse.Namespace):
+        super().__init__(cli_args)
         extensions = cli_args.extension if len(cli_args.extension) else DEFAULT_EXTENSIONS
         self.all_files = _files_from_source(cli_args.source, extensions)[:: cli_args.sample]
 
@@ -144,7 +145,7 @@ class MultiInputCommand(BaseCommand):
         self.destination = cli_args.destination
 
         self.inputs_coll = LazyPipelineCollection(self.all_files)
-        super().__init__(cli_args)
+        self.sample = cli_args.sample
     @staticmethod
     def add_arguments(parser: argparse.ArgumentParser):
         parser.add_argument(

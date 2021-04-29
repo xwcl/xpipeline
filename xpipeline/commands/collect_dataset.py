@@ -176,6 +176,7 @@ class CollectDataset(MultiInputCommand):
             obs_method['vapp']['right'] = right_extname
         else:
             left_extname = right_extname = None
+
         if len(extension_keys) == 0:
             extension_keys = [0]
         log.debug(f'{extension_keys=}')

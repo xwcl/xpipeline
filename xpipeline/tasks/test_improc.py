@@ -4,7 +4,7 @@ import dask.array as da
 from .. import core
 from . import improc
 from .improc import (
-    rough_peak_in_box, unwrap_cube, unwrap_image, wrap_vector, cartesian_coords,
+    rough_peak_in_box, unwrap_cube, unwrap_image, wrap_matrix, wrap_vector, cartesian_coords,
     f_test, shift2
 )
 
@@ -44,6 +44,10 @@ def test_wrap_3d(xp):
     mask = np.ones(imcube.shape, dtype=bool)
     vec, subset_idxs = unwrap_image(imcube, mask)
     assert np.all(imcube == wrap_vector(vec, imcube.shape, subset_idxs))
+
+    imcube = xp.repeat(imcube[core.newaxis,:,:,:], 3, axis=0)
+    mtx, subset_idxs = unwrap_cube(imcube, mask)
+    assert np.all(imcube == wrap_matrix(mtx, imcube.shape, subset_idxs))
 
 
 @pytest.mark.parametrize('xp', [np, da])

@@ -1,3 +1,4 @@
+import sys
 from astropy.io import fits
 import numpy as np
 import argparse
@@ -11,10 +12,10 @@ from ..utils import unwrap
 from .. import utils
 from .. import pipelines #, irods
 from ..core import LazyPipelineCollection
-from ..tasks import iofits # obs_table, iofits, sky_model, detector, data_quality
+from ..tasks import iofits, improc, vapp # obs_table, iofits, sky_model, detector, data_quality
 # from .ref import clio
 
-from .base import BaseCommand
+from .base import BaseCommand, MultiInputCommand
 
 log = logging.getLogger(__name__)
 
@@ -24,50 +25,12 @@ def _docs_args(parser):
     return KLIP.add_arguments(parser)
 
 
-class KLIP(BaseCommand):
+class KLIP(MultiInputCommand):
     name = "klip"
     help = "Subtract starlight with KLIP"
 
     @staticmethod
     def add_arguments(parser: argparse.ArgumentParser):
-        parser.add_argument(
-            "--extname",
-            default="SCI",
-            help=unwrap("""
-                FITS extension name containing data cube planes
-                (used when single combined input file provided)
-            """)
-        )
-        parser.add_argument(
-            "--region-mask",
-            default=None,
-            help="Path to FITS image of region mask (1 is included, 0 is excluded)"
-        )
-        parser.add_argument(
-            "--angle-keyword",
-            default='ROTOFF',
-            help="FITS keyword with rotation information (default: 'ROTOFF')"
-        )
-        parser.add_argument(
-            "--angle-extname",
-            default="ANGLES",
-            help=unwrap("""
-                FITS extension name containing 1D array of angles corresponding to
-                data cube planes (used when single combined input file provided)
-            """)
-        )
-        parser.add_argument(
-            "--angle-scale",
-            type=float,
-            default=1.0,
-            help="Scale factor relating keyword value to angle in degrees needed to rotate image North-up (default: 1.0)"
-        )
-        parser.add_argument(
-            "--angle-constant",
-            type=float,
-            default=0.0,
-            help="Constant factor added to (scale * keyword value) to get angle in degrees needed to rotate image North-up (default: 0.0)"
-        )
         parser.add_argument(
             "--k-klip",
             type=int,
@@ -86,33 +49,108 @@ class KLIP(BaseCommand):
             choices=["sum", "average"],
             help="Operation used to combine final derotated frames into a single output frame"
         )
+        parser.add_argument(
+            "--mask-saturated",
+            action="store_true",
+            help="Whether to mask saturated pixels"
+        )
+        parser.add_argument(
+            "--mask-saturated-level",
+            type=float,
+            help="Level in counts to mask as a saturated pixel from percentile image"
+        )
+        parser.add_argument(
+            "--mask-saturated-percentile",
+            type=float,
+            default=99.5,
+            help="Pixel-wise percentile level for image used to determine saturation"
+        )
+        parser.add_argument(
+            "--mask-iwa-px",
+            type=float,
+            default=None,
+            help="Apply radial mask excluding pixels < iwa_px from center"
+        )
+        parser.add_argument(
+            "--mask-owa-px",
+            type=float,
+            default=None,
+            help="Apply radial mask excluding pixels > owa_px from center"
+        )
+        parser.add_argument(
+            "--estimation-mask",
+            default=None,
+            help="Path to file shaped like single plane of input with 1s where pixels should be included in starlight estimation (intersected with saturation and annular mask)"
+        )
+        parser.add_argument(
+            "--combination-mask",
+            default=None,
+            help="Path to file shaped like single plane of input with 1s where pixels should be included in final combination (intersected with other masks)"
+        )
+        parser.add_argument(
+            "--vapp-symmetry-angle",
+            type=float,
+            default=0,
+            help="Angle in degrees E of N (+Y) of axis of symmetry for paired gvAPP-180 data (default: 0)"
+        )
         return super(KLIP, KLIP).add_arguments(parser)
 
-    def _calc_derotation_angles(self, rot_arr):
-        return self.args.angle_scale * rot_arr + self.args.angle_constant
+    def _get_derotation_angles(self, input_cube_hdul, obs_method):
+        derotation_angles_where = obs_method['adi']['derotation_angles']
+        if derotation_angles_where in input_cube_hdul:
+            derotation_angles = input_cube_hdul[derotation_angles_where].data
+        elif '.' in derotation_angles_where:
+            derot_ext, derot_col = derotation_angles_where.rsplit('.', 1)
+            derotation_angles = input_cube_hdul[derot_ext].data[derot_col]
+        else:
+            raise RuntimeError(f"Combined dataset must contain angles as data or table column {derotation_angles_where}")
+        return derotation_angles[::self.sample]
 
-    def _load_inputs(self):
-        if len(self.all_files) == 1:
-            extname = self.args.extname
-            rotation_extname = self.args.angle_extname
-            input_cube_hdul = iofits.load_fits_from_path(self.all_files[0])
-            sci_arr = da.from_array(input_cube_hdul[self.args.extname].data.astype('=f8')[::self.args.sample])
-            rot_arr = da.from_array(input_cube_hdul[self.args.angle_extname].data.astype('=f8')[::self.args.sample])
-            default_region_mask = np.ones_like(input_cube_hdul[extname].data[0])
+    def _get_sci_arr(self, input_cube_hdul, extname):
+        return input_cube_hdul[extname].data.astype('=f8')[::self.sample]
+
+    def _make_masks(self, sci_arr, extname):
+        # mask file(s)
+
+        if self.args.estimation_mask is not None:
+            estimation_mask_hdul = iofits.load_fits_from_path(self.args.estimation_mask)
+            if len(estimation_mask_hdul) > 0:
+                estimation_mask = estimation_mask_hdul[extname].data
+            else:
+                estimation_mask = estimation_mask_hdul[0].data
         else:
-            inputs = self.inputs_coll.map(iofits.load_fits_from_path)
-            first_hdul = dask.persist(inputs.collection[0])[0].compute()
-            plane_shape = first_hdul[0].data.shape
-            sci_arr = self.inputs_coll.collect(iofits.hdulists_to_dask_cube, plane_shape)
-            rot_arr = self.inputs_coll.collect(iofits.hdulists_keyword_to_dask_array, self.args.angle_keyword)
-            default_region_mask = np.ones_like(first_hdul[0].data)
-        if self.args.region_mask is not None:
-            hdul = iofits.load_fits_from_path(self.args.region_mask)
-            region_mask = hdul[0].data
+            estimation_mask = np.ones(sci_arr.shape[1:])
+        # coerce to bools
+        estimation_mask = estimation_mask == 1
+
+        # mask saturated
+        if self.args.mask_saturated:
+            percentile_image = np.nanpercentile(sci_arr, self.args.mask_saturated_percentile, axis=0)
+            saturation_mask = percentile_image < self.args.mask_saturated_level
+            estimation_mask &= saturation_mask
+
+        # mask radial
+        rho, theta = improc.polar_coords(improc.center(sci_arr.shape[1:]), sci_arr.shape[1:])
+        if self.args.mask_iwa_px is not None:
+            iwa_mask = rho >= self.args.mask_iwa_px
+            estimation_mask &= iwa_mask
+        if self.args.mask_owa_px is not None:
+            owa_mask = rho <= self.args.mask_owa_px
+            estimation_mask &= owa_mask
+
+        # load combination mask + intersect with others
+        if self.args.combination_mask is not None:
+            combination_mask_hdul = iofits.load_fits_from_path(self.args.combination_mask)
+            if len(combination_mask_hdul) > 0:
+                combination_mask = combination_mask_hdul[extname].data
+            else:
+                combination_mask = combination_mask_hdul[0].data
         else:
-            region_mask = default_region_mask
-        derotation_angles = self._calc_derotation_angles(rot_arr)
-        return sci_arr, derotation_angles, region_mask
+            combination_mask = np.ones(sci_arr.shape[1:])
+        # coerce to bools
+        combination_mask = combination_mask == 1
+        combination_mask &= estimation_mask
+        return estimation_mask, combination_mask
 
     def main(self):
         output_klip_final = utils.join(self.destination, "klip_final.fits")
@@ -120,15 +158,45 @@ class KLIP(BaseCommand):
         if self.check_for_outputs([output_klip_final, output_exptime_map]):
             return
 
-        sci_arr, derotation_angles, region_mask = self._load_inputs()
+        if len(self.all_files) > 1:
+            raise RuntimeError(f"Not sure what to do with multiple inputs: {self.all_files}")
+        input_cube_hdul = iofits.load_fits_from_path(self.all_files[0])
 
-        outcube = pipelines.klip(
-            sci_arr,
-            region_mask,
-            region_mask,
-            self.args.exclude_nearest_n_frames,
-            self.args.k_klip
-        )
+        obs_method = utils.parse_obs_method(input_cube_hdul[0].header['OBSMETHD'])
+
+        derotation_angles = self._get_derotation_angles(input_cube_hdul, obs_method)
+        exclude_nearest_n_frames = self.args.exclude_nearest_n_frames
+        k_klip = self.args.k_klip
+        klip_params = pipelines.KLIPParams(k_klip, exclude_nearest_n_frames)
+
+        if 'vapp' in obs_method:
+            left_extname = obs_method['vapp']['left']
+            right_extname = obs_method['vapp']['right']
+
+            sci_arr_left = self._get_sci_arr(input_cube_hdul, left_extname)
+            sci_arr_right = self._get_sci_arr(input_cube_hdul, right_extname)
+
+            estimation_mask_left, combination_mask_left = self._make_masks(sci_arr_left, left_extname)
+            estimation_mask_right, combination_mask_right = self._make_masks(sci_arr_right, right_extname)
+
+            outcube = pipelines.vapp_klip(
+                pipelines.KLIPInput(da.from_array(sci_arr_left), estimation_mask_left, combination_mask_left),
+                pipelines.KLIPInput(da.from_array(sci_arr_right), estimation_mask_right, combination_mask_right),
+                pipelines.KLIPParams(k_klip_value=self.args.k_klip, exclude_nearest_n_frames=self.args.exclude_nearest_n_frames),
+                self.args.vapp_symmetry_angle,
+            )
+        else:
+            extname = obs_method.get('sci', 'SCI')
+            if extname not in input_cube_hdul:
+                log.error(f"Supply a 'SCI' extension, or use sci= or vapp.left= / vapp.right= in OBSMETHD")
+                sys.exit(1)
+            sci_arr = self._get_sci_arr(input_cube_hdul, extname)
+            estimation_mask, combination_mask = self._make_masks(sci_arr, extname)
+            outcube = pipelines.klip_one(
+                pipelines.KLIPInput(sci_arr, estimation_mask, combination_mask),
+                klip_params
+            )
+
         out_image = pipelines.adi(outcube, derotation_angles, operation=self.args.combine_by)
         import time
         start = time.perf_counter()
@@ -137,4 +205,4 @@ class KLIP(BaseCommand):
         elapsed = time.perf_counter() - start
         log.info(f"Computed in {elapsed} sec")
         output_file = iofits.write_fits(iofits.DaskHDUList([iofits.DaskHDU(out_image)]), output_klip_final)
-        return dask.compute(output_file)
+        return output_file

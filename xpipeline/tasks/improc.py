@@ -148,6 +148,20 @@ def unwrap_image(image, good_pix_mask):
     cube, subset_idxs = unwrap_cube(image[indexer], good_pix_mask)
     return cube[:, 0], subset_idxs
 
+def _dask_wrap_matrix(blocks, shape, subset_idxs, fill_value):
+    # Because the columns axis is removed and two new axes added instead
+    # the function invoked by blockwise() gets a list of arrays rather than
+    # a single array
+    res = []
+    for block in blocks:
+        print(f'{block.shape=}')
+        output = np.ones((block.shape[0],) + shape[1:]) * fill_value
+        print(f'{output=}')
+        indexer = (slice(None,None),) + tuple(x for x in subset_idxs)
+        output[indexer] = block
+        res.append(output)
+    return np.concatenate(res)
+
 def wrap_matrix(matrix, shape, subset_idxs, fill_value=np.nan):
     '''Wrap a (N, pix) matrix into a shape `shape`
     data cube using the indexes from `subset_idxs`
@@ -169,25 +183,27 @@ def wrap_matrix(matrix, shape, subset_idxs, fill_value=np.nan):
     '''
     xp = core.get_array_module(matrix)
     if xp is da:
-        chunk_size = matrix.shape[1] // matrix.numblocks[1]
-        def _wrap_matrix(block, shape, subset_idxs):
-            shape = (block.shape[0],) + shape[1:]
-            # construct an indexing expression like [:,zz,yy,xx]
-            # but support arbitrary numbers of dimensions:
-            indexer = (slice(None,None),) + tuple(x for x in subset_idxs)
-            cube = fill_value * np.ones(shape)
-            cube[indexer] = block
-            return cube
-        new_axes = tuple(range(2, len(shape)))
-        return matrix.T.map_blocks(
-            _wrap_matrix,
+        plane_shape = shape[1:]
+
+        new_axes_idxs = tuple(range(2, 2 + len(plane_shape)))
+        new_axes = {k: plane_shape[idx] for idx, k in enumerate(new_axes_idxs)}
+        log.debug(f'{new_axes=}')
+        log.debug(f'{matrix.T.shape=}')
+        result = da.blockwise(
+            _dask_wrap_matrix,
+            (0,) + new_axes_idxs,
+            matrix.T,
+            (0, 1),
             shape,
+            None,
             subset_idxs,
-            chunks=(chunk_size,) + shape[1:],
-            new_axis=new_axes,
-            dtype=matrix.dtype,
-            meta=np.array((), dtype=matrix.dtype)
+            None,
+            fill_value=fill_value,
+            new_axes=new_axes,
+            dtype=matrix.dtype
         )
+        print(result)
+        return result
     cube = fill_value * xp.ones(shape)
     indexer = (slice(None,None),) + tuple(x for x in subset_idxs)
     cube[indexer] = matrix.T
@@ -409,6 +425,7 @@ def shift2(image, dx, dy, how='bicubic', output_shape=None):
     return output
 
 def combine_paired_cubes(cube_1, cube_2, mask_1, mask_2, fill_value=np.nan):
+    log.debug(f'combine_paired_cubes({cube_1=}, {cube_2=}, {mask_1=}, {mask_2=}, {fill_value=})')
     xp = core.get_array_module(cube_1)
     if cube_1.shape != cube_2.shape:
         raise ValueError("cube_1 and cube_2 must be the same shape")
@@ -433,6 +450,7 @@ def combine_paired_cubes(cube_1, cube_2, mask_1, mask_2, fill_value=np.nan):
         output = fill_value * xp.ones_like(cube_1)
         output[:,mask_1] = cube_1[:,mask_1]
         output[:,mask_2] = cube_2[:,mask_2]
+    log.debug(f'{output}')
     return output
 
 def derotate_cube(cube, derotation_angles):

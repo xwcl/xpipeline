@@ -21,7 +21,6 @@ def parse_obs_method(obs_method_str):
         dest = obsmethod
         parts = lhs.split('.')
         for part in parts[:-1]:
-            print(part)
             if part not in dest:
                 dest[part] = {}
             dest = dest[part]

@@ -13,15 +13,33 @@ from typing import List
 
 from .. import constants as const
 from ..core import LazyPipelineCollection
+import distributed.protocol
 from ..tasks import (
     obs_table, iofits, sky_model, detector, data_quality, learning,
     improc,
     starlight_subtraction,
     characterization,
+    vapp,
 )
 from ..ref import clio
 
 log = logging.getLogger(__name__)
+
+from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class KLIPInput:
+    sci_arr : da.core.Array
+    estimation_mask : np.ndarray
+    combination_mask : np.ndarray
+
+@dataclass(frozen=True)
+class KLIPParams:
+    k_klip_value: int
+    exclude_nearest_n_frames: int
+
+distributed.protocol.register_generic(KLIPInput)
+distributed.protocol.register_generic(KLIPParams)
 
 ## To preserve sanity, pipelines mustn't do anything you can't do to a dask.delayed
 ## and mustn't compute or branch on intermediate results.
@@ -54,6 +72,79 @@ def compute_sky_model(
     log.debug('done assembling')
     return components, mean_sky, stddev_sky, min_err, max_err, avg_err
 
+def klip(
+    klip_inputs: List[KLIPInput],
+    klip_params: KLIPParams
+):
+    log.debug('assembling vapp_klip')
+    matrices = []
+    subset_indices = []
+    for idx, input_data in enumerate(klip_inputs):
+        mtx_x, subset_idxs = improc.unwrap_cube(input_data.sci_arr, input_data.estimation_mask)
+        log.debug(f'klip input {idx} has {mtx_x.shape=} from {input_data.sci_arr.shape=} and {np.count_nonzero(input_data.estimation_mask)=} giving {subset_idxs.shape=}')
+        matrices.append(mtx_x)
+        subset_indices.append(subset_idxs)
+
+    mtx_x = da.vstack(matrices)
+    subtracted_mtx = starlight_subtraction.klip_mtx(
+        mtx_x,
+        klip_params.k_klip_value,
+        klip_params.exclude_nearest_n_frames
+    )
+    start_idx = 0
+    cubes = []
+    for input_data, subset_idxs in zip(klip_inputs, subset_indices):
+        n_features = subset_idxs.shape[1]  # first axis selects "which axis", second axis has an entry per retained pixel
+        end_idx = start_idx + n_features
+        if input_data.combination_mask is not None:
+            submatrix = subtracted_mtx[start_idx:end_idx]
+            log.debug(f'{submatrix=}')
+            cube = improc.wrap_matrix(
+                submatrix,
+                input_data.sci_arr.shape,
+                subset_idxs
+            )
+            log.debug(f'after slicing submatrix and rewrapping with indices from estimation mask: {cube=}')
+            # TODO is there a better way?
+            unwrapped, subset_idxs = improc.unwrap_cube(cube, input_data.combination_mask)
+            log.debug(f'{unwrapped=} {subset_idxs.shape=}')
+            cube = improc.wrap_matrix(unwrapped, cube.shape, subset_idxs)
+            log.debug(f'after rewrapping with combination mask indices: {cube=}')
+        else:
+            cube = None
+        cubes.append(cube)
+        start_idx += n_features
+
+    return cubes
+
+def klip_one(
+    klip_input: KLIPInput,
+    klip_params: KLIPParams
+):
+    cubes = klip([klip_input], klip_params)
+    return cubes[0]
+
+def vapp_klip(
+    klip_inputs_left: KLIPInput,
+    klip_inputs_right: KLIPInput,
+    klip_params: KLIPParams,
+    vapp_symmetry_angle: float,
+):
+    if klip_inputs_left.sci_arr.shape != klip_inputs_right.sci_arr.shape:
+        raise ValueError("Left and right vAPP cubes must be the same shape")
+    plane_shape = klip_inputs_left.sci_arr.shape[1:]
+    cubes = klip([klip_inputs_left, klip_inputs_right], klip_params)
+    assert klip_inputs_left.sci_arr.shape == cubes[0].shape
+    assert klip_inputs_right.sci_arr.shape == cubes[1].shape
+    left_half, right_half = vapp.mask_along_angle(plane_shape, vapp_symmetry_angle)
+    final_cube = improc.combine_paired_cubes(
+        cubes[0],
+        cubes[1],
+        klip_inputs_left.combination_mask & left_half,
+        klip_inputs_right.combination_mask & right_half,
+    )
+    log.debug('done assembling vapp_klip')
+    return final_cube
 
 def adi(
     cube: da.core.Array,
@@ -69,52 +160,46 @@ def adi(
         raise ValueError("Supported operations: average, sum")
     return out_image
 
-def klip(
-    sci_arr: da.core.Array,
-    estimation_mask: np.ndarray,
-    combination_mask: np.ndarray,
-    exclude_nearest_n_frames: int,
-    k_klip_value: int
-):
-    log.debug('Assembling pipeline...')
-    mtx_x, subset_idxs = improc.unwrap_cube(sci_arr, estimation_mask)
-    log.debug(f'{mtx_x.shape=}')
+# def klip(
+#     sci_arr: da.core.Array,
+#     estimation_mask: np.ndarray,
+#     combination_mask: np.ndarray,
+#     exclude_nearest_n_frames: int,
+#     k_klip_value: int
+# ):
+#     log.debug('Assembling pipeline...')
+#     mtx_x, subset_idxs = improc.unwrap_cube(sci_arr, estimation_mask)
+#     log.debug(f'{mtx_x.shape=}')
 
-    subtracted_mtx = starlight_subtraction.klip_mtx(
-        mtx_x,
-        k_klip_value,
-        exclude_nearest_n_frames
-    )
-    outcube = improc.wrap_matrix(subtracted_mtx, sci_arr.shape, subset_idxs)
-    # TODO apply combination_mask
-    log.debug(f'{outcube.shape=}')
-    log.debug('done assembling')
-    return outcube
+#     subtracted_mtx = starlight_subtraction.klip_mtx(
+#         mtx_x,
+#         k_klip_value,
+#         exclude_nearest_n_frames
+#     )
+#     outcube = improc.wrap_matrix(subtracted_mtx, sci_arr.shape, subset_idxs)
+#     # TODO apply combination_mask
+#     log.debug(f'{outcube.shape=}')
+#     log.debug('done assembling')
+#     return outcube
 
 def evaluate_starlight_subtraction(
-    sci_arr: da.core.Array,
+    klip_input: KLIPInput,
     derotation_angles: da.core.Array,
-    estimation_mask: np.ndarray,
-    combination_mask: np.ndarray,
     specs: List[characterization.CompanionSpec],
     template_psf: np.ndarray,
-    exclude_nearest_n_frames: int,
-    k_klip_value: int,
+    klip_params: KLIPParams,
     aperture_diameter_px: float,
     apertures_to_exclude: int
 ):
     injected_sci_arr = characterization.inject_signals(
-        sci_arr,
+        klip_input.sci_arr,
         derotation_angles,
         specs,
         template_psf
     )
-    outcube = klip(
-        injected_sci_arr,
-        estimation_mask,
-        combination_mask,
-        exclude_nearest_n_frames,
-        k_klip_value,
+    outcube = klip_one(
+        KLIPInput(injected_sci_arr, klip_input.estimation_mask, klip_input.combination_mask),
+        klip_params
     )
     out_image = adi(
         outcube,

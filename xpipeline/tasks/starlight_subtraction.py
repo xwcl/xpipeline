@@ -141,17 +141,19 @@ def klip_mtx(image_vecs, k_klip: int, exclude_nearest_n_frames: int):
     if image_vecs.shape[0] < initial_k or image_vecs.shape[1] < initial_k:
         raise ValueError(f"Number of modes requested exceeds dimensions of input")
     image_vecs_meansub, mean_vec = mean_subtract_vecs(image_vecs)
-    mtx_u0, diag_s0, mtx_v0 = learning.generic_svd(image_vecs, initial_k)
+    image_vecs_meansub = image_vecs_meansub.rechunk({0: -1, 1: 'auto'})  # TODO should we allow chunking in both dims with Halko SVD?
+    log.debug(f'{image_vecs_meansub=} {image_vecs_meansub.numblocks=}')
+    mtx_u0, diag_s0, mtx_v0 = learning.generic_svd(image_vecs_meansub, initial_k)
     log.debug(f'{image_vecs_meansub.shape=}, {mtx_u0.shape=}, {diag_s0.shape=}, {mtx_v0.shape=}')
     if xp is da:
-        output = image_vecs_meansub.map_blocks(
-            klip_chunk,
-            mtx_u0,
-            diag_s0,
-            mtx_v0,
-            k_klip,
-            exclude_nearest_n_frames,
-            dtype=image_vecs_meansub.dtype
+        output = da.blockwise(
+            klip_chunk, 'ij',
+            image_vecs_meansub, 'ij',
+            mtx_u0, None,
+            diag_s0, None,
+            mtx_v0, None,
+            k_klip, None,
+            exclude_nearest_n_frames, None,
         )
     else:
         output = klip_chunk(image_vecs_meansub, mtx_u0, diag_s0, mtx_v0, k_klip, exclude_nearest_n_frames)
