@@ -9,7 +9,7 @@ from astropy.io import fits
 import dask
 import dask.array as da
 import pandas as pd
-from typing import List
+from typing import List, Union
 
 from .. import constants as const
 from ..core import LazyPipelineCollection
@@ -27,13 +27,13 @@ log = logging.getLogger(__name__)
 
 from dataclasses import dataclass
 
-@dataclass(frozen=True)
+@dataclass
 class KLIPInput:
     sci_arr : da.core.Array
     estimation_mask : np.ndarray
-    combination_mask : np.ndarray
+    combination_mask : Union[np.ndarray, None]
 
-@dataclass(frozen=True)
+@dataclass
 class KLIPParams:
     k_klip_value: int
     exclude_nearest_n_frames: int
@@ -77,7 +77,7 @@ def klip_multi(
     klip_inputs: List[KLIPInput],
     klip_params: KLIPParams
 ):
-    log.debug('assembling vapp_klip')
+    log.debug('assembling klip_multi')
     matrices = []
     subset_indices = []
     for idx, input_data in enumerate(klip_inputs):
@@ -126,26 +126,23 @@ def klip_one(
     cubes = klip_multi([klip_input], klip_params)
     return cubes[0]
 
-def vapp_klip(
-    klip_inputs_left: KLIPInput,
-    klip_inputs_right: KLIPInput,
-    klip_params: KLIPParams,
+def vapp_stitch(
+    left_cube,
+    right_cube,
     vapp_symmetry_angle: float,
 ):
-    if klip_inputs_left.sci_arr.shape != klip_inputs_right.sci_arr.shape:
+    log.debug('assembling vapp_stitch')
+    if right_cube.shape != left_cube.shape:
         raise ValueError("Left and right vAPP cubes must be the same shape")
-    plane_shape = klip_inputs_left.sci_arr.shape[1:]
-    cubes = klip_multi([klip_inputs_left, klip_inputs_right], klip_params)
-    assert klip_inputs_left.sci_arr.shape == cubes[0].shape
-    assert klip_inputs_right.sci_arr.shape == cubes[1].shape
+    plane_shape = left_cube.shape[1:]
     left_half, right_half = vapp.mask_along_angle(plane_shape, vapp_symmetry_angle)
     final_cube = improc.combine_paired_cubes(
-        cubes[0],
-        cubes[1],
-        klip_inputs_left.combination_mask & left_half,
-        klip_inputs_right.combination_mask & right_half,
+        left_cube,
+        right_cube,
+        left_half,
+        right_half,
     )
-    log.debug('done assembling vapp_klip')
+    log.debug('done assembling vapp_stitch')
     return final_cube
 
 def adi(

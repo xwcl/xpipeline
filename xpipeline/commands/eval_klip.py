@@ -95,36 +95,77 @@ class EvalKLIP(KLIP):
         if self.check_for_outputs([output_result]):
             return
         specs = self._load_companions()
-
         aperture_diameter_px = self.args.aperture_diameter_px
         apertures_to_exclude = self.args.apertures_to_exclude
-        k_klip = self.args.k_klip
-        exclude_nearest_n_frames = self.args.exclude_nearest_n_frames
+        template_hdul = iofits.load_fits_from_path(self.args.template_psf)
 
-        sci_arr, derotation_angles, region_mask, template_psf = self._load_inputs()
+        if len(self.all_files) > 1:
+            raise RuntimeError(f"Not sure what to do with multiple inputs: {self.all_files}")
 
-        d_recovered_signals = pipelines.evaluate_starlight_subtraction(
-            sci_arr,
-            derotation_angles,
-            region_mask,
-            specs,
-            template_psf,
-            self.args.angle_scale,
-            self.args.angle_constant,
-            exclude_nearest_n_frames,
-            k_klip,
-            aperture_diameter_px,
-            apertures_to_exclude,
+        # process like the klip command
+        klip_inputs, obs_method, derotation_angles = self._assemble_klip_inputs()
+        klip_params = self._assemble_klip_params()
+
+        # inject signals
+        if 'vapp' in obs_method:
+            left_extname = obs_method['vapp']['left']
+            right_extname = obs_method['vapp']['right']
+            if left_extname not in template_hdul or right_extname not in template_hdul:
+                raise RuntimeError(f"Couldn't find matching template PSFs for extensions named {left_extname} and {right_extname}")
+            klip_inputs[0].sci_arr = characterization.inject_signals(
+                klip_inputs[0].sci_arr,
+                derotation_angles,
+                specs,
+                template_hdul[left_extname].data
+            )
+            klip_inputs[1].sci_arr = characterization.inject_signals(
+                klip_inputs[1].sci_arr,
+                derotation_angles,
+                specs,
+                template_hdul[left_extname].data
+            )
+        else:
+            if 'SCI' not in template_hdul and len(template_hdul[0].data.shape) == 0:
+                raise RuntimeError(f"No 'SCI' extension in {self.args.template_psf} and no data in primary extension")
+            if 'SCI' in template_hdul:
+                template_psf = template_hdul['SCI'].data
+            else:
+                template_psf = template_hdul[0].data
+            klip_inputs[0].sci_arr = characterization.inject_signals(
+                klip_inputs[0].sci_arr,
+                derotation_angles,
+                specs,
+                template_psf
+            )
+
+        # compose with klip
+        outcubes = pipelines.klip_multi(
+            klip_inputs,
+            klip_params
         )
+
+        # compute final like klip command
+        out_image = self._assemble_out_image(obs_method, outcubes, derotation_angles)
+
+        d_recovered_signals = dask.delayed(characterization.recover_signals)(
+            out_image,
+            specs,
+            aperture_diameter_px,
+            apertures_to_exclude
+        )
+
+        log.info(f'Computing recovered signals')
         recovered_signals = dask.compute(d_recovered_signals)[0]
+        log.info(f'Done')
         payload = {
             'inputs': self.all_files,
             'template_psf': self.args.template_psf,
-            'k_klip': k_klip,
-            'exclude_nearest_n_frames': exclude_nearest_n_frames,
+            'k_klip': klip_params.k_klip_value,
+            'exclude_nearest_n_frames': klip_params.exclude_nearest_n_frames,
             'aperture_diameter_px': aperture_diameter_px,
             'apertures_to_exclude': apertures_to_exclude,
-            'region_mask': self.args.region_mask,
+            'estimation_mask': self.args.estimation_mask,
+            'combination_mask': self.args.combination_mask,
             'companions': [
                 {'scale': rs.scale, 'r_px': rs.r_px, 'pa_deg': rs.pa_deg, 'snr': rs.snr}
                 for rs in recovered_signals

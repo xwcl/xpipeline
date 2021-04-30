@@ -160,14 +160,37 @@ class KLIP(MultiInputCommand):
 
         if len(self.all_files) > 1:
             raise RuntimeError(f"Not sure what to do with multiple inputs: {self.all_files}")
-        input_cube_hdul = iofits.load_fits_from_path(self.all_files[0])
 
-        obs_method = utils.parse_obs_method(input_cube_hdul[0].header['OBSMETHD'])
+        klip_inputs, obs_method, derotation_angles = self._assemble_klip_inputs()
+        klip_params = self._assemble_klip_params()
+        outcubes = pipelines.klip_multi(
+            klip_inputs,
+            klip_params
+        )
+        out_image = self._assemble_out_image(obs_method, outcubes, derotation_angles)
 
-        derotation_angles = self._get_derotation_angles(input_cube_hdul, obs_method)
+        import time
+        start = time.perf_counter()
+        log.info(f"Computing klip pipeline result...")
+        out_image = out_image.compute()
+        elapsed = time.perf_counter() - start
+        log.info(f"Computed in {elapsed} sec")
+        output_file = iofits.write_fits(iofits.DaskHDUList([iofits.DaskHDU(out_image)]), output_klip_final)
+        return output_file
+
+    def _assemble_klip_params(self):
         exclude_nearest_n_frames = self.args.exclude_nearest_n_frames
         k_klip = self.args.k_klip
         klip_params = pipelines.KLIPParams(k_klip, exclude_nearest_n_frames)
+        return klip_params
+
+    def _assemble_klip_inputs(self):
+        input_cube_hdul = iofits.load_fits_from_path(self.all_files[0])
+
+        obs_method = utils.parse_obs_method(input_cube_hdul[0].header['OBSMETHD'])
+        derotation_angles = self._get_derotation_angles(input_cube_hdul, obs_method)
+
+        klip_inputs = []
 
         if 'vapp' in obs_method:
             left_extname = obs_method['vapp']['left']
@@ -179,12 +202,8 @@ class KLIP(MultiInputCommand):
             estimation_mask_left, combination_mask_left = self._make_masks(sci_arr_left, left_extname)
             estimation_mask_right, combination_mask_right = self._make_masks(sci_arr_right, right_extname)
 
-            outcube = pipelines.vapp_klip(
-                pipelines.KLIPInput(da.from_array(sci_arr_left), estimation_mask_left, combination_mask_left),
-                pipelines.KLIPInput(da.from_array(sci_arr_right), estimation_mask_right, combination_mask_right),
-                pipelines.KLIPParams(k_klip_value=self.args.k_klip, exclude_nearest_n_frames=self.args.exclude_nearest_n_frames),
-                self.args.vapp_symmetry_angle,
-            )
+            klip_inputs.append(pipelines.KLIPInput(da.from_array(sci_arr_left), estimation_mask_left, combination_mask_left))
+            klip_inputs.append(pipelines.KLIPInput(da.from_array(sci_arr_right), estimation_mask_right, combination_mask_right))
         else:
             extname = obs_method.get('sci', 'SCI')
             if extname not in input_cube_hdul:
@@ -192,17 +211,14 @@ class KLIP(MultiInputCommand):
                 sys.exit(1)
             sci_arr = self._get_sci_arr(input_cube_hdul, extname)
             estimation_mask, combination_mask = self._make_masks(sci_arr, extname)
-            outcube = pipelines.klip_one(
-                pipelines.KLIPInput(sci_arr, estimation_mask, combination_mask),
-                klip_params
-            )
+            klip_inputs.append(pipelines.KLIPInput(sci_arr, estimation_mask, combination_mask))
+        return klip_inputs, obs_method, derotation_angles
 
-        out_image = pipelines.adi(outcube, derotation_angles, operation=self.args.combine_by)
-        import time
-        start = time.perf_counter()
-        log.info(f"Computing klip pipeline result...")
-        out_image = out_image.compute()
-        elapsed = time.perf_counter() - start
-        log.info(f"Computed in {elapsed} sec")
-        output_file = iofits.write_fits(iofits.DaskHDUList([iofits.DaskHDU(out_image)]), output_klip_final)
-        return output_file
+    def _assemble_out_image(self, obs_method, outcubes, derotation_angles):
+        if 'vapp' in obs_method:
+            left_cube, right_cube = outcubes
+            out_image = pipelines.vapp_stitch(left_cube, right_cube, self.args.vapp_symmetry_angle)
+        else:
+            out_image = pipelines.adi(outcubes[0], derotation_angles, operation=self.args.combine_by)
+
+        return out_image

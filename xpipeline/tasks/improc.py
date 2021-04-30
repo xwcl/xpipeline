@@ -176,9 +176,7 @@ def _dask_wrap_matrix(blocks, shape, subset_idxs, fill_value):
     # a single array
     res = []
     for block in blocks:
-        print(f'{block.shape=}')
         output = np.ones((block.shape[0],) + shape[1:]) * fill_value
-        print(f'{output=}')
         indexer = (slice(None,None),) + tuple(x for x in subset_idxs)
         output[indexer] = block
         res.append(output)
@@ -224,7 +222,6 @@ def wrap_matrix(matrix, shape, subset_idxs, fill_value=np.nan):
             new_axes=new_axes,
             dtype=matrix.dtype
         )
-        print(result)
         return result
     cube = fill_value * xp.ones(shape)
     indexer = (slice(None,None),) + tuple(x for x in subset_idxs)
