@@ -73,7 +73,7 @@ def compute_sky_model(
     log.debug('done assembling')
     return components, mean_sky, stddev_sky, min_err, max_err, avg_err
 
-def klip(
+def klip_multi(
     klip_inputs: List[KLIPInput],
     klip_params: KLIPParams
 ):
@@ -123,7 +123,7 @@ def klip_one(
     klip_input: KLIPInput,
     klip_params: KLIPParams
 ):
-    cubes = klip([klip_input], klip_params)
+    cubes = klip_multi([klip_input], klip_params)
     return cubes[0]
 
 def vapp_klip(
@@ -135,7 +135,7 @@ def vapp_klip(
     if klip_inputs_left.sci_arr.shape != klip_inputs_right.sci_arr.shape:
         raise ValueError("Left and right vAPP cubes must be the same shape")
     plane_shape = klip_inputs_left.sci_arr.shape[1:]
-    cubes = klip([klip_inputs_left, klip_inputs_right], klip_params)
+    cubes = klip_multi([klip_inputs_left, klip_inputs_right], klip_params)
     assert klip_inputs_left.sci_arr.shape == cubes[0].shape
     assert klip_inputs_right.sci_arr.shape == cubes[1].shape
     left_half, right_half = vapp.mask_along_angle(plane_shape, vapp_symmetry_angle)
@@ -162,27 +162,27 @@ def adi(
         raise ValueError("Supported operations: average, sum")
     return out_image
 
-# def klip(
-#     sci_arr: da.core.Array,
-#     estimation_mask: np.ndarray,
-#     combination_mask: np.ndarray,
-#     exclude_nearest_n_frames: int,
-#     k_klip_value: int
-# ):
-#     log.debug('Assembling pipeline...')
-#     mtx_x, subset_idxs = improc.unwrap_cube(sci_arr, estimation_mask)
-#     log.debug(f'{mtx_x.shape=}')
+def klip(
+    sci_arr: da.core.Array,
+    estimation_mask: np.ndarray,
+    combination_mask: np.ndarray,
+    exclude_nearest_n_frames: int,
+    k_klip_value: int
+):
+    log.debug('Assembling pipeline...')
+    mtx_x, subset_idxs = improc.unwrap_cube(sci_arr, estimation_mask)
+    log.debug(f'{mtx_x.shape=}')
 
-#     subtracted_mtx = starlight_subtraction.klip_mtx(
-#         mtx_x,
-#         k_klip_value,
-#         exclude_nearest_n_frames
-#     )
-#     outcube = improc.wrap_matrix(subtracted_mtx, sci_arr.shape, subset_idxs)
-#     # TODO apply combination_mask
-#     log.debug(f'{outcube.shape=}')
-#     log.debug('done assembling')
-#     return outcube
+    subtracted_mtx = starlight_subtraction.klip_mtx(
+        mtx_x,
+        k_klip_value,
+        exclude_nearest_n_frames
+    )
+    outcube = improc.wrap_matrix(subtracted_mtx, sci_arr.shape, subset_idxs)
+    # TODO apply combination_mask
+    log.debug(f'{outcube.shape=}')
+    log.debug('done assembling')
+    return outcube
 
 def evaluate_starlight_subtraction(
     klip_input: KLIPInput,
