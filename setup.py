@@ -18,6 +18,13 @@ setup(
             '3.9um_Clio.dat',
             'naco_betapic_preproc_absil2013_gonzalez2017.npz'
         ],
+        'xpipeline.ref.clio': [
+            '3.9um_Clio.dat',
+            'vAPP_transmission.fits',
+            'vAPP_phase_top.fits',
+            'vAPP_phase_bottom.fits',
+            'clio_pupil_mask.fits',
+        ],
     },
     install_requires=[
         'pytest>=6.2.1',
@@ -33,7 +40,9 @@ setup(
         'irods_fsspec',
         'fsspec>=0.8.7',
         'sphinx-argparse>=0.2.5',
-        'sphinx-rtd-theme>=0.4.3'
+        'sphinx-rtd-theme>=0.4.3',
+        'python-dateutil>=2.8.1,<3',
+        'dask-ml>=1.9.0,<2'
     ],
     entry_points={
         'console_scripts': [

@@ -6,11 +6,12 @@ from . import learning, improc
 
 
 import logging
+
 log = logging.getLogger(__name__)
 
 
 def drop_idx_range_cols(arr, min_excluded_idx, max_excluded_idx):
-    '''Note exclusive upper bound: [min_excluded_idx, max_excluded_idx)'''
+    """Note exclusive upper bound: [min_excluded_idx, max_excluded_idx)"""
     xp = core.get_array_module(arr)
     rows, cols = arr.shape
     n_drop = max_excluded_idx - min_excluded_idx
@@ -19,16 +20,16 @@ def drop_idx_range_cols(arr, min_excluded_idx, max_excluded_idx):
     # L | |  R
 
     # L
-    out[:,:min_excluded_idx] = arr[:,:min_excluded_idx]
+    out[:, :min_excluded_idx] = arr[:, :min_excluded_idx]
     # R
-    out[:,min_excluded_idx:] = arr[:,max_excluded_idx:]
+    out[:, min_excluded_idx:] = arr[:, max_excluded_idx:]
     return out
 
 
 def mean_subtract_vecs(image_vecs):
     xp = core.get_array_module(image_vecs)
     mean_vec = xp.average(image_vecs, axis=1)
-    image_vecs_meansub = image_vecs - mean_vec[:,core.newaxis]
+    image_vecs_meansub = image_vecs - mean_vec[:, core.newaxis]
     return image_vecs_meansub, mean_vec
 
 
@@ -39,31 +40,39 @@ class Decomposer:
         self.n_modes = n_modes
         self.xp = core.get_array_module(image_vecs)
         self.idxs = self.xp.arange(self.meansub_image_vecs.shape[1])
+
     def eigenimages(self, min_excluded_idx, max_excluded_idx):
         raise NotImplementedError()
 
+
 class SVDDecomposer(Decomposer):
     def eigenimages(self, min_excluded_idx, max_excluded_idx):
-        ref = drop_idx_range_cols(self.meansub_image_vecs, min_excluded_idx, max_excluded_idx)
+        ref = drop_idx_range_cols(
+            self.meansub_image_vecs, min_excluded_idx, max_excluded_idx
+        )
         u, s, v = learning.generic_svd(ref, n_modes=self.n_modes)
-        return u[:,:self.n_modes]
+        return u[:, : self.n_modes]
 
 
 class MinimalDowndateSVDDecomposer(Decomposer):
     def __init__(self, image_vecs, n_modes, extra_modes=1):
         super().__init__(image_vecs, n_modes)
         self.n_modes = n_modes
-        self.mtx_u, self.diag_s, self.mtx_v = learning.generic_svd(self.meansub_image_vecs, n_modes=n_modes+extra_modes)
+        self.mtx_u, self.diag_s, self.mtx_v = learning.generic_svd(
+            self.meansub_image_vecs, n_modes=n_modes + extra_modes
+        )
         self.idxs = self.xp.arange(image_vecs.shape[1])
+
     def eigenimages(self, min_excluded_idx, max_excluded_idx):
         new_u, new_s, new_v = learning.minimal_downdate(
             self.mtx_u,
             self.diag_s,
             self.mtx_v,
             min_col_to_remove=min_excluded_idx,
-            max_col_to_remove=max_excluded_idx
+            max_col_to_remove=max_excluded_idx,
         )
-        return new_u[:,:self.n_modes]
+        return new_u[:, : self.n_modes]
+
 
 def klip_frame(target, decomposer, exclude_idx_min, exclude_idx_max):
     eigenimages = decomposer.eigenimages(exclude_idx_min, exclude_idx_max)
@@ -72,7 +81,7 @@ def klip_frame(target, decomposer, exclude_idx_min, exclude_idx_max):
 
 
 def klip_to_modes(image_vecs, decomp_class, n_modes, exclude_nearest=0):
-    '''
+    """
     Parameters
     ----------
     image_vecs : array (m, n)
@@ -88,7 +97,7 @@ def klip_to_modes(image_vecs, decomp_class, n_modes, exclude_nearest=0):
         this many adjacent frames. (Note the first and last
         few frames won't exclude the same number of frames;
         they will just go to the ends of the dataset.)
-    '''
+    """
     xp = core.get_array_module(image_vecs)
     _, n_frames = image_vecs.shape
 
@@ -96,15 +105,18 @@ def klip_to_modes(image_vecs, decomp_class, n_modes, exclude_nearest=0):
     idxs = xp.arange(image_vecs.shape[1])
     decomposer = decomp_class(image_vecs, n_modes)
     for i in range(image_vecs.shape[1]):
-        output[:,i] = klip_frame(
-            image_vecs[:,i],
+        output[:, i] = klip_frame(
+            image_vecs[:, i],
             decomposer,
             exclude_idx_min=max(i - exclude_nearest, 0),
-            exclude_idx_max=min(i+1+exclude_nearest, n_frames)
+            exclude_idx_max=min(i + 1 + exclude_nearest, n_frames),
         )
     return output
 
-def klip_chunk(image_vecs_meansub, mtx_u0, diag_s0, mtx_v0, k_klip, exclude_nearest_n_frames):
+
+def klip_chunk(
+    image_vecs_meansub, mtx_u0, diag_s0, mtx_v0, k_klip, exclude_nearest_n_frames
+):
     if image_vecs_meansub.shape == (0, 0):
         # called by dask to infer dtype
         return np.zeros_like(image_vecs_meansub)
@@ -118,14 +130,15 @@ def klip_chunk(image_vecs_meansub, mtx_u0, diag_s0, mtx_v0, k_klip, exclude_near
             diag_s0,
             mtx_v0,
             min_col_to_remove=max(i - exclude_nearest_n_frames, 0),
-            max_col_to_remove=min(i+1+exclude_nearest_n_frames, total_n_frames),
+            max_col_to_remove=min(i + 1 + exclude_nearest_n_frames, total_n_frames),
         )
-        eigenimages = new_u[:,:k_klip]
-        meansub_target = image_vecs_meansub[:,i]
-        output[:,i] = meansub_target - eigenimages @ (eigenimages.T @ meansub_target)
+        eigenimages = new_u[:, :k_klip]
+        meansub_target = image_vecs_meansub[:, i]
+        output[:, i] = meansub_target - eigenimages @ (eigenimages.T @ meansub_target)
     mem_mb = utils.get_memory_use_mb()
-    log.debug(f'klipped! {mem_mb} MB RAM in use')
+    log.debug(f"klipped! {mem_mb} MB RAM in use")
     return output
+
 
 def klip_mtx(image_vecs, k_klip: int, exclude_nearest_n_frames: int):
     xp = core.get_array_module(image_vecs)
@@ -137,29 +150,52 @@ def klip_mtx(image_vecs, k_klip: int, exclude_nearest_n_frames: int):
     # to remove 1 image vector by downdating, the initial decomposition
     # should retain k_klip + 1 singular value triplets.
     initial_k = k_klip + exclude_nearest_n_frames + 1
-    log.debug(f'{image_vecs.shape=}, {k_klip=}, {exclude_nearest_n_frames=}, {initial_k=}')
+    log.debug(
+        f"{image_vecs.shape=}, {k_klip=}, {exclude_nearest_n_frames=}, {initial_k=}"
+    )
     if image_vecs.shape[0] < initial_k or image_vecs.shape[1] < initial_k:
         raise ValueError(f"Number of modes requested exceeds dimensions of input")
     image_vecs_meansub, mean_vec = mean_subtract_vecs(image_vecs)
-    image_vecs_meansub = image_vecs_meansub.rechunk({0: -1, 1: 'auto'})  # TODO should we allow chunking in both dims with Halko SVD?
-    log.debug(f'{image_vecs_meansub=} {image_vecs_meansub.numblocks=}')
+    image_vecs_meansub = image_vecs_meansub.rechunk(
+        {0: -1, 1: "auto"}
+    )  # TODO should we allow chunking in both dims with Halko SVD?
+    log.debug(f"{image_vecs_meansub=} {image_vecs_meansub.numblocks=}")
     mtx_u0, diag_s0, mtx_v0 = learning.generic_svd(image_vecs_meansub, initial_k)
-    log.debug(f'{image_vecs_meansub.shape=}, {mtx_u0.shape=}, {diag_s0.shape=}, {mtx_v0.shape=}')
+    log.debug(
+        f"{image_vecs_meansub.shape=}, {mtx_u0.shape=}, {diag_s0.shape=}, {mtx_v0.shape=}"
+    )
     if xp is da:
         output = da.blockwise(
-            klip_chunk, 'ij',
-            image_vecs_meansub, 'ij',
-            mtx_u0, None,
-            diag_s0, None,
-            mtx_v0, None,
-            k_klip, None,
-            exclude_nearest_n_frames, None,
+            klip_chunk,
+            "ij",
+            image_vecs_meansub,
+            "ij",
+            mtx_u0,
+            None,
+            diag_s0,
+            None,
+            mtx_v0,
+            None,
+            k_klip,
+            None,
+            exclude_nearest_n_frames,
+            None,
         )
     else:
-        output = klip_chunk(image_vecs_meansub, mtx_u0, diag_s0, mtx_v0, k_klip, exclude_nearest_n_frames)
+        output = klip_chunk(
+            image_vecs_meansub,
+            mtx_u0,
+            diag_s0,
+            mtx_v0,
+            k_klip,
+            exclude_nearest_n_frames,
+        )
     return output
 
-def make_good_pix_mask(shape, inner_radius=None, outer_radius=None, center=None, existing_mask=None):
+
+def make_good_pix_mask(
+    shape, inner_radius=None, outer_radius=None, center=None, existing_mask=None
+):
     if existing_mask is not None:
         if existing_mask.shape != shape:
             raise ValueError(f"Cannot mix {shape=} and {existing_mask.shape=}")

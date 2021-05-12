@@ -5,12 +5,14 @@ import dask
 import fsspec.spec
 import os.path
 import logging
+
 # from . import constants as const
 from ..utils import unwrap
 from .. import utils
-from .. import pipelines #, irods
+from .. import pipelines  # , irods
 from ..core import LazyPipelineCollection
-from ..tasks import iofits # obs_table, iofits, sky_model, detector, data_quality
+from ..tasks import iofits  # obs_table, iofits, sky_model, detector, data_quality
+
 # from .ref import clio
 
 from .base import BaseCommand
@@ -28,17 +30,16 @@ class CopyTest(BaseCommand):
 
     def main(self):
         destination = self.args.destination
-        log.debug(f'{destination=}')
+        log.debug(f"{destination=}")
         dest_fs = utils.get_fs(destination)
         assert isinstance(dest_fs, fsspec.spec.AbstractFileSystem)
-        log.debug(f'calling makedirs on {dest_fs} at {destination}')
+        log.debug(f"calling makedirs on {dest_fs} at {destination}")
         dest_fs.makedirs(destination, exist_ok=True)
 
         output_files = (
-            self.inputs_coll
-                .map(utils.basename)
-                .map(lambda x: utils.join(destination, x))
-                .end()
+            self.inputs_coll.map(utils.basename)
+            .map(lambda x: utils.join(destination, x))
+            .end()
         )
         log.debug(output_files)
         inputs = self.inputs_coll.map(iofits.load_fits_from_path)

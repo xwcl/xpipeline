@@ -2,6 +2,7 @@ import argparse
 import glob
 import os.path
 import logging
+
 # import warnings
 # warnings.simplefilter('error')
 from pprint import pformat
@@ -91,13 +92,12 @@ def local_to_irods():
     # compute
     inputs_coll = LazyPipelineCollection(all_files)
     destination_paths = (
-        inputs_coll
-        .map(iofits.load_fits)
+        inputs_coll.map(iofits.load_fits)
         .zip_map(iofits.write_fits_to_irods, output_files, overwrite=True)
         .end()
     )
     destination_paths = dask.compute(destination_paths)
-    log.info(f'Uploaded files to {destination} using iRODS')
+    log.info(f"Uploaded files to {destination} using iRODS")
     log.info(destination_paths)
 
 
@@ -123,10 +123,12 @@ def compute_sky_model():
         "--mask-n-sigma",
         type=float,
         default=2,
-        help=unwrap('''
+        help=unwrap(
+            """
             Pixels excluded if mean science image (after mean background subtraction)
             has value p[y,x] > N * sigma[y,x] (from the sky standard deviation image)",
-        ''')
+        """
+        ),
     )
     parser.add_argument(
         "--test-fraction",
@@ -192,9 +194,9 @@ def compute_sky_model():
     )
     dask.persist([components, mean_sky, stddev_sky])
     # save
-    fits.PrimaryHDU(
-        np.asarray(components.compute())
-    ).writeto(components_fn, overwrite=True)
+    fits.PrimaryHDU(np.asarray(components.compute())).writeto(
+        components_fn, overwrite=True
+    )
     log.info(f"{n_components} components written to {components_fn}")
     fits.PrimaryHDU(np.asarray(mean_sky.compute())).writeto(mean_fn, overwrite=True)
     log.info(f"Mean sky written to {mean_fn}")
@@ -226,10 +228,12 @@ def clio_instrument_calibrate():
         "--mask-n-sigma",
         type=float,
         default=1.5,
-        help=unwrap('''
+        help=unwrap(
+            """
             Pixels excluded if mean science image (after mean background subtraction) has
             value p[y,x] > N * sigma[y,x] (from the sky standard deviation image)
-        ''')
+        """
+        ),
     )
     # parser.add_argument('psf_model', help='FITS image with unsaturated model PSF ("bottom" PSF for vAPP)')
     # parse and generate list of `all_files`
@@ -246,7 +250,9 @@ def clio_instrument_calibrate():
         log.info("Remove them to re-run")
         return
     badpix_arr = iofits.load_fits(args.badpix)[0].data
-    sky_components_arr = iofits.get_data_from_disk(args.sky_components)[:sky_n_components]
+    sky_components_arr = iofits.get_data_from_disk(args.sky_components)[
+        :sky_n_components
+    ]
     coll = LazyPipelineCollection(args.all_files)
     coll_prelim = (
         coll.map(iofits.load_fits)
@@ -274,8 +280,7 @@ def clio_instrument_calibrate():
     # )
     # Background subtraction and centering
     d_results = (
-        coll_prelim
-        .map(
+        coll_prelim.map(
             sky_model.background_subtract,
             mean_bg_arr,
             std_bg_arr,

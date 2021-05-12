@@ -4,12 +4,14 @@ import argparse
 import dask
 import os.path
 import logging
+
 # from . import constants as const
 from ..utils import unwrap
 from .. import utils
-from .. import pipelines #, irods
+from .. import pipelines  # , irods
 from ..core import LazyPipelineCollection
-from ..tasks import iofits # obs_table, iofits, sky_model, detector, data_quality
+from ..tasks import iofits  # obs_table, iofits, sky_model, detector, data_quality
+
 # from .ref import clio
 
 from .base import BaseCommand
@@ -36,10 +38,12 @@ class ComputeSkyModel(BaseCommand):
             "--mask-dilate-iters",
             type=int,
             default=4,
-            help=unwrap('''
+            help=unwrap(
+                """
                 Number of times to grow mask regions before selecting
                 cross-validation pixels (default: 4)
-            '''),
+            """
+            ),
         )
         # parser.add_argument(
         #     "--mask-n-sigma",
@@ -78,7 +82,9 @@ class ComputeSkyModel(BaseCommand):
             return
 
         # execute
-        badpix_arr = dask.delayed(iofits.load_fits_from_path)(badpix_path)[0].data.persist()
+        badpix_arr = dask.delayed(iofits.load_fits_from_path)(badpix_path)[
+            0
+        ].data.persist()
         inputs_coll = LazyPipelineCollection(all_files).map(iofits.load_fits_from_path)
         # coll = LazyPipelineCollection(all_files)
         # sky_cube = (
@@ -108,16 +114,15 @@ class ComputeSkyModel(BaseCommand):
             mask_dilate_iters,
         )
         dask.persist(results)
-        (
-            components, mean_sky, stddev_sky,
-            min_err, max_err, avg_err
-        ) = results
+        (components, mean_sky, stddev_sky, min_err, max_err, avg_err) = results
         # save
-        fits.PrimaryHDU(
-            np.asarray(components.compute())
-        ).writeto(components_fn, overwrite=True)
+        fits.PrimaryHDU(np.asarray(components.compute())).writeto(
+            components_fn, overwrite=True
+        )
         log.info(f"{n_components} components written to {components_fn}")
         fits.PrimaryHDU(np.asarray(mean_sky.compute())).writeto(mean_fn, overwrite=True)
         log.info(f"Mean sky written to {mean_fn}")
-        fits.PrimaryHDU(np.asarray(stddev_sky.compute())).writeto(stddev_fn, overwrite=True)
+        fits.PrimaryHDU(np.asarray(stddev_sky.compute())).writeto(
+            stddev_fn, overwrite=True
+        )
         log.info(f"Stddev sky written to {stddev_fn}")

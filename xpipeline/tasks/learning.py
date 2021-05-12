@@ -7,6 +7,7 @@ import numpy as np
 # letting them be `None` without it being an ImportError
 # (We'll see if that was a good decision...)
 from .. import core
+
 cp = core.cupy
 da = core.dask_array
 torch = core.torch
@@ -20,10 +21,10 @@ from .. import utils
 
 log = logging.getLogger(__name__)
 
-@dask.delayed(nout=2)
+
 def train_test_split(array, test_frac, random_state=0):
     random.seed(random_state)
-    log.debug(f'{array=}')
+    log.debug(f"{array=}")
     n_elems = array.shape[0]
     elements = range(n_elems)
     mask = np.zeros(n_elems, dtype=bool)
@@ -33,12 +34,12 @@ def train_test_split(array, test_frac, random_state=0):
         mask[idx] = True
     train_subarr, test_subarr = array[~mask], array[mask]
     log.info(f"Cross-validation reserved {100 * test_frac:2.1f}% of inputs")
-    log.info(f'Split {n_elems} into {train_subarr.shape[0]} and {test_subarr.shape[0]}')
+    log.info(f"Split {n_elems} into {train_subarr.shape[0]} and {test_subarr.shape[0]}")
     return train_subarr, test_subarr
 
 
 def drop_idx_range_cols(arr, min_excluded_idx, max_excluded_idx):
-    '''Note exclusive upper bound: [min_excluded_idx, max_excluded_idx)'''
+    """Note exclusive upper bound: [min_excluded_idx, max_excluded_idx)"""
     xp = core.get_array_module(arr)
     rows, cols = arr.shape
     n_drop = max_excluded_idx - min_excluded_idx
@@ -47,14 +48,14 @@ def drop_idx_range_cols(arr, min_excluded_idx, max_excluded_idx):
     # L | |  R
 
     # L
-    out[:,:min_excluded_idx] = arr[:,:min_excluded_idx]
+    out[:, :min_excluded_idx] = arr[:, :min_excluded_idx]
     # R
-    out[:,min_excluded_idx:] = arr[:,max_excluded_idx:]
+    out[:, min_excluded_idx:] = arr[:, max_excluded_idx:]
     return out
 
 
 def drop_idx_range_rows(arr, min_excluded_idx, max_excluded_idx):
-    '''Note exclusive upper bound: [min_excluded_idx, max_excluded_idx)'''
+    """Note exclusive upper bound: [min_excluded_idx, max_excluded_idx)"""
     xp = core.get_array_module(arr)
     rows, cols = arr.shape
     n_drop = max_excluded_idx - min_excluded_idx
@@ -72,7 +73,7 @@ def drop_idx_range_rows(arr, min_excluded_idx, max_excluded_idx):
 
 
 def torch_svd(array, full_matrices=False, n_modes=None):
-    '''Wrap `torch.svd` to handle conversion between NumPy/CuPy arrays
+    """Wrap `torch.svd` to handle conversion between NumPy/CuPy arrays
     and Torch tensors. Returns U s V such that
     allclose(U @ diag(s) @ V.T, array) (with some tolerance).
 
@@ -92,24 +93,26 @@ def torch_svd(array, full_matrices=False, n_modes=None):
     mtx_u
     diag_s
     mtx_v
-    '''
+    """
     xp = core.get_array_module(array)
     torch_array = torch.as_tensor(array)
     # Note: use of the `out=` argument for torch.svd and preallocated
     # output tensors proved not to save any runtime, so for simplicity
     # they're not retained.
-    torch_mtx_u, torch_diag_s, torch_mtx_v = torch.svd(torch_array, some=not full_matrices)
+    torch_mtx_u, torch_diag_s, torch_mtx_v = torch.svd(
+        torch_array, some=not full_matrices
+    )
     mtx_u = xp.asarray(torch_mtx_u)
     diag_s = xp.asarray(torch_diag_s)
     mtx_v = xp.asarray(torch_mtx_v)
     if n_modes is not None:
-        return mtx_u[:,:n_modes], diag_s[:n_modes], mtx_v[:,:n_modes]
+        return mtx_u[:, :n_modes], diag_s[:n_modes], mtx_v[:, :n_modes]
     else:
         return mtx_u, diag_s, mtx_v
 
 
 def generic_svd(mtx_x, n_modes, n_power_iter=0):
-    '''Computes SVD of mtx_x returning U, s, and V such that
+    """Computes SVD of mtx_x returning U, s, and V such that
     allclose(mtx_x, U @ diag(s) @ V.T) (with some tolerance).
 
     When supplied with CPU arrays, `torch` is used if available, TODO
@@ -139,17 +142,18 @@ def generic_svd(mtx_x, n_modes, n_power_iter=0):
     mtx_u
     diag_s
     mtx_v
-    '''
+    """
     xp = core.get_array_module(mtx_x)
     if xp is da:
         mtx_u, diag_s, mtx_v = da.linalg.svd(mtx_x)
     elif xp in (np, cp):
         mtx_u, diag_s, mtx_vt = xp.linalg.svd(mtx_x, full_matrices=False)
         mtx_v = mtx_vt.T
-    return mtx_u[:,:n_modes], diag_s[:n_modes], mtx_v[:,:n_modes]
+    return mtx_u[:, :n_modes], diag_s[:n_modes], mtx_v[:, :n_modes]
+
 
 def cpu_top_k_svd_arpack(array, n_modes=None):
-    '''Calls scipy.sparse.linalg.svds to compute top `n_modes`
+    """Calls scipy.sparse.linalg.svds to compute top `n_modes`
     singular vectors.  Returns U s V such that
     `U @ diag(s) @ V.T` is the rank-`n_modes` SVD of `array`
 
@@ -166,14 +170,17 @@ def cpu_top_k_svd_arpack(array, n_modes=None):
     mtx_u
     diag_s
     mtx_v
-    '''
+    """
     if n_modes is None:
         n_modes = min(array.shape)
     mtx_u, diag_s, mtx_vt = svds(aslinearoperator(array), k=n_modes)
     return mtx_u, diag_s, mtx_vt.T
 
-def minimal_downdate(mtx_u, diag_s, mtx_v, min_col_to_remove, max_col_to_remove, compute_v=False):
-    '''Modify an existing SVD `mtx_u @ diag(diag_s) @ mtx_v.T` to
+
+def minimal_downdate(
+    mtx_u, diag_s, mtx_v, min_col_to_remove, max_col_to_remove, compute_v=False
+):
+    """Modify an existing SVD `mtx_u @ diag(diag_s) @ mtx_v.T` to
     remove columns given by `col_idxs_to_remove`, returning
     a new diagonalization
 
@@ -197,7 +204,7 @@ def minimal_downdate(mtx_u, diag_s, mtx_v, min_col_to_remove, max_col_to_remove,
     new_mtx_v : array (q, r) or None
         If `compute_v` is True this is the updated V matrix,
         otherwise None.
-    '''
+    """
     xp = core.get_array_module(mtx_u)
     dim_r = diag_s.shape[0]
     assert mtx_u.shape[1] == dim_r
@@ -226,7 +233,9 @@ def minimal_downdate(mtx_u, diag_s, mtx_v, min_col_to_remove, max_col_to_remove,
 
     # Additive modification to inner diagonal matrix
     mtx_k = xp.diag(diag_s)
-    mtx_k += mtx_uta @ mtx_vtb.T  # U^T A is r x c, (V^T B)^T is c x r, O(r c r) -> r x r
+    mtx_k += (
+        mtx_uta @ mtx_vtb.T
+    )  # U^T A is r x c, (V^T B)^T is c x r, O(r c r) -> r x r
 
     # Smaller (dimension r x r) SVD to re-diagonalize, giving
     # rotations of the left and right singular vectors and

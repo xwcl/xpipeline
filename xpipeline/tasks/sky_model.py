@@ -1,19 +1,68 @@
 import logging
-
-log = logging.getLogger(__name__)
-from textwrap import dedent
+from dataclasses import dataclass
+from typing import List, Union
 
 import dask
 import dask.array as da
-from astropy.io import fits
+import distributed.protocol
 import numpy as np
 import scipy.ndimage
 
+from . import iofits, improc
 from ..utils import unwrap
 
+log = logging.getLogger(__name__)
 
-@dask.delayed(nout=3)
+
+@dataclass
+class SkyModel:
+    components: np.ndarray
+    mean_sky: np.ndarray
+    stddev_sky: np.ndarray
+    min_err: float
+    max_err: float
+    avg_err: float
+
+    @classmethod
+    def from_hdulist(cls, hdulist):
+        cls(
+            components=hdulist["COMPONENTS"].data,
+            mean_sky=hdulist["MEAN_SKY"].data,
+            stddev_sky=hdulist["STDDEV_SKY"].data,
+            min_err=hdulist["COMPONENTS"].header["MIN_ERR"],
+            max_err=hdulist["COMPONENTS"].header["MAX_ERR"],
+            avg_err=hdulist["COMPONENTS"].header["AVG_ERR"],
+        )
+
+    def to_dask_hdulist(self):
+        components, mean_sky, stddev_sky, min_err, max_err, avg_err = dask.compute(
+            self.components,
+            self.mean_sky,
+            self.stddev_sky,
+            self.min_err,
+            self.max_err,
+            self.avg_err,
+        )
+        components_hdu = iofits.DaskHDU(components)
+        components_hdu.header["EXTNAME"] = "COMPONENTS"
+        components_hdu.header["MIN_ERR"] = min_err
+        components_hdu.header["MAX_ERR"] = max_err
+        components_hdu.header["AVG_ERR"] = avg_err
+        mean_sky_hdu = iofits.DaskHDU(mean_sky)
+        mean_sky_hdu.header["EXTNAME"] = "MEAN_SKY"
+        stddev_sky_hdu = iofits.DaskHDU(stddev_sky)
+        stddev_sky_hdu.header["EXTNAME"] = "STDDEV_SKY"
+        return iofits.DaskHDUList([components_hdu, mean_sky_hdu, stddev_sky_hdu])
+
+    def to_fits_hdulist(self):
+        return self.to_dask_hdulist().to_fits()
+
+
+distributed.protocol.register_generic(SkyModel)
+
+
 def compute_components(sky_cube, n_components):
+    log.debug(f"{sky_cube=}")
     sky_cube[da.isnan(sky_cube)] = 0.0
     mean_sky_image = da.mean(sky_cube, axis=0)
     stddev_sky_image = da.std(sky_cube, axis=0)
@@ -21,7 +70,7 @@ def compute_components(sky_cube, n_components):
     all_real_mtx = (
         (sky_cube - mean_sky_image).reshape((planes, rows * cols)).T
     )  # now cube is rows*cols x planes
-    log.info(f"computing SVD of {all_real_mtx.shape} matrix")
+    log.info(f"requesting SVD of {all_real_mtx.shape} matrix")
     mtx_u, _, _ = da.linalg.svd_compressed(
         all_real_mtx, k=n_components
     )  # mtx_u is rows*cols x n_components
@@ -65,7 +114,13 @@ def reconstruct_masked(original_image, components_cube, model_mean, bad_bg_mask)
 
 
 def generate_background_mask(
-    std_bg_arr, mean_bg_arr, badpix_arr, iterations, n_sigma=None, science_arr=None
+    std_bg_arr: np.ndarray,
+    mean_bg_arr: np.ndarray,
+    badpix_arr: np.ndarray,
+    iterations: int,
+    n_sigma: float = None,
+    science_arr: np.ndarray = None,
+    exclude: Union[List[improc.BBox], None] = None,
 ):
     """Detects pixels that are not reliable for background level sensing
     using heuristics based on background pixel statistics, bad pixel mask,
@@ -76,24 +131,28 @@ def generate_background_mask(
     bad_bg_pix_mask : 2D boolean array
         True pixels are bad for background estimation
     """
-    bg_arr_1d = std_bg_arr.flatten()
-    percentile_threshold = da.percentile(bg_arr_1d, 90)
-    median_bg_std = np.median(bg_arr_1d, axis=0)
+    percentile_threshold = np.percentile(std_bg_arr, 90)
+    median_bg_std = np.median(std_bg_arr)
     bad_bg_pix_mask = badpix_arr != 0
     bad_bg_pix_mask = (badpix_arr != 0) | bad_bg_pix_mask
     bad_bg_pix_mask = (std_bg_arr > percentile_threshold) | bad_bg_pix_mask
     if science_arr is not None:
         if n_sigma is None:
             raise ValueError("When science_arr is supplied, n_sigma must be too")
-        bad_bg_pix_mask = (science_arr > n_sigma * median_bg_std + mean_bg_arr) | bad_bg_pix_mask
+        bad_bg_pix_mask = (
+            science_arr > n_sigma * median_bg_std + mean_bg_arr
+        ) | bad_bg_pix_mask
     bad_bg_pix_mask = scipy.ndimage.binary_dilation(
         bad_bg_pix_mask, iterations=iterations
     )
+    if exclude is not None:
+        for bbox in exclude:
+            yslice, xslice = bbox.slices
+            bad_bg_pix_mask[yslice, xslice] = True
     assert np.count_nonzero(~bad_bg_pix_mask) >= 0.05 * std_bg_arr.size
     return bad_bg_pix_mask
 
 
-@dask.delayed(nout=3)
 def cross_validate(
     sky_cube_test, components_cube, std_bg_arr, mean_bg_arr, badpix_arr, iterations
 ):
@@ -111,24 +170,30 @@ def cross_validate(
     log.info(f"STD: {min_err=}, {max_err=}, {avg_err=}")
     return min_err, max_err, avg_err
 
-@dask.delayed
+
 def background_subtract(
-    hdul,
-    mean_bg_arr,
-    std_bg_arr,
-    components_cube,
-    badpix_arr,
-    iterations,
-    n_sigma,
+    hdul: iofits.DaskHDUList,
+    sky_model: SkyModel,
+    badpix_arr: np.ndarray,
+    iterations: int,
+    n_sigma: float,
+    exclude: Union[List[improc.BBox], None],
     ext=0,
 ):
     log.info(f"Subtracting sky background from {hdul[ext].data}")
     sci_arr = hdul[ext].data
-    bgsub_science_arr = sci_arr - mean_bg_arr
     bad_bg_pix = generate_background_mask(
-        bgsub_science_arr, std_bg_arr, mean_bg_arr, badpix_arr, iterations, n_sigma
+        sky_model.stddev_sky,
+        sky_model.mean_sky,
+        badpix_arr,
+        iterations,
+        n_sigma=n_sigma,
+        science_arr=sci_arr,
+        exclude=exclude,
     )
-    bg_estimate = reconstruct_masked(sci_arr, components_cube, mean_bg_arr, bad_bg_pix)
+    bg_estimate = reconstruct_masked(
+        sci_arr, sky_model.components, sky_model.mean_sky, bad_bg_pix
+    )
     sci_final = sci_arr - bg_estimate
     log.debug(
         f"Mean in background measurement pixels: {np.average(sci_final[~bad_bg_pix])}"
@@ -142,7 +207,7 @@ def background_subtract(
 
     msg = unwrap(
         f"""
-        Reconstructed sky background using {components_cube.shape[0]} image
+        Reconstructed sky background using {sky_model.components.shape[0]} image
         basis. Background mask used threshold  {n_sigma} * std(background),
         repeated dilation for {iterations} iterations, leaving 
         {n_pix_total - n_bad_bg_pix} / {n_pix_total}
@@ -153,7 +218,10 @@ def background_subtract(
     )
     out_hdul = hdul.updated_copy(
         sci_final,
-        {"BGRMS": (recons_vals_std, "RMS error in background sensing pixels")},
+        {
+            "BGRMS": (recons_vals_std, "RMS error in background sensing pixels"),
+            "XBGSUB": (True, "Background subtraction complete?"),
+        },
         history=msg,
         ext=ext,
     )

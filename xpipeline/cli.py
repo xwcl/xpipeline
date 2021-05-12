@@ -8,7 +8,15 @@ import numpy
 from dask.distributed import Client
 
 from exao_dap_client.data_store import get_fs
-from .commands import compute_sky_model, copy_test, klip, eval_klip, local_klip, diagnostic, collect_dataset
+from .commands import (
+    compute_sky_model,
+    copy_test,
+    klip,
+    eval_klip,
+    local_klip,
+    diagnostic,
+    collect_dataset,
+)
 
 from . import utils
 
@@ -24,11 +32,11 @@ COMMANDS = {
     diagnostic.Diagnostic,
 }
 
+
 def main():
     parser = argparse.ArgumentParser()
     parser.set_defaults(command_cls=None)
-    subps = parser.add_subparsers(title='subcommands',
-                                  description='valid subcommands')
+    subps = parser.add_subparsers(title="subcommands", description="valid subcommands")
     names = set()
     for command_cls in COMMANDS:
         if command_cls.name is None or command_cls.name in names:
