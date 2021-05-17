@@ -63,10 +63,10 @@ def test_inject_signals():
 
     # NumPy only
     outcube = inject_signals(cube, angles, specs, template)
-    assert outcube[0][128 // 2, 128 // 2 - r_px] == out_pix_val
-    assert outcube[1][128 // 2 + r_px, 128 // 2] == out_pix_val
-    assert outcube[2][128 // 2, 128 // 2 + r_px] == out_pix_val
-    assert outcube[3][128 // 2 - r_px, 128 // 2] == out_pix_val
+    assert np.isclose(outcube[0][128 // 2, 128 // 2 - r_px], out_pix_val)
+    assert np.isclose(outcube[1][128 // 2 + r_px, 128 // 2], out_pix_val)
+    assert np.isclose(outcube[2][128 // 2, 128 // 2 + r_px], out_pix_val)
+    assert np.isclose(outcube[3][128 // 2 - r_px, 128 // 2], out_pix_val)
 
     # With Dask
     d_cube = da.from_array(cube).rechunk((n_frames, -1, -1))
@@ -74,10 +74,10 @@ def test_inject_signals():
     outcube = inject_signals(d_cube, d_angles, specs, template)
     outcube = outcube.compute()
     angles = d_angles.compute()
-    assert outcube[0][128 // 2, 128 // 2 - r_px] == out_pix_val
-    assert outcube[1][128 // 2 + r_px, 128 // 2] == out_pix_val
-    assert outcube[2][128 // 2, 128 // 2 + r_px] == out_pix_val
-    assert outcube[3][128 // 2 - r_px, 128 // 2] == out_pix_val
+    assert np.isclose(outcube[0][128 // 2, 128 // 2 - r_px], out_pix_val)
+    assert np.isclose(outcube[1][128 // 2 + r_px, 128 // 2], out_pix_val)
+    assert np.isclose(outcube[2][128 // 2, 128 // 2 + r_px], out_pix_val)
+    assert np.isclose(outcube[3][128 // 2 - r_px, 128 // 2], out_pix_val)
 
 
 def test_end_to_end_dask():
@@ -144,4 +144,4 @@ def test_end_to_end_dask():
         apertures_to_exclude=1,
     )
     recovered_signals = dask.compute(d_recovered_signals)[0]
-    assert recovered_signals[0].snr > 12.7
+    assert recovered_signals[0].snr > 12.
