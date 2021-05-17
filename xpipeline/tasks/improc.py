@@ -1,11 +1,12 @@
 import warnings
-from typing import Tuple, Union
+from typing import Tuple, Union, List
 from functools import partial
 import numpy as np
 import logging
 from numpy.core.numeric import count_nonzero
 from scipy.ndimage import binary_dilation
 import skimage.transform
+import skimage.registration
 from astropy.convolution import convolve_fft
 from astropy.convolution.kernels import Gaussian2DKernel
 from dataclasses import dataclass
@@ -39,7 +40,7 @@ def rough_peak_in_box(data, initial_guess, box_size):
     Parameters
     ----------
     data : ndarray
-    initial_guess : (init_x, init_y) int
+    initial_guess : (init_y, init_x) int
     box_size : (box_height, box_width) int
 
     Returns
@@ -624,6 +625,150 @@ class CutoutTemplateSpec(BBox):
 
 distributed.protocol.register_generic(CutoutTemplateSpec)
 
+
+def gauss2d(shape, center, sigma):
+    """Evaluate Gaussian distribution in 2D on an array of shape
+    `shape`, centered at `(center_y, center_x)`, and with a sigma
+    of `(sigma_y, sigma_x)`
+    """
+    mu_y, mu_x = center
+    sigma_y, sigma_x = sigma
+    yy, xx = np.indices(shape, dtype=float)
+
+    return 1 / (2 * np.pi * sigma_x * sigma_y) * np.exp(-(
+            (xx - mu_x) ** 2 / (2 * sigma_x ** 2) +
+            (yy - mu_y) ** 2 / (2 * sigma_y ** 2)
+    ))
+
+def pad_to_match(arr_a : np.ndarray, arr_b : np.ndarray):
+
+    a_height, a_width = arr_a.shape
+    b_height, b_width = arr_b.shape
+    if a_height > b_height:
+        arr_b = np.pad(arr_b, [(0, a_height - b_height), (0, 0)])
+    elif b_height > a_height:
+        arr_a = np.pad(arr_a, [(0, b_height - a_height), (0, 0)])
+
+    if a_width > b_width:
+        arr_b = np.pad(arr_b, [(0, 0), (0, a_width - b_width)])
+    elif b_width > a_width:
+        arr_a = np.pad(arr_a, [(0, 0), (0, b_width - a_width)])
+    assert arr_a.shape == arr_b.shape
+    return arr_a, arr_b
+
+
+def aligned_cutout(sci_arr: np.ndarray, spec: CutoutTemplateSpec, upsample_factor: int = 100):
+    # cut out bbox
+    rough_cutout = sci_arr[spec.slices]
+    yy, xx = np.indices(rough_cutout.shape)
+    interp_cutout = regrid_image(
+        rough_cutout,
+        x_prime=xx,
+        y_prime=yy,
+        method='cubic'
+    )
+    template = spec.template
+    # pad to match shapes
+    rough_cutout, template = pad_to_match(rough_cutout, template)
+    # xcorr
+    shifts, error, phasediff = skimage.registration.phase_cross_correlation(
+        reference_image=template,
+        moving_image=interp_cutout,
+        upsample_factor=upsample_factor,
+    )
+    # add offset + xcorr displacement
+    yy, xx = np.indices(template.shape, dtype=float)
+    yy -= spec.origin[0]
+    yy -= shifts[0]
+    xx -= spec.origin[1]
+    xx -= shifts[1]
+    # regrid
+    out_image = regrid_image(sci_arr, xx, yy, method='cubic')
+    return out_image
+
+from scipy import interpolate
+def make_grid(shape,
+              rotation, rotation_x_center, rotation_y_center,
+              scale_x, scale_y, scale_x_center, scale_y_center,
+              x_shift, y_shift):
+    '''
+    Given the dimensions of a 2D image, compute the pixel center coordinates
+    for a rotated/scaled/shifted grid.
+
+    1. Rotate about (rotation_x_center, rotation_y_center)
+    2. Scale about (scale_x_center, scale_y_center)
+    3. Shift by (x_shift, y_shift)
+
+    Returns
+    -------
+
+    xx, yy : 2D arrays
+        x and y coordinates for pixel centers
+        of the shifted grid
+    '''
+    yy, xx = np.indices(shape)
+    if rotation != 0:
+        r = np.hypot(xx - rotation_x_center, yy - rotation_y_center)
+        phi = np.arctan2(yy - rotation_y_center, xx - rotation_x_center)
+        yy_rotated = r * np.sin(phi + rotation) + rotation_y_center
+        xx_rotated = r * np.cos(phi + rotation) + rotation_x_center
+    else:
+        yy_rotated, xx_rotated = yy, xx
+    if scale_y != 1:
+        yy_scaled = (yy_rotated - scale_y_center) / scale_y + scale_y_center
+    else:
+        yy_scaled = yy_rotated
+    if scale_x != 1:
+        xx_scaled = (xx_rotated - scale_x_center) / scale_x + scale_x_center
+    else:
+        xx_scaled = xx_rotated
+    if y_shift != 0:
+        yy_shifted = yy_scaled + y_shift
+    else:
+        yy_shifted = yy_scaled
+    if x_shift != 0:
+        xx_shifted = xx_scaled + x_shift
+    else:
+        xx_shifted = xx_scaled
+    return xx_shifted, yy_shifted
+
+def regrid_image(image, x_prime, y_prime, method='cubic', mask=None, fill_value=0.0):
+    '''Given a 2D image and correspondingly shaped mask,
+    as well as 2D arrays of transformed X and Y coordinates,
+    interpolate a transformed image.
+
+    Parameters
+    ----------
+    image
+        2D array holding an image
+    x_prime
+        transformed X coordinates in the same shape as image.shape
+    y_prime
+        tranformed Y coordinates
+    method : optional, default 'cubic'
+        interpolation method passed to `scipy.interpolate.griddata`
+    mask
+        boolean array of pixels to keep
+        ('and'-ed with the set of finite/non-NaN pixels)
+    fill_value
+        value for points outside the convex hull of True mask entries
+    '''
+    if mask is not None:
+        mask = mask.copy()
+        mask &= np.isfinite(image)
+    else:
+        mask = np.isfinite(image)
+    yy, xx = np.indices(image.shape)
+    xx_sub = xx[mask]
+    yy_sub = yy[mask]
+    zz = image[mask]
+    new_image = interpolate.griddata(
+        np.stack((xx_sub.flat, yy_sub.flat), axis=-1),
+        zz.flatten(),
+        (x_prime, y_prime),
+        fill_value=fill_value,
+        method=method).reshape(x_prime.shape)
+    return new_image
 
 def encircled_energy_and_profile(
     data,

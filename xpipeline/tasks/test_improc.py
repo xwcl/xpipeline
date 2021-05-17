@@ -210,3 +210,11 @@ def test_derotate_cube(xp):
     if xp is da:
         out_cube = out_cube.compute()
     assert np.all(out_cube[:, 2, 1] > 0.99)
+
+def test_aligned_cutout():
+    picshape = 128, 128
+    psfim = improc.gauss2d(picshape, improc.center(picshape), (10, 10))
+    sci_arr = improc.ft_shift2(psfim, 15.75, 13.5)
+    spec = improc.CutoutTemplateSpec(origin=(0, 0), extent=picshape, template=psfim, name='primary')
+    res = improc.aligned_cutout(sci_arr, spec)
+    assert np.average((res - psfim)[25:100,25:100]) < 1e-5
