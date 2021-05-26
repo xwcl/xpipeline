@@ -15,12 +15,12 @@ from ..tasks import iofits  # obs_table, iofits, sky_model, detector, data_quali
 
 # from .ref import clio
 
-from .base import BaseCommand
+from .base import MultiInputCommand
 
 log = logging.getLogger(__name__)
 
 
-class CopyTest(BaseCommand):
+class CopyTest(MultiInputCommand):
     name = "copy_test"
     help = "Test CLI infrastructure by copying inputs to destination"
 

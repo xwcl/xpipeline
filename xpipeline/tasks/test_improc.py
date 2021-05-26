@@ -127,7 +127,7 @@ def test_unwrap_many_3d(xp):
 
 
 def test_cartesian_coords():
-    xx, yy = cartesian_coords((0.5, 0.5), (2, 2))
+    yy, xx = cartesian_coords((0.5, 0.5), (2, 2))
     ref_xx = np.asarray([[-0.5, 0.5], [-0.5, 0.5]])
     ref_yy = np.asarray([[-0.5, -0.5], [0.5, 0.5]])
     assert np.allclose(xx, ref_xx)
@@ -211,10 +211,32 @@ def test_derotate_cube(xp):
         out_cube = out_cube.compute()
     assert np.all(out_cube[:, 2, 1] > 0.99)
 
+
 def test_aligned_cutout():
     picshape = 128, 128
-    psfim = improc.gauss2d(picshape, improc.center(picshape), (10, 10))
-    sci_arr = improc.ft_shift2(psfim, 15.75, 13.5)
-    spec = improc.CutoutTemplateSpec(origin=(0, 0), extent=picshape, template=psfim, name='primary')
+    psfim = improc.gauss2d(picshape, improc.arr_center(picshape), (10, 10))
+    sci_arr = improc.ft_shift2(psfim, -4.33, -5.75)[15:100,20:90]
+    spec = improc.CutoutTemplateSpec(
+        origin=(0, 0), extent=picshape, template=psfim, name="primary"
+    )
     res = improc.aligned_cutout(sci_arr, spec)
-    assert np.average((res - psfim)[25:100,25:100]) < 1e-5
+    assert np.average((res - psfim)[15:100,20:90]) < 1e-5
+
+
+def test_rotate():
+    # cpu
+    image = improc.f_test(100)
+    # no dest supplied
+    result1 = improc.cpu_rotate(image, 45)
+    # just smoke test:
+    assert np.count_nonzero(result1) != 0, "CPU rotate somehow clobbered input"
+    # yes dest supplied
+    dest = np.zeros_like(image)
+    result2 = improc.cpu_rotate(image, 45, dest_image=dest)
+    assert result2 is dest, "CPU rotate supplying dest array didn't return the dest array"
+    nanmask = np.isnan(result1)
+    assert np.allclose(result1[~nanmask], result2[~nanmask]), "CPU rotate with supplied dest array produced different answer from newly allocated"
+    # 90deg agrees
+    # nb sense of angle reversed between this code and np/cp.rot90
+    result3 = improc.cpu_rotate(image, -90, fill_value=0.0)  # TODO flip arrays first and only rotate the remaining <90deg
+    assert np.allclose(result3, np.rot90(image)), "CPU interpolated image disagrees with simple 90deg rotation"

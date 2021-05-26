@@ -190,3 +190,23 @@ class EagerPipelineCollection(LazyPipelineCollection):
 
     def compute(self):
         return self.items
+
+def _dask_reduce_bitwise_or(chunks):
+    if hasattr(chunks, 'dtype'):
+        dtype = chunks.dtype
+    else:
+        dtype = chunks[0].dtype
+    if hasattr(chunks, 'shape'):
+        shape = chunks.shape[1:]
+    else:
+        shape = chunks[0].shape[1:]
+    out = numpy.zeros(shape, dtype)
+    for chunk in chunks:
+        out |= numpy.bitwise_or.reduce(chunk, axis=0)
+    return out
+def reduce_bitwise_or(arr):
+    xp = get_array_module(arr)
+    if xp is dask_array:
+        return dask_array.blockwise(_dask_reduce_bitwise_or, 'jk', arr, 'ijk')
+    else:
+        return numpy.bitwise_or.reduce(arr, axis=0)

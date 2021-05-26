@@ -8,7 +8,7 @@ WHITESPACE_RE = re.compile(r"\s+")
 
 
 def unwrap(message):
-    return WHITESPACE_RE.sub(" ", message)
+    return WHITESPACE_RE.sub(" ", message).strip()
 
 
 def get_memory_use_mb():

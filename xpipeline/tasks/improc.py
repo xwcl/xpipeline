@@ -1,8 +1,10 @@
 import warnings
 from typing import Tuple, Union, List
+import math
 from functools import partial
 import numpy as np
 import logging
+from numba import jit, float64, int64
 from numpy.core.numeric import count_nonzero
 from scipy.ndimage import binary_dilation
 import skimage.transform
@@ -24,7 +26,7 @@ def gaussian_smooth(data, kernel_stddev_px):
     return convolve_fft(data, Gaussian2DKernel(kernel_stddev_px), boundary="wrap")
 
 
-def center(arr_or_shape):
+def arr_center(arr_or_shape):
     """Center coordinates for a 2D image (or shape) using the
     convention that indices are the coordinates of the centers
     of pixels, which run from (idx - 0.5) to (idx + 0.5)
@@ -32,7 +34,7 @@ def center(arr_or_shape):
     shape = getattr(arr_or_shape, "shape", arr_or_shape)
     if len(shape) != 2:
         raise ValueError("Only do this on 2D images")
-    return (shape[1] - 1) / 2, (shape[0] - 1) / 2
+    return (shape[0] - 1) / 2, (shape[1] - 1) / 2
 
 
 def rough_peak_in_box(data, initial_guess, box_size):
@@ -340,7 +342,7 @@ def mask_arc(
 def cartesian_coords(
     center: Tuple[float, float], data_shape: Tuple[int, int]
 ) -> np.ndarray:
-    """center in x,y order; data_shape in (h, w); returns coord arrays xx, yy of data_shape
+    """center in y,x order; data_shape in (h, w); returns coord arrays yy, xx of data_shape
 
     Matrix layout ((0,0) at upper left) for (2, 2) matrix::
 
@@ -376,17 +378,17 @@ def cartesian_coords(
         yy = [[-0.5, -0.5], [0.5, 0.5]]
     """
     yy, xx = np.indices(data_shape, dtype=float)
-    center_x, center_y = center
+    center_y, center_x = center
     yy -= center_y
     xx -= center_x
-    return np.stack([xx, yy])
+    return np.stack([yy, xx])
 
 
 def polar_coords(
     center: Tuple[float, float], data_shape: Tuple[int, int]
 ) -> np.ndarray:
-    """center in x,y order; data_shape in (h, w); returns coord arrays rho, phi of data_shape"""
-    xx, yy = cartesian_coords(center, data_shape)
+    """center in y,x order; data_shape in (h, w); returns coord arrays rho, phi of data_shape"""
+    yy, xx = cartesian_coords(center, data_shape)
     rho = np.sqrt(yy ** 2 + xx ** 2)
     phi = np.arctan2(yy, xx)
     return np.stack([rho, phi])
@@ -404,22 +406,16 @@ def max_radius(center: Tuple[float, float], data_shape: Tuple[int, int]) -> floa
     return min(bottom_left, top_right)
 
 
-def ft_shift2(
-    image: np.ndarray,
-    dx: float,
-    dy: float,
-    flux_tol: Union[None, float] = 1e-15,
-    output_shape=None,
-):
+def ft_shift2(image: np.ndarray, dy: float, dx: float, flux_tol: Union[None, float] = 1e-15, output_shape=None):
     """
     Fast Fourier subpixel shifting
 
     Parameters
     ----------
-    dx : float
-        Translation in +X direction (i.e. a feature at (x, y) moves to (x + dx, y))
     dy : float
         Translation in +Y direction (i.e. a feature at (x, y) moves to (x, y + dy))
+    dx : float
+        Translation in +X direction (i.e. a feature at (x, y) moves to (x + dx, y))
     flux_tol : float
         Fractional flux change permissible
         ``(sum(output) - sum(image)) / sum(image) < flux_tol``
@@ -572,16 +568,42 @@ def derotate_cube(cube, derotation_angles):
         output[idx] = skimage.transform.rotate(cube[idx], -derotation_angles[idx])
     return output
 
+# @distributed.protocol.register_generic
+@dataclass
+class Pixel:
+    y : int
+    x : int
 
 @dataclass
+class Point:
+    y : float
+    x : float
+
+# @distributed.protocol.register_generic
+@dataclass
+class PixelExtent:
+    height : int
+    width : int
+
+# @distributed.protocol.register_generic
+@dataclass
 class BBox:
-    origin: tuple[int, int]
-    extent: tuple[int, int]
+    origin : Pixel
+    extent : PixelExtent
 
     @classmethod
-    def from_center(cls, center_coords, extent):
-        cy, cx = center_coords
-        return cls(origin=(cy - extent[0] / 2, cx - extent[1] / 2), extent=extent)
+    def from_center(cls, center : Pixel, extent : PixelExtent):
+        cy, cx = center.y, center.x
+        origin = Pixel(y=cy - extent[0] / 2, x= cx - extent[1] / 2)
+        return cls(origin=origin, extent=extent)
+
+    @classmethod
+    def from_spec(cls, spec):
+        try:
+            oy, ox, dy, dx = [int(x) for x in spec.split(',')]
+            return cls(origin=(oy, ox), extent=(dy, dx))
+        except ValueError:
+            raise ValueError(f"Invalid BBox spec {repr(spec)}")
 
     @property
     def center(self):
@@ -616,14 +638,22 @@ class BBox:
 
 distributed.protocol.register_generic(BBox)
 
-
 @dataclass
-class CutoutTemplateSpec(BBox):
+class CutoutTemplateSpec:
+    search_box : BBox
     template: np.ndarray
     name: str
 
-
 distributed.protocol.register_generic(CutoutTemplateSpec)
+
+
+def construct_default_template_spec(frame_shape, sigma=10, template_shape=None):
+    if template_shape is None:
+        template_shape = frame_shape
+    template = gauss2d(template_shape, arr_center(template_shape), sigma=(sigma, sigma))
+    return CutoutTemplateSpec(
+        origin=(0, 0), extent=frame_shape, template=template, name="default"
+    )
 
 
 def gauss2d(shape, center, sigma):
@@ -635,12 +665,19 @@ def gauss2d(shape, center, sigma):
     sigma_y, sigma_x = sigma
     yy, xx = np.indices(shape, dtype=float)
 
-    return 1 / (2 * np.pi * sigma_x * sigma_y) * np.exp(-(
-            (xx - mu_x) ** 2 / (2 * sigma_x ** 2) +
-            (yy - mu_y) ** 2 / (2 * sigma_y ** 2)
-    ))
+    return (
+        1
+        / (2 * np.pi * sigma_x * sigma_y)
+        * np.exp(
+            -(
+                (xx - mu_x) ** 2 / (2 * sigma_x ** 2)
+                + (yy - mu_y) ** 2 / (2 * sigma_y ** 2)
+            )
+        )
+    )
 
-def pad_to_match(arr_a : np.ndarray, arr_b : np.ndarray):
+
+def pad_to_match(arr_a: np.ndarray, arr_b: np.ndarray):
 
     a_height, a_width = arr_a.shape
     b_height, b_width = arr_b.shape
@@ -657,41 +694,70 @@ def pad_to_match(arr_a : np.ndarray, arr_b : np.ndarray):
     return arr_a, arr_b
 
 
-def aligned_cutout(sci_arr: np.ndarray, spec: CutoutTemplateSpec, upsample_factor: int = 100):
+def aligned_cutout(
+    sci_arr: np.ndarray, spec: CutoutTemplateSpec, upsample_factor: int = 100
+):
     # cut out bbox
     rough_cutout = sci_arr[spec.slices]
-    yy, xx = np.indices(rough_cutout.shape)
-    interp_cutout = regrid_image(
-        rough_cutout,
-        x_prime=xx,
-        y_prime=yy,
-        method='cubic'
-    )
+    # interp_cutout = regrid_image(rough_cutout, x_prime=xx, y_prime=yy, method="cubic")
+    interp_cutout = interpolate_nonfinite(rough_cutout)
     template = spec.template
     # pad to match shapes
-    rough_cutout, template = pad_to_match(rough_cutout, template)
+    interp_cutout, template = pad_to_match(interp_cutout, template)
     # xcorr
     shifts, error, phasediff = skimage.registration.phase_cross_correlation(
         reference_image=template,
         moving_image=interp_cutout,
         upsample_factor=upsample_factor,
     )
-    # add offset + xcorr displacement
-    yy, xx = np.indices(template.shape, dtype=float)
-    yy -= spec.origin[0]
-    yy -= shifts[0]
-    xx -= spec.origin[1]
-    xx -= shifts[1]
-    # regrid
-    out_image = regrid_image(sci_arr, xx, yy, method='cubic')
-    return out_image
+    # cut out with slicing, FT interpolate for fractional part of shift, pad for rest
+    shift_y, shift_x = shifts
+    shift_y_int = math.floor(shift_y)
+    shift_y_frac = shift_y - shift_y_int
+    shift_x_int = math.floor(shift_x)
+    shift_x_frac = shift_x - shift_x_int
+
+    subarr = sci_arr
+    if shift_y_int < 0:
+        subarr = subarr[-shift_y_int:, :]
+    elif shift_y_int > 0:
+        subarr = np.pad(subarr, [(shift_y_int, 0), (0, 0)])
+
+    if shift_x_int < 0:
+        subarr = subarr[:, -shift_x_int:]
+    elif shift_x_int > 0:
+        subarr = np.pad(subarr, [(0, 0), (shift_x_int, 0)])
+
+    pad_y_end, pad_x_end = template.shape[0] - subarr.shape[0], template.shape[1] - subarr.shape[1]
+
+    subpix_subarr = ft_shift2(subarr, shift_y_frac, shift_x_frac)
+    if pad_y_end > 0:
+        subpix_subarr = np.pad(subpix_subarr, [(0, pad_y_end), (0, 0)], constant_values=np.nan)
+    elif pad_y_end < 0:
+        subpix_subarr = subpix_subarr[:template.shape[0]]
+    if pad_x_end > 0:
+        subpix_subarr = np.pad(subpix_subarr, [(0, 0), (0, pad_x_end)], constant_values=np.nan)
+    if pad_x_end < 0:
+        subpix_subarr = subpix_subarr[:,:template.shape[1]]
+    return subpix_subarr
+
 
 from scipy import interpolate
-def make_grid(shape,
-              rotation, rotation_x_center, rotation_y_center,
-              scale_x, scale_y, scale_x_center, scale_y_center,
-              x_shift, y_shift):
-    '''
+
+
+def make_grid(
+    shape,
+    rotation,
+    rotation_x_center,
+    rotation_y_center,
+    scale_x,
+    scale_y,
+    scale_x_center,
+    scale_y_center,
+    x_shift,
+    y_shift,
+):
+    """
     Given the dimensions of a 2D image, compute the pixel center coordinates
     for a rotated/scaled/shifted grid.
 
@@ -705,7 +771,7 @@ def make_grid(shape,
     xx, yy : 2D arrays
         x and y coordinates for pixel centers
         of the shifted grid
-    '''
+    """
     yy, xx = np.indices(shape)
     if rotation != 0:
         r = np.hypot(xx - rotation_x_center, yy - rotation_y_center)
@@ -732,8 +798,9 @@ def make_grid(shape,
         xx_shifted = xx_scaled
     return xx_shifted, yy_shifted
 
-def regrid_image(image, x_prime, y_prime, method='cubic', mask=None, fill_value=0.0):
-    '''Given a 2D image and correspondingly shaped mask,
+
+def regrid_image(image, x_prime, y_prime, method="cubic", mask=None, fill_value=0.0):
+    """Given a 2D image and correspondingly shaped mask,
     as well as 2D arrays of transformed X and Y coordinates,
     interpolate a transformed image.
 
@@ -752,7 +819,7 @@ def regrid_image(image, x_prime, y_prime, method='cubic', mask=None, fill_value=
         ('and'-ed with the set of finite/non-NaN pixels)
     fill_value
         value for points outside the convex hull of True mask entries
-    '''
+    """
     if mask is not None:
         mask = mask.copy()
         mask &= np.isfinite(image)
@@ -767,8 +834,10 @@ def regrid_image(image, x_prime, y_prime, method='cubic', mask=None, fill_value=
         zz.flatten(),
         (x_prime, y_prime),
         fill_value=fill_value,
-        method=method).reshape(x_prime.shape)
+        method=method,
+    ).reshape(x_prime.shape)
     return new_image
+
 
 def encircled_energy_and_profile(
     data,
@@ -866,3 +935,152 @@ def encircled_energy_and_profile(
         profile_bin_centers_rho,
         profile_value_at_rho,
     )
+
+
+def make_transform(image_shape, rotation_deg):
+    '''Construct transformation matrix that maps
+    (u, v) final image coordinates to (x, y) source
+    image coordinates
+
+    Parameters
+    ----------
+    image_shape : tuple
+        The array shape in NumPy order
+    rotation_deg : float
+        Rotation in degrees towards the +Y axis (CCW when origin is lower-left)
+        as applied to final image (i.e. `transform_mtx` when applied to a unit
+        vector in (u,v) space will map to (x, y) coordinates rotated by this
+        amount)
+
+    Returns
+    -------
+    transform_mtx : (3, 3) array
+        The augmented matrix expressing the affine transform
+    '''
+
+    def trans(dx, dy):
+        return np.array([
+            [1, 0, dx],
+            [0, 1, dy],
+            [0, 0, 1]
+        ])
+
+    def rot(theta):
+        return np.array([
+            [np.cos(theta), -np.sin(theta), 0],
+            [np.sin(theta), np.cos(theta), 0],
+            [0, 0, 1]
+        ])
+
+    npix_y, npix_x = image_shape
+    ctr_x, ctr_y = (npix_x - 1) / 2, (npix_y - 1) / 2
+    temp1 = trans(-ctr_x, -ctr_y)
+    temp2 = rot(np.deg2rad(-rotation_deg))
+    return trans(ctr_x, ctr_y) @ rot(np.deg2rad(-rotation_deg)) @ trans(-ctr_x, -ctr_y)
+
+@jit((float64, float64, float64, float64, float64), nopython=True)
+def cpu_cubic1d(t, f_minus1, f_0, f_1, f_2):
+    a = 2 * f_0
+    b = -1 * f_minus1 + f_1
+    c = 2 * f_minus1 - 5 * f_0 + 4 * f_1 - f_2
+    d = -1 * f_minus1 + 3 * f_0 - 3 * f_1 + f_2
+    return 0.5 * (a + t * b + t ** 2 * c + t ** 3 * d)
+
+@jit(float64(float64[:, :], int64, int64, float64), nopython=True)
+def get_or_fill(arr, y, x, fill_value):
+    '''Returns arr[y, x] unless that would
+    be out of bounds, in which case returns 0.0'''
+    ny, nx = arr.shape
+    if y < ny and y >= 0 and x < nx and x >= 0:
+        return arr[y,x]
+    else:
+        return np.nan
+
+@jit(float64(float64, float64, float64[:, :]), nopython=True)
+def cpu_bicubic(dx, dy, region):
+    # Perform 4 1D interpolations by dx along the rows of region
+    b_minus1 = cpu_cubic1d(dx, region[0, 0], region[0, 1], region[0, 2], region[0, 3])
+    b_0 = cpu_cubic1d(dx, region[1, 0], region[1, 1], region[1, 2], region[1, 3])
+    b_1 = cpu_cubic1d(dx, region[2, 0], region[2, 1], region[2, 2], region[2, 3])
+    b_2 = cpu_cubic1d(dx, region[3, 0], region[3, 1], region[3, 2], region[3, 3])
+    # perform 1 interpolation by dy along the column of b values
+    interpolated_value = cpu_cubic1d(dy, b_minus1, b_0, b_1, b_2)
+    return interpolated_value
+
+
+@jit(float64[:, :](float64[:, :], float64[:, :]), nopython=True)
+def _interpolate_nonfinite(source_image, dest_image):
+    for dest_y in range(dest_image.shape[0]):
+        for dest_x in range(dest_image.shape[1]):
+            if math.isfinite(source_image[dest_y, dest_x]):
+                dest_image[dest_y, dest_x] = source_image[dest_y, dest_x]
+                continue
+            x_int, y_int = dest_x, dest_y
+            cutout = np.zeros((4, 4))
+            accumulator = 0.0
+            n_good_pix = 0
+            for i in range(4):
+                for j in range(4):
+                    src_y, src_x = y_int + (i - 1), x_int + (j - 1)
+                    src_pixval = get_or_fill(source_image, src_y, src_x, np.nan)
+                    if math.isfinite(src_pixval):
+                        accumulator += src_pixval
+                        n_good_pix += 1
+                    cutout[i, j] = src_pixval
+            avg_pix_val = accumulator / n_good_pix if n_good_pix > 0 else 0.0
+            for i in range(4):
+                for j in range(4):
+                    if not math.isfinite(cutout[i, j]):
+                        cutout[i, j] = avg_pix_val
+            dest_image[dest_y, dest_x] = cpu_bicubic(0.0, 0.0, cutout)
+
+    return dest_image
+
+def interpolate_nonfinite(source_image, dest_image=None):
+    if dest_image is None:
+        dest_image = np.zeros_like(source_image)
+    return _interpolate_nonfinite(source_image, dest_image)
+
+@jit(float64(float64[:, :], int64, int64, float64), nopython=True)
+def get_or_fill(arr, y, x, fill_value):
+    """Returns arr[y, x] unless that would
+    be out of bounds, in which case returns `fill_value`"""
+    ny, nx = arr.shape
+    if y < ny and y >= 0 and x < nx and x >= 0:
+        return arr[y,x]
+    else:
+        return fill_value
+
+@jit(float64[:, :](float64[:, :], float64[:, :], float64[:, :], float64), nopython=True)
+def matrix_transform_image(source_image, transform_mtx, dest_image, fill_value):
+    transform_mtx = np.ascontiguousarray(transform_mtx)  # should be a no-op but silences NumbaPerformanceWarning
+    npix_y, npix_x = source_image.shape
+    for dest_y in range(dest_image.shape[0]):
+        for dest_x in range(dest_image.shape[1]):
+            xform_coord = transform_mtx @ np.array([dest_x, dest_y, 1.0])
+
+            x = xform_coord[0]
+            x_int = int(math.floor(x))
+            x_frac = x - x_int
+
+            y = xform_coord[1]
+            y_int = int(math.floor(y))
+            y_frac = y - y_int
+
+            cutout = np.zeros((4, 4))
+            for i in range(4):
+                for j in range(4):
+                    src_y, src_x = y_int + (i - 1), x_int + (j - 1)
+                    cutout[i, j] = get_or_fill(source_image, src_y, src_x, fill_value)
+            dest_image[dest_y, dest_x] = cpu_bicubic(x_frac, y_frac, cutout)
+
+    return dest_image
+
+
+def cpu_rotate(source_image, angle_deg, dest_image=None, fill_value=np.nan):
+    source_image = np.asarray(source_image)
+    if dest_image is None:
+        dest_image = np.zeros_like(source_image)
+    transform_mtx = make_transform(source_image.shape, angle_deg)
+    matrix_transform_image(source_image, transform_mtx, dest_image, fill_value)
+    return dest_image

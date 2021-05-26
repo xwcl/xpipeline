@@ -65,9 +65,7 @@ def inject_signals(
                 continue
             theta = np.deg2rad(90 + spec.pa_deg - angles[frame_idx])
             dx, dy = spec.r_px * np.cos(theta), spec.r_px * np.sin(theta)
-            addition = spec.scale * improc.ft_shift2(
-                template, dx, dy, output_shape=frame_shape
-            )
+            addition = spec.scale * improc.ft_shift2(template, dy, dx, output_shape=frame_shape)
             outcube[frame_idx] += addition
     return outcube
 
@@ -192,16 +190,6 @@ def calc_snr_mawet(signal, noises):
         np.std(noises) * np.sqrt(1 + 1 / len(noises))
     )
 
-
-def cartesian_coords(center, data_shape):
-    """center in x,y order; returns coord arrays xx, yy of data_shape"""
-    yy, xx = np.indices(data_shape, dtype=float)
-    center_x, center_y = center
-    yy -= center_y
-    xx -= center_x
-    return xx, yy
-
-
 def reduce_apertures(
     image,
     r_px,
@@ -216,7 +204,7 @@ def reduce_apertures(
     the locations and the results as a tuple with the first location and result corresponding
     to the planet aperture"""
     center = (image.shape[0] - 1) / 2, (image.shape[0] - 1) / 2
-    xx, yy = cartesian_coords(center, image.shape)
+    yy, xx = improc.cartesian_coords(center, image.shape)
     locations = list(
         simple_aperture_locations(
             r_px,

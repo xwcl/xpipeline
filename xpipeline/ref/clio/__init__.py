@@ -132,11 +132,9 @@ def serial_split_frames_cube(all_hduls, filenames, ext=0):
             )
             new_hdul[0].header["DATE-OBS"] = current_time.isoformat()
             for kw in varying_numeric_kw:
-                # construct new card with same comment (if present) and new value
+                # construct new card with same comment (if any) and new value
                 card = hdul[ext].header.cards[kw]
-                new_hdul[0].header.append(
-                    fits.Card(keyword=kw, value=interps[kw][i], comment=card.comment)
-                )
+                new_hdul[0].header[kw] = (interps[kw][i], card.comment)
             new_hdul[0].header["ORIGFILE"] = filename
             outputs.append(new_hdul)
     return outputs

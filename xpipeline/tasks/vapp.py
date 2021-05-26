@@ -81,7 +81,7 @@ def mask_along_angle(shape, deg_e_of_n):
         Mask that is True for pixels right of the dividing line
         when `deg_e_of_n` == 0
     """
-    _, theta = improc.polar_coords(improc.center(shape), shape)
+    _, theta = improc.polar_coords(improc.arr_center(shape), shape)
     left_half = (theta < np.deg2rad(-90 + deg_e_of_n)) | (
         (theta > np.deg2rad(90 + deg_e_of_n)) & (theta > 0)
     )

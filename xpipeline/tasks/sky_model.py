@@ -25,7 +25,7 @@ class SkyModel:
 
     @classmethod
     def from_hdulist(cls, hdulist):
-        cls(
+        return cls(
             components=hdulist["COMPONENTS"].data,
             mean_sky=hdulist["MEAN_SKY"].data,
             stddev_sky=hdulist["STDDEV_SKY"].data,
@@ -54,7 +54,7 @@ class SkyModel:
         stddev_sky_hdu.header["EXTNAME"] = "STDDEV_SKY"
         return iofits.DaskHDUList([components_hdu, mean_sky_hdu, stddev_sky_hdu])
 
-    def to_fits_hdulist(self):
+    def to_hdulist(self):
         return self.to_dask_hdulist().to_fits()
 
 
@@ -102,11 +102,7 @@ def reconstruct_masked(original_image, components_cube, model_mean, bad_bg_mask)
     a = component_imvecs[:, mask_1d]
     b = meansub_imvec[mask_1d]
     assert a.shape[1] == b.shape[0]
-    x, residuals, rank, s = np.linalg.lstsq(
-        a.T,
-        b,
-        # rcond=None
-    )
+    x, residuals, rank, s = np.linalg.lstsq(a.T, b, rcond=None)
     reconstruction = (np.dot(component_imvecs.T, x) + mean_imvec).reshape(
         original_image.shape
     )
@@ -158,6 +154,7 @@ def cross_validate(
 ):
     errs = []
     for idx, sky_img in enumerate(sky_cube_test):
+        log.debug(f'cross validating {idx+1} of {sky_cube_test.shape[0]}')
         bad_bg_pix = generate_background_mask(
             std_bg_arr, mean_bg_arr, badpix_arr, iterations
         )
@@ -174,19 +171,23 @@ def cross_validate(
 def background_subtract(
     hdul: iofits.DaskHDUList,
     sky_model: SkyModel,
-    badpix_arr: np.ndarray,
-    iterations: int,
+    mask_dilate_iters: int,
     n_sigma: float,
     exclude: Union[List[improc.BBox], None],
-    ext=0,
+    ext,
+    dq_ext
 ):
-    log.info(f"Subtracting sky background from {hdul[ext].data}")
+    log.info(
+        f"Subtracting sky background from {hdul[ext].data.shape} {hdul[ext].data.dtype} array"
+    )
     sci_arr = hdul[ext].data
+    dq_arr = hdul[dq_ext].data
+    badpix_arr = dq_arr != 0
     bad_bg_pix = generate_background_mask(
         sky_model.stddev_sky,
         sky_model.mean_sky,
         badpix_arr,
-        iterations,
+        mask_dilate_iters,
         n_sigma=n_sigma,
         science_arr=sci_arr,
         exclude=exclude,
@@ -195,8 +196,10 @@ def background_subtract(
         sci_arr, sky_model.components, sky_model.mean_sky, bad_bg_pix
     )
     sci_final = sci_arr - bg_estimate
+    bg_mean_val = np.average(sci_final[~bad_bg_pix])
+    sci_final -= bg_mean_val
     log.debug(
-        f"Mean in background measurement pixels: {np.average(sci_final[~bad_bg_pix])}"
+        f"Mean in background measurement pixels: {bg_mean_val}, subtracting offset"
     )
 
     n_bad_bg_pix = np.count_nonzero(bad_bg_pix)
@@ -209,7 +212,7 @@ def background_subtract(
         f"""
         Reconstructed sky background using {sky_model.components.shape[0]} image
         basis. Background mask used threshold  {n_sigma} * std(background),
-        repeated dilation for {iterations} iterations, leaving 
+        repeated dilation for {mask_dilate_iters} iterations, leaving 
         {n_pix_total - n_bad_bg_pix} / {n_pix_total}
         ({100 * (1 - n_bad_bg_pix/n_pix_total):2.1f}%)
         for estimating the background. RMS error in background pixels

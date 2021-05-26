@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 import argparse
 import glob
 import os.path
@@ -11,7 +12,7 @@ import pandas as pd
 from typing import List, Union
 
 from .. import constants as const
-from ..core import PipelineCollection
+from ..core import PipelineCollection, reduce_bitwise_or
 import distributed.protocol
 from ..tasks import (
     obs_table,
@@ -28,8 +29,6 @@ from ..tasks import (
 from ..ref import clio
 
 log = logging.getLogger(__name__)
-
-from dataclasses import dataclass
 
 
 @dataclass
@@ -49,9 +48,9 @@ class KLIPParams:
 distributed.protocol.register_generic(KLIPInput)
 distributed.protocol.register_generic(KLIPParams)
 
-## To preserve sanity, pipelines mustn't do anything you can't do to a dask.delayed
-## and mustn't compute or branch on intermediate results.
-## They should return delayeds (for composition).
+# To preserve sanity, pipelines mustn't do anything you can't do to a dask.delayed
+# and mustn't compute or branch on intermediate results.
+# They should return delayeds (for composition).
 
 
 def clio_split(
@@ -117,30 +116,54 @@ def clio_aligned(
 
 
 def sky_subtract(
-    input_coll,
+    input_coll: PipelineCollection,
     model_sky: sky_model.SkyModel,
-    badpix_arr: np.ndarray,
     mask_dilate_iters: int,
     n_sigma: float,
     exclude: Union[List[improc.BBox], None],
     ext=0,
+    dq_ext='DQ'
 ):
     coll = input_coll.map(
         sky_model.background_subtract,
         model_sky,
-        badpix_arr,
         mask_dilate_iters,
         n_sigma=n_sigma,
         exclude=exclude,
         ext=ext,
+        dq_ext=dq_ext,
     )
     return coll
 
 
 def align_to_templates(
-    input_coll, cutout_templates, cutout_bboxes
+    input_coll: PipelineCollection,
+    cutout_specs: List[improc.CutoutTemplateSpec],
+    upsample_factor: int = 100,
+    ext: Union[int, str] = 0,
 ) -> PipelineCollection:
-    return
+    # explode list of cutout_specs into individual cutout pipelines
+    d_hdus_for_cutouts = []
+    for cspec in cutout_specs:
+        d_hdus_for_cutouts.append(
+            input_coll.map(lambda x: x[ext].data)
+            .map(improc.aligned_cutout, cspec, upsample_factor=upsample_factor)
+            .map(iofits.DaskHDU.from_array, extname=cspec.name)
+            .items
+        )
+
+    # collect as multi-extension FITS
+    def _collect(primary_hdu: iofits.DaskHDU, *args: iofits.DaskHDU):
+        new_primary_hdu = primary_hdu.updated_copy(
+            None,
+            history="Detached header from full frame in conversion to multi-extension file",
+        )
+        new_primary_hdu.kind = 'primary'
+        hdus = [new_primary_hdu]
+        hdus.extend(args)
+        return iofits.DaskHDUList(hdus)
+
+    return input_coll.map(lambda x: x[ext]).zip_map(_collect, *d_hdus_for_cutouts)
 
 
 def compute_sky_model(
@@ -150,10 +173,13 @@ def compute_sky_model(
     random_state,
     n_components,
     mask_dilate_iters,
-    badpix_arr: np.ndarray,
+    ext: Union[int, str] = 0,
+    dq_ext: Union[int, str] = 'DQ'
 ):
     log.debug("Assembling compute_sky_model pipeline...")
-    sky_cube = iofits.hdulists_to_dask_cube(inputs_collection.items, plane_shape)
+    sky_cube = iofits.hdulists_to_dask_cube(inputs_collection.items, plane_shape, ext=ext)
+    dq_cube = iofits.hdulists_to_dask_cube(inputs_collection.items, plane_shape, ext=dq_ext, dtype=int)
+    badpix_arr = reduce_bitwise_or(dq_cube)
     sky_cube_train, sky_cube_test = learning.train_test_split(
         sky_cube, test_fraction, random_state=random_state
     )

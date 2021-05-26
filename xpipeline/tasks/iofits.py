@@ -65,12 +65,12 @@ def separate_varying_header_keywords(all_headers):
     non_varying_kw = set()
     varying_kw = set()
     for kw, val in columns.items():
-        n_different = np.unique(val).size
+        n_different = len(np.unique(val))
         if n_different == 1 and not _is_ignored_metadata_keyword(kw):
             non_varying_kw.add(kw)
         else:
             if len(val) != len(all_headers):
-                log.warn(f"mismatched lengths {kw=}: {len(val)=}, {len(all_headers)}")
+                log.warning(f"mismatched lengths {kw=}: {len(val)=}, {len(all_headers)=}")
             varying_kw.add(kw)
     varying_dtypes = _construct_dtype(varying_kw, columns)
     return non_varying_kw, varying_kw, varying_dtypes
@@ -160,6 +160,13 @@ class DaskHDU:
             return fits.PrimaryHDU(self.data, self.header)
         else:
             raise ValueError(f"Unknown kind: {self.kind}")
+
+    @classmethod
+    def from_array(cls, data, extname=None):
+        new_hdu = cls(data)
+        if extname is not None:
+            new_hdu.header["EXTNAME"] = extname
+        return new_hdu
 
 
 register_generic(DaskHDU)

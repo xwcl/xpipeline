@@ -144,4 +144,4 @@ def test_end_to_end_dask():
         apertures_to_exclude=1,
     )
     recovered_signals = dask.compute(d_recovered_signals)[0]
-    assert recovered_signals[0].snr > 12.
+    assert recovered_signals[0].snr > 12.0

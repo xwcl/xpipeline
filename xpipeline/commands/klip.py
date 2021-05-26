@@ -141,7 +141,7 @@ class KLIP(MultiInputCommand):
 
         # mask radial
         rho, theta = improc.polar_coords(
-            improc.center(sci_arr.shape[1:]), sci_arr.shape[1:]
+            improc.arr_center(sci_arr.shape[1:]), sci_arr.shape[1:]
         )
         if self.args.mask_iwa_px is not None:
             iwa_mask = rho >= self.args.mask_iwa_px

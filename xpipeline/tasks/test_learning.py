@@ -9,9 +9,7 @@ def test_train_test_split():
     assert train_a.size + test_a.size == data.size, "Lost elements in split"
     assert train_a.shape[0] == n_total // 2, "Wrong split"
     assert test_a.shape[0] == n_total // 2, "Wrong split"
-    repeat_train_a, repeat_test_a = train_test_split(
-        data, 0.5, random_state=0
-    )
+    repeat_train_a, repeat_test_a = train_test_split(data, 0.5, random_state=0)
     assert np.all(
         train_a == repeat_train_a
     ), "Repeat call with same RNG state not reproducible"
