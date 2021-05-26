@@ -217,7 +217,9 @@ def test_aligned_cutout():
     psfim = improc.gauss2d(picshape, improc.arr_center(picshape), (10, 10))
     sci_arr = improc.ft_shift2(psfim, -4.33, -5.75)[15:100,20:90]
     spec = improc.CutoutTemplateSpec(
-        origin=(0, 0), extent=picshape, template=psfim, name="primary"
+        search_box=improc.BBox(origin=improc.Pixel(0,0), extent=improc.PixelExtent(*picshape)),
+        template=psfim,
+        name="primary"
     )
     res = improc.aligned_cutout(sci_arr, spec)
     assert np.average((res - psfim)[15:100,20:90]) < 1e-5

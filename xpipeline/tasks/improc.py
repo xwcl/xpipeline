@@ -607,22 +607,24 @@ class BBox:
 
     @property
     def center(self):
-        oy, ox = self.origin
-        dy, dx = self.extent
-        return oy + (dy - 1) / 2, ox + (dx - 1) / 2
+        oy, ox = self.origin.y, self.origin.x
+        dy, dx = self.extent.height, self.extent.width
+        return Point(oy + (dy - 1) / 2, ox + (dx - 1) / 2)
 
     @center.setter
     def center(self, value):
-        cy, cx = self.center
-        cy_prime, cx_prime = value
+        cy, cx = self.center.y, self.center.x
+        cy_prime, cx_prime = value.y, value.x
         dy, dx = cy_prime - cy, cx_prime - cx
         oy, ox = self.origin
-        self.origin = oy + dy, ox + dx
+        if (oy + dy) - int(oy + dy) > 0.01 or (ox + dx) - int(ox + dx) > 0.01:
+            warnings.warn(f"Loss of precision rounding origin to integer pixels")
+        self.origin = Pixel(int(oy + dy), int(ox + dx))
 
     @property
     def slices(self):
-        oy, ox = self.origin
-        dy, dx = self.extent
+        oy, ox = self.origin.y, self.origin.x
+        dy, dx = self.extent.height, self.extent.width
         start_y, end_y = oy, oy + dy
         if int(start_y) != start_y or int(end_y) != end_y:
             warnings.warn(
@@ -698,7 +700,7 @@ def aligned_cutout(
     sci_arr: np.ndarray, spec: CutoutTemplateSpec, upsample_factor: int = 100
 ):
     # cut out bbox
-    rough_cutout = sci_arr[spec.slices]
+    rough_cutout = sci_arr[spec.search_box.slices]
     # interp_cutout = regrid_image(rough_cutout, x_prime=xx, y_prime=yy, method="cubic")
     interp_cutout = interpolate_nonfinite(rough_cutout)
     template = spec.template
