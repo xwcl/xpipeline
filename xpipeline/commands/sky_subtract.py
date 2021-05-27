@@ -1,8 +1,9 @@
 import sys
 import argparse
+from xpipeline.core import LazyPipelineCollection
 import fsspec.spec
 import logging
-import dask
+import xconf
 
 from .. import utils
 from .. import pipelines
@@ -14,52 +15,30 @@ from .base import MultiInputCommand
 
 log = logging.getLogger(__name__)
 
+@xconf.config
+class ExcludedRegion:
+    origin_x : int = xconf.field(help="Origin X pixel")
+    origin_y : int = xconf.field(help="Origin Y pixel")
+    width : int = xconf.field(help="Width of region")
+    height : int = xconf.field(help="Height of region")
 
+@xconf.config
 class SkySubtract(MultiInputCommand):
-    name = "sky_subtract"
-    help = "Subtract sky background with a PCA basis model file"
-
-    @staticmethod
-    def add_arguments(parser: argparse.ArgumentParser):
-        parser.add_argument(
-            "sky_model",
-            help="Path to FITS file with sky model basis",
-        )
-        parser.add_argument(
-            "--mask-dilate-iters",
-            default=3,
-            type=int,
-            help="Iterations to grow the mask that excludes pixels from background estimation",
-        )
-        parser.add_argument(
-            "--n-sigma",
-            default=3,
-            type=float,
-            help="Number of sigma (standard deviations of the background model input frames) beyond which pixel is considered illuminated and excluded from background estimation"
-        )
-        parser.add_argument(
-            "--exclude-bbox",
-            action="append",
-            required=True,
-            help=utils.unwrap(
-                """
-                specification of the form ``origin_y,origin_x,height,width``
-                for regions presumed illuminated for exclusion from background
-                estimation (can be repeated)
-            """
-            ),
-        )
-        return super(SkySubtract, SkySubtract).add_arguments(parser)
+    """Subtract sky background with a PCA basis model file"""
+    sky_model_path : str = xconf.field(help="Path to FITS file with sky model basis")
+    mask_dilate_iters : int = xconf.field(default=6, help="Number of times to grow mask regions before selecting estimation pixels")
+    n_sigma : float = xconf.field(default=3, help="Number of sigma (standard deviations of the background model input frames) beyond which pixel is considered illuminated and excluded from background estimation")
+    excluded_regions : dict[str, ExcludedRegion] = xconf.field(default_factory=dict, help="Regions presumed illuminated to be excluded from background estimation")
 
     def main(self):
-        destination = self.args.destination
-        log.debug(f"{destination=}")
+        destination = self.destination
         dest_fs = utils.get_fs(destination)
         assert isinstance(dest_fs, fsspec.spec.AbstractFileSystem)
         log.debug(f"calling makedirs on {dest_fs} at {destination}")
         dest_fs.makedirs(destination, exist_ok=True)
 
-        n_output_files = len(self.all_files)
+        all_inputs = self.get_all_inputs()
+        n_output_files = len(all_inputs)
         output_filepaths = [utils.join(destination, f"sky_subtract_{i:04}.fits") for i in range(n_output_files)]
         for output_file in output_filepaths:
             if dest_fs.exists(output_file):
@@ -67,12 +46,15 @@ class SkySubtract(MultiInputCommand):
                 sys.exit(1)
 
         excluded_bboxes = []
-        for bbox_spec in self.args.exclude_bbox:
-            excluded_bboxes.append(improc.BBox.from_spec(bbox_spec))
+        for _, er in self.excluded_regions.items():
+            excluded_bboxes.append(improc.BBox(
+                origin=improc.Pixel(y=er.origin_y, x=er.origin_x),
+                extent=improc.PixelExtent(height=er.height, width=er.width)
+            ))
 
-        coll = self.inputs_coll.map(iofits.load_fits_from_path)
-        hdul = iofits.load_fits_from_path(self.args.sky_model)
+        coll = LazyPipelineCollection(all_inputs).map(iofits.load_fits_from_path)
+        hdul = iofits.load_fits_from_path(self.sky_model_path)
         model_sky = sky_model.SkyModel.from_hdulist(hdul)
-        output_coll = pipelines.sky_subtract(coll, model_sky, self.args.mask_dilate_iters, self.args.n_sigma, excluded_bboxes)
+        output_coll = pipelines.sky_subtract(coll, model_sky, self.mask_dilate_iters, self.n_sigma, excluded_bboxes)
         return output_coll.zip_map(iofits.write_fits, output_filepaths, overwrite=True).compute()
 

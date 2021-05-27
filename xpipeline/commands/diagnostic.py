@@ -1,36 +1,17 @@
-from astropy.io import fits
-import numpy as np
-import argparse
-import dask
-import fsspec.spec
-import os.path
-import coloredlogs
 import logging
-from .. import utils
-from .. import tasks, ref
-
-# from .ref import clio
+import xconf
 from .. import version
-
 from .base import BaseCommand
 
 log = logging.getLogger(__name__)
 
-
-class Diagnostic:
-    name = "diagnostic"
-    help = "Power on, self-test"
-
-    def __init__(self, cli_args: argparse.Namespace):
-        logger = logging.getLogger("xpipeline")
-        coloredlogs.install(level="DEBUG", logger=logger)
-
-    @staticmethod
-    def add_arguments(parser: argparse.ArgumentParser):
-        pass
+@xconf.config
+class Diagnostic(BaseCommand):
+    """Power on self-test"""
 
     def main(self):
         from .. import cli  # avoid circular import
+        from .. import tasks, ref
 
         log.info(f"xpipeline {version.version}")
         command_names = [cls.name for cls in cli.COMMANDS]
