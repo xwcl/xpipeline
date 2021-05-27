@@ -8,11 +8,20 @@ import toml
 import logging
 
 import typing
-import dacite
-import dataclasses
-from dataclasses import dataclass, is_dataclass
+# import dataclasses
+from .vendor import dataclasses
+# import sys
+# sys.modules['dataclasses'] = dataclasses
+# from dataclasses import dataclass, is_dataclass
+from .vendor.dataclasses import dataclass, is_dataclass
+import dacite.dataclasses
+for name in ['Field', 'MISSING', '_FIELDS', '_FIELD', '_FIELD_INITVAR']:
+    setattr(dacite.dataclasses, name, getattr(dataclasses, name))
 from collections import defaultdict
 log = logging.getLogger(__name__)
+
+from functools import partial
+config = partial(dataclass, kw_only=True)
 
 def load_config(filepath):
     log.debug(f'Loading config from {filepath}')
@@ -48,10 +57,18 @@ def convert_bool(x):
     else:
         raise ValueError(f"Cannot convert {x} to boolean")
 
+
+def convert_list_of_str(x):
+    if ',' in x:
+        return [y.strip() for y in x.split(',')]
+    else:
+        return [x.strip()]
+
 TYPE_HOOKS = {
     bool: convert_bool,
     int: int,
     float: float,
+    list[str]: convert_list_of_str,
 }
 
 def field(*args, **kwargs):
@@ -65,7 +82,7 @@ def format_field_type(field_type):
         if dacite.types.is_optional(field_type):
             return f'(optional) {field_type.__args__[0].__name__}'
         elif dacite.types.is_union(field_type):
-            name = 'Union'
+            name = ''
         else:
             name = field_type.__name__
         members = ', '.join([x.__name__ for x in field_type.__args__])
@@ -93,11 +110,16 @@ def list_fields(cls, prefix='', help_suffix=''):
                     for k, v, h in list_fields(mtype, prefix=f'{prefix}{name}.', help_suffix=help_suffix+f' <{mtype.__name__}>'):
                         yield k, v, h
                 else:
-                    yield prefixed_name, format_field_type(mtype), field_help
+                    # no need for additional docs for primitive types
+                    continue
         elif dacite.types.is_generic_collection(fld.type):
-            key_type, val_type = dacite.types.extract_generic(fld.type)
-            for k, v, h in list_fields(val_type, prefix=f'{prefix}{name}.<{key_type.__name__}>.'):
-                yield k, v, h
+            if dacite.types.extract_origin_collection(fld.type) is list:
+                # already output above for collection
+                continue
+            else:
+                key_type, val_type = dacite.types.extract_generic(fld.type)
+                for k, v, h in list_fields(val_type, prefix=f'{prefix}{name}.<{key_type.__name__}>.'):
+                    yield k, v, h
         else:
             if dataclasses.is_dataclass(fld.type):
                 for k, v, h in list_fields(fld.type, prefix=f'{prefix}{name}.'):
@@ -107,6 +129,9 @@ def list_fields(cls, prefix='', help_suffix=''):
 class Dispatcher:
     def __init__(self, commands):
         self.commands = commands
+
+    def configure_logging(self, level):
+        logging.basicConfig(level=level)
 
     def main(self):
         parser = argparse.ArgumentParser(add_help=False)
@@ -119,7 +144,11 @@ class Dispatcher:
             subp = subps.add_parser(command_cls.name, add_help=False)
             names_to_subparsers[command_cls.name] = subp
             subp.set_defaults(command_cls=command_cls)
-            command_cls.add_arguments(subp)
+            default_config_file = f"{command_cls.name}.conf.toml"
+            subp.add_argument("-c", "--config-file", help=f"Path to config file (default: {default_config_file})", default=default_config_file)
+            subp.add_argument("-h", "--help", action='store_true', help="Print usage information")
+            subp.add_argument("-v", "--verbose", action='store_true', help="Enable debug logging")
+            subp.add_argument("vars", nargs='*', help="Config variables set with 'key.key.key=value' notation")
         
         args = parser.parse_args()
         if args.command_cls is None:
@@ -128,11 +157,9 @@ class Dispatcher:
         if args.help:
             print_help(args.command_cls, names_to_subparsers[args.command_cls.name])
             sys.exit(0)
+        self.configure_logging('DEBUG' if args.verbose else 'INFO')
         command = args.command_cls.from_args(args)
-        result = command.main()
-        if not result:
-            sys.exit(1)
-        sys.exit(0)
+        return command.main()
 
 def print_help(cls, parser):
     print(f"{cls.name}: {cls.__doc__}")
@@ -198,14 +225,6 @@ class Command:
             log.error(f"File and arguments provided this configuration:\n\n{pformat(raw_config)}\n")
             sys.exit(1)
 
-    @classmethod
-    def add_arguments(cls, parser : argparse.ArgumentParser):
-        default_config_file = f"{cls.name}.conf.toml"
-        parser.add_argument("-c", "--config-file", help=f"Path to config file (default: {default_config_file})", default=default_config_file)
-        parser.add_argument("-v", "--verbose", action='store_true', help="Enable verbose log outputs")
-        parser.add_argument("-h", "--help", action='store_true', help="Print usage information")
-        parser.add_argument("vars", nargs='*', help="Config variables set with 'key.key.key=value' notation")
-
     def main(self):
         raise NotImplementedError("Subclasses must implement main()")
 
@@ -240,15 +259,15 @@ class AlignedCutouts(Command):
 
 if __name__ == "__main__":
 
-    @dataclass
+    @dataclass(kw_only=True)
     class Thingie:
         name : str = field()
-    
-    @dataclass
+
+    @dataclass(kw_only=True)
     class ExtendedThingie(Thingie):
         extended : bool = field()
-    
-    @dataclass
+
+    @dataclass(kw_only=True)
     class DemoCommand(Command):
         """Demo command"""
         collections : dict[str, ExtendedThingie] = field()

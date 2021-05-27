@@ -61,7 +61,6 @@ class ClioSplit(MultiInputCommand):
 
     def main(self):
         destination = self.args.destination
-        log.debug(f"{destination=}")
         dest_fs = utils.get_fs(destination)
         assert isinstance(dest_fs, fsspec.spec.AbstractFileSystem)
         log.debug(f"calling makedirs on {dest_fs} at {destination}")

@@ -23,8 +23,11 @@ from .commands import (
 )
 
 from . import utils
+import xconf
 
 log = logging.getLogger(__name__)
+
+from .commands import base
 
 COMMANDS = {
     # compute_sky_model.ComputeSkyModel,
@@ -37,33 +40,18 @@ COMMANDS = {
     # clio_split.ClioSplit,
     # clio_calibrate.ClioCalibrate,
     # sky_subtract.SkySubtract,
-    aligned_cutouts.AlignedCutouts
+    aligned_cutouts.AlignedCutouts,
+    base.BaseCommand,
+    base.MultiInputCommand,
 }
 
+class Dispatcher(xconf.Dispatcher):
+    def configure_logging(self, level):
+        for name in ["xpipeline", "irods_fsspec", "exao_dap_client"]:
+            logger = logging.getLogger(name)
+            coloredlogs.install(level="DEBUG", logger=logger)
+            logger.setLevel(level)
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.set_defaults(command_cls=None)
-    subps = parser.add_subparsers(title="subcommands", description="valid subcommands")
-    names = set()
-    for command_cls in COMMANDS:
-        if command_cls.name is None or command_cls.name in names:
-            raise Exception(f"Invalid command name for {command_cls}")
-        subp = subps.add_parser(command_cls.name, add_help=False)
-        subp.set_defaults(command_cls=command_cls)
-        command_cls.add_arguments(subp)
-
-    args = parser.parse_args()
-    if args.command_cls is None:
-        parser.print_help()
-        sys.exit(1)
-
-    from . import xconf
-    if issubclass(args.command_cls, xconf.Command):  # TODO wart removal
-        command = args.command_cls.from_args(args)
-    else:
-        command = args.command_cls(args)
-    result = command.main()
-    if not result:
-        sys.exit(1)
-    sys.exit(0)
+    d = Dispatcher(COMMANDS)
+    sys.exit(d.main())

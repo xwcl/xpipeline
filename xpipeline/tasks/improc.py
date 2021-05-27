@@ -574,16 +574,23 @@ class Pixel:
     y : int
     x : int
 
+distributed.protocol.register_generic(Pixel)
+
 @dataclass
 class Point:
     y : float
     x : float
+
+distributed.protocol.register_generic(Point)
+
 
 # @distributed.protocol.register_generic
 @dataclass
 class PixelExtent:
     height : int
     width : int
+
+distributed.protocol.register_generic(PixelExtent)
 
 # @distributed.protocol.register_generic
 @dataclass
@@ -594,7 +601,7 @@ class BBox:
     @classmethod
     def from_center(cls, center : Pixel, extent : PixelExtent):
         cy, cx = center.y, center.x
-        origin = Pixel(y=cy - extent[0] / 2, x= cx - extent[1] / 2)
+        origin = Pixel(y=cy - extent.height / 2, x= cx - extent.width / 2)
         return cls(origin=origin, extent=extent)
 
     @classmethod
@@ -648,16 +655,6 @@ class CutoutTemplateSpec:
 
 distributed.protocol.register_generic(CutoutTemplateSpec)
 
-
-def construct_default_template_spec(frame_shape, sigma=10, template_shape=None):
-    if template_shape is None:
-        template_shape = frame_shape
-    template = gauss2d(template_shape, arr_center(template_shape), sigma=(sigma, sigma))
-    return CutoutTemplateSpec(
-        origin=(0, 0), extent=frame_shape, template=template, name="default"
-    )
-
-
 def gauss2d(shape, center, sigma):
     """Evaluate Gaussian distribution in 2D on an array of shape
     `shape`, centered at `(center_y, center_x)`, and with a sigma
@@ -699,8 +696,11 @@ def pad_to_match(arr_a: np.ndarray, arr_b: np.ndarray):
 def aligned_cutout(
     sci_arr: np.ndarray, spec: CutoutTemplateSpec, upsample_factor: int = 100
 ):
+    log.debug(f'aligned_cutout {spec=}')
     # cut out bbox
+    log.debug(f'{spec.search_box.slices=}')
     rough_cutout = sci_arr[spec.search_box.slices]
+    log.debug(f'{rough_cutout=}')
     # interp_cutout = regrid_image(rough_cutout, x_prime=xx, y_prime=yy, method="cubic")
     interp_cutout = interpolate_nonfinite(rough_cutout)
     template = spec.template
@@ -1039,6 +1039,7 @@ def _interpolate_nonfinite(source_image, dest_image):
     return dest_image
 
 def interpolate_nonfinite(source_image, dest_image=None):
+    source_image = source_image.astype('=f8')
     if dest_image is None:
         dest_image = np.zeros_like(source_image)
     return _interpolate_nonfinite(source_image, dest_image)

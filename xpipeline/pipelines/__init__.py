@@ -142,15 +142,17 @@ def align_to_templates(
     upsample_factor: int = 100,
     ext: Union[int, str] = 0,
 ) -> PipelineCollection:
+    log.debug(f'align_to_templates {cutout_specs=}')
     # explode list of cutout_specs into individual cutout pipelines
     d_hdus_for_cutouts = []
     for cspec in cutout_specs:
-        d_hdus_for_cutouts.append(
+        d_hdus = (
             input_coll.map(lambda x: x[ext].data)
             .map(improc.aligned_cutout, cspec, upsample_factor=upsample_factor)
             .map(iofits.DaskHDU.from_array, extname=cspec.name)
             .items
         )
+        d_hdus_for_cutouts.append(d_hdus)
 
     # collect as multi-extension FITS
     def _collect(primary_hdu: iofits.DaskHDU, *args: iofits.DaskHDU):
