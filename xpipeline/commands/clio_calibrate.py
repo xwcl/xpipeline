@@ -32,15 +32,12 @@ class ClioCalibrate(MultiInputCommand):
 
         n_output_files = len(all_inputs)
         output_filepaths = [utils.join(destination, f"{self.name}_{i:04}.fits") for i in range(n_output_files)]
-        for output_file in output_filepaths:
-            if dest_fs.exists(output_file):
-                log.error(f"Output exists: {output_file}")
-                sys.exit(1)
+        self.quit_if_outputs_exist(output_filepaths)
 
         coll = LazyPipelineCollection(all_inputs).map(iofits.load_fits_from_path)
         badpix_path = self.badpix_path
         full_badpix_arr = iofits.load_fits_from_path(badpix_path)[0].data
         badpix_arr = clio.badpix_for_shape(full_badpix_arr, plane_shape)
         output_coll = pipelines.clio_badpix_linearity(coll, badpix_arr, plane_shape)
-        return output_coll.zip_map(iofits.write_fits, output_filepaths, overwrite=True).compute()
-
+        result = output_coll.zip_map(iofits.write_fits, output_filepaths, overwrite=True).compute()
+        log.info(result)

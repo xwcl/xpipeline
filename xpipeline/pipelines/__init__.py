@@ -1,10 +1,12 @@
 from dataclasses import dataclass
 import argparse
 import glob
+from multiprocessing import Pipe
 import os.path
 import logging
 from pprint import pformat
 import numpy as np
+import typing
 from astropy.io import fits
 import dask
 import dask.array as da
@@ -44,14 +46,27 @@ class KLIPParams:
     exclude_nearest_n_frames: int
     missing_data_value: float = np.nan
 
-
 distributed.protocol.register_generic(KLIPInput)
 distributed.protocol.register_generic(KLIPParams)
 
 # To preserve sanity, pipelines mustn't do anything you can't do to a dask.delayed
 # and mustn't compute or branch on intermediate results.
-# They should return delayeds (for composition).
+# They should return delayeds (for composition)
 
+from enum import Enum
+class CombineOperation(Enum):
+    MEAN = 'mean'
+
+def combine_extension_to_new_hdu(
+    inputs_collection : PipelineCollection,
+    operation : CombineOperation,
+    ext : typing.Union[str,int],
+    plane_shape : tuple[int,int]
+):
+    image_cube = iofits.hdulists_to_dask_cube(inputs_collection.items, plane_shape, ext=ext)
+    if operation is CombineOperation.MEAN:
+        result = da.average(image_cube, axis=0)
+    return dask.delayed(iofits.DaskHDU.from_array)(result, kind="image")
 
 def clio_split(
     inputs_coll: PipelineCollection,
@@ -141,13 +156,14 @@ def align_to_templates(
     cutout_specs: List[improc.CutoutTemplateSpec],
     upsample_factor: int = 100,
     ext: Union[int, str] = 0,
+    dq_ext: Union[int, str] = "DQ",
 ) -> PipelineCollection:
     log.debug(f'align_to_templates {cutout_specs=}')
     # explode list of cutout_specs into individual cutout pipelines
     d_hdus_for_cutouts = []
     for cspec in cutout_specs:
-        d_hdus = (
-            input_coll.map(lambda x: x[ext].data)
+        d_hdus = (input_coll
+            .map(data_quality.get_masked_data, ext=ext, dq_ext=dq_ext)
             .map(improc.aligned_cutout, cspec, upsample_factor=upsample_factor)
             .map(iofits.DaskHDU.from_array, extname=cspec.name)
             .items

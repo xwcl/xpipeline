@@ -162,8 +162,8 @@ class DaskHDU:
             raise ValueError(f"Unknown kind: {self.kind}")
 
     @classmethod
-    def from_array(cls, data, extname=None):
-        new_hdu = cls(data)
+    def from_array(cls, data, kind="image", extname=None):
+        new_hdu = cls(data, kind=kind)
         if extname is not None:
             new_hdu.header["EXTNAME"] = extname
         return new_hdu
@@ -188,13 +188,16 @@ class DaskHDUList:
     def __init__(self, hdus=None):
         if hdus is None:
             hdus = []
-        self.hdus = hdus
+        self.hdus : list[DaskHDU] = hdus
 
     def append(self, hdu):
         self.hdus.append(hdu)
 
     def extend(self, hdus):
         self.hdus.extend(hdus)
+
+    def __iter__(self):
+        return self.hdus.__iter__()
 
     @classmethod
     def from_fits(cls, hdus, distributed=False):
@@ -209,23 +212,37 @@ class DaskHDUList:
             hdul.append(imghdu.to_fits())
         return hdul
 
+    @classmethod
+    def from_array(cls, arr, kind="image"):
+        """Convenience method to wrap a DaskHDU from an array in a new DaskHDUList"""
+        return cls([DaskHDU.from_array(arr, kind=kind)])
+
     def copy(self):
         return self.__class__([hdu.copy() for hdu in self.hdus])
 
-    def updated_copy(self, new_data, new_headers=None, history=None, ext=0):
-        """Return a copy of the DaskHDUList with extension `ext`'s data
-        replaced by `new_data`, optionally appending a history card
-        with what update was performed
+    def updated_copy(self, *, new_data_for_exts=None, new_headers_for_exts=None, history=None):
+        """Return a copy of the DaskHDUList with each ext whose key appears in
+        new_data_for_exts and new_headers_for_exts updated with new data and/or
+        headers
         """
+        if new_data_for_exts is None and new_headers_for_exts is None:
+            return self
+        if new_data_for_exts is None:
+            new_data_for_exts = {}
+        if new_headers_for_exts is None:
+            new_headers_for_exts = {}
         new_hdus = []
         for idx, hdu in enumerate(self.hdus):
-            if _check_ext(ext, hdu, idx):
-                new_hdu = hdu.updated_copy(
-                    new_data, new_headers=new_headers, history=history
-                )
-                new_hdus.append(new_hdu)
-            else:
-                new_hdus.append(hdu)
+            new_data = hdu.data
+            new_headers = {}
+            for key, data in new_data_for_exts.items():
+                if _check_ext(key, hdu, idx):
+                    new_data = data
+            for key, headers in new_headers_for_exts.items():
+                log.debug(f'{key=}, {idx=}, {hdu.header.get("EXTNAME")=}')
+                if _check_ext(key, hdu, idx):
+                    new_headers = headers
+            new_hdus.append(hdu.updated_copy(new_data, new_headers=new_headers))
         return self.__class__(new_hdus)
 
     def __contains__(self, key):

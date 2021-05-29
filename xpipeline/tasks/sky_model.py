@@ -220,13 +220,12 @@ def background_subtract(
     """
     )
     out_hdul = hdul.updated_copy(
-        sci_final,
-        {
+        new_data_for_exts={ext: sci_final},
+        new_headers_for_exts={ext: {
             "BGRMS": (recons_vals_std, "RMS error in background sensing pixels"),
             "XBGSUB": (True, "Background subtraction complete?"),
-        },
-        history=msg,
-        ext=ext,
+        }},
+        history=msg
     )
     log.info(msg)
     return out_hdul

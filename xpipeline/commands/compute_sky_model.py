@@ -1,19 +1,5 @@
-from astropy.io import fits
-import numpy as np
-import argparse
-import dask
-import os.path
 import logging
 import xconf
-
-# from . import constants as const
-from ..utils import unwrap
-from .. import utils
-from .. import pipelines  # , irods
-from ..core import LazyPipelineCollection
-from ..tasks import iofits  # obs_table, iofits, sky_model, detector, data_quality
-
-# from .ref import clio
 
 from .base import MultiInputCommand
 
@@ -28,10 +14,19 @@ class ComputeSkyModel(MultiInputCommand):
     test_fraction : float = xconf.field(default=0.25, help="Fraction of inputs to reserve for cross-validation")
 
     def main(self):
+        import dask
+        from .. import utils
+        from .. import pipelines
+        from ..core import LazyPipelineCollection
+        from ..tasks import iofits
+
         # outputs
+        destination = self.destination
+        dest_fs = utils.get_fs(destination)
+        log.debug(f"calling makedirs on {dest_fs} at {self.destination}")
+        dest_fs.makedirs(destination, exist_ok=True)
         model_fn = utils.join(self.destination, "sky_model.fits")
-        if self.check_for_outputs([model_fn]):
-            return
+        self.quit_if_outputs_exist([model_fn])
 
         # execute
         inputs_coll = LazyPipelineCollection(self.get_all_inputs()).map(iofits.load_fits_from_path)

@@ -10,15 +10,16 @@ from .commands import (
     # klip,
     # eval_klip,
     # local_klip,
-    # diagnostic,
     # collect_dataset,
-    # aligned_cutouts
     base,
+    update_headers,
     clio_split,
     clio_calibrate,
     compute_sky_model,
     sky_subtract,
     diagnostic,
+    aligned_cutouts,
+    combine_images,
 )
 
 log = logging.getLogger(__name__)
@@ -30,14 +31,16 @@ COMMANDS = {
     # eval_klip.EvalKLIP,
     # local_klip.LocalKLIP,
     # diagnostic.Diagnostic,
-    # aligned_cutouts.AlignedCutouts,
     base.BaseCommand,
     base.MultiInputCommand,
+    diagnostic.Diagnostic,
+    update_headers.UpdateHeaders,
     clio_split.ClioSplit,
     clio_calibrate.ClioCalibrate,
     compute_sky_model.ComputeSkyModel,
     sky_subtract.SkySubtract,
-    diagnostic.Diagnostic
+    aligned_cutouts.AlignedCutouts,
+    combine_images.CombineImages,
 }
 
 class Dispatcher(xconf.Dispatcher):

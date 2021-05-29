@@ -2,6 +2,7 @@ import typing
 import logging
 import numpy
 import os
+import sys
 import os.path
 import xconf
 from .. import utils
@@ -9,7 +10,6 @@ from .. import utils
 log = logging.getLogger(__name__)
 
 DEFAULT_EXTENSIONS = ("fit", "fits")
-FITS_DEFAULT_EXT = 0
 
 def _determine_temporary_directory():
     if "OSG_WN_TMP" in os.environ:
@@ -32,8 +32,7 @@ class BaseCommand(xconf.Command):
     dask : DaskConfig = xconf.field(default_factory=lambda: DaskConfig(), help="Configure Dask executor")
     random_state : int = xconf.field(default=0, help="Initialize NumPy's random number generator with this seed")
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __post_init__(self):
         numpy.random.seed(self.random_state)
         log.debug(f"Set NumPy random seed to {self.random_state}")
 
@@ -59,7 +58,6 @@ class MultiInputCommand(BaseCommand):
     destination : str = xconf.field(help="Output directory")
     sample_every_n : int = xconf.field(default=1, help="Take every Nth file from inputs (for speed of debugging)")
     file_extensions : list[str] = xconf.field(default=DEFAULT_EXTENSIONS, help="File extensions to match in the input (when given a directory)")
-    ext : typing.Union[str,int] = xconf.field(default=FITS_DEFAULT_EXT, help="Extension index or name to load from input files")
 
     def get_all_inputs(self):
         src_fs = utils.get_fs(self.input)
@@ -89,3 +87,9 @@ class MultiInputCommand(BaseCommand):
             if dest_fs.exists(op):
                 return True
         return False
+
+    def quit_if_outputs_exist(self, output_paths):
+        if self.check_for_outputs(output_paths):
+            log.info(f"Outputs exist at {output_paths}")
+            log.info(f"Remove to re-run")
+            sys.exit(0)

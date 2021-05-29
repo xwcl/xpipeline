@@ -8,18 +8,9 @@ from .base import MultiInputCommand
 
 log = logging.getLogger(__name__)
 
-
-@xconf.config
-class Metadata:
-    telescope : str = xconf.field(help="Telescope where data were taken")
-    instrument : str = xconf.field(help="Instrument with which data were taken")
-    observer : str = xconf.field(help="Name of observer")
-    object : str = xconf.field(help="Name of object observed")
-
 @xconf.config
 class ClioSplit(MultiInputCommand):
     """Split Clio datacubes into frames and interpolate header telemetry values"""
-    meta : Metadata = xconf.field(help="Set (or override) FITS header values for standard metadata")
 
     def _normalize_extension_key(self, key):
         try:
@@ -52,12 +43,9 @@ class ClioSplit(MultiInputCommand):
         n_output_files = len(all_inputs) * planes
         input_names = [utils.basename(fn) for fn in all_inputs]
         output_filepaths = [utils.join(destination, f"{self.name}_{i:04}.fits") for i in range(n_output_files)]
-        for output_file in output_filepaths:
-            if dest_fs.exists(output_file):
-                log.error(f"Output exists: {output_file}")
-                sys.exit(1)
+        self.quit_if_outputs_exist(output_filepaths)
 
         coll = LazyPipelineCollection(all_inputs).map(iofits.load_fits_from_path)
         output_coll = pipelines.clio_split(coll, input_names, frames_per_cube=planes)
-        return output_coll.zip_map(iofits.write_fits, output_filepaths, overwrite=True).compute()
-
+        result = output_coll.zip_map(iofits.write_fits, output_filepaths, overwrite=True).compute()
+        log.info(result)

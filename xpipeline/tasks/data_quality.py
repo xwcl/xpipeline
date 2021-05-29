@@ -19,5 +19,5 @@ def get_masked_data(image_hdul, permitted_flags=0, ext=0, dq_ext="DQ", fill=np.n
     dq = image_hdul[dq_ext].data
     dq = dq & ~permitted_flags
     mask = dq == 0
-    data[mask] = fill
+    data[~mask] = fill
     return data

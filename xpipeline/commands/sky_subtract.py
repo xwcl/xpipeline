@@ -1,15 +1,7 @@
 import sys
-import argparse
 from xpipeline.core import LazyPipelineCollection
-import fsspec.spec
 import logging
 import xconf
-
-from .. import utils
-from .. import pipelines
-from ..ref import clio
-from ..tasks import iofits, sky_model, improc
-
 
 from .base import MultiInputCommand
 
@@ -31,6 +23,12 @@ class SkySubtract(MultiInputCommand):
     excluded_regions : dict[str, ExcludedRegion] = xconf.field(default_factory=dict, help="Regions presumed illuminated to be excluded from background estimation")
 
     def main(self):
+        import fsspec.spec
+        from .. import utils
+        from .. import pipelines
+        from ..ref import clio
+        from ..tasks import iofits, sky_model, improc
+
         destination = self.destination
         dest_fs = utils.get_fs(destination)
         assert isinstance(dest_fs, fsspec.spec.AbstractFileSystem)
@@ -40,10 +38,7 @@ class SkySubtract(MultiInputCommand):
         all_inputs = self.get_all_inputs()
         n_output_files = len(all_inputs)
         output_filepaths = [utils.join(destination, f"sky_subtract_{i:04}.fits") for i in range(n_output_files)]
-        for output_file in output_filepaths:
-            if dest_fs.exists(output_file):
-                log.error(f"Output exists: {output_file}")
-                sys.exit(1)
+        self.quit_if_outputs_exist(output_filepaths)
 
         excluded_bboxes = []
         for _, er in self.excluded_regions.items():
@@ -56,5 +51,6 @@ class SkySubtract(MultiInputCommand):
         hdul = iofits.load_fits_from_path(self.sky_model_path)
         model_sky = sky_model.SkyModel.from_hdulist(hdul)
         output_coll = pipelines.sky_subtract(coll, model_sky, self.mask_dilate_iters, self.n_sigma, excluded_bboxes)
-        return output_coll.zip_map(iofits.write_fits, output_filepaths, overwrite=True).compute()
+        result = output_coll.zip_map(iofits.write_fits, output_filepaths, overwrite=True).compute()
+        log.info(result)
 

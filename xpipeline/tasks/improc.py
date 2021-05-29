@@ -732,16 +732,13 @@ def aligned_cutout(
 
     pad_y_end, pad_x_end = template.shape[0] - subarr.shape[0], template.shape[1] - subarr.shape[1]
 
-    subpix_subarr = ft_shift2(subarr, shift_y_frac, shift_x_frac)
+    subarr = interpolate_nonfinite(subarr)
+    subpix_subarr = ft_shift2(subarr, shift_y_frac, shift_x_frac, flux_tol=2e-14)
     if pad_y_end > 0:
         subpix_subarr = np.pad(subpix_subarr, [(0, pad_y_end), (0, 0)], constant_values=np.nan)
-    elif pad_y_end < 0:
-        subpix_subarr = subpix_subarr[:template.shape[0]]
     if pad_x_end > 0:
         subpix_subarr = np.pad(subpix_subarr, [(0, 0), (0, pad_x_end)], constant_values=np.nan)
-    if pad_x_end < 0:
-        subpix_subarr = subpix_subarr[:,:template.shape[1]]
-    return subpix_subarr
+    return subpix_subarr[:spec.template.shape[0],:spec.template.shape[1]]
 
 
 from scipy import interpolate

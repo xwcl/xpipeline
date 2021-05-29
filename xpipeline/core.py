@@ -162,13 +162,13 @@ class PipelineCollection:
         """Pass `self.inputs` to `dask.compute` and return the result
         of executing the pipeline
         """
-        return dask.compute(self.items)
+        return dask.compute(self.items)[0]
 
     def persist(self):
         """Pass `self.inputs` to `dask.persist` and return a delayed
         reference to the result of executing the pipeline
         """
-        return dask.persist(self.items)
+        return dask.persist(self.items)[0]
 
     def end(self):
         """Return the Delayed instances for the pipeline outputs"""

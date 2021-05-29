@@ -1,34 +1,28 @@
-from collections import defaultdict
 import sys
-
-import argparse
 from xpipeline.core import LazyPipelineCollection
-from astropy.utils import data
 import fsspec.spec
 import logging
-import dask
-import coloredlogs
-
-from .. import utils
-
 import typing
 import xconf
-# import dataclasses
-from dataclasses import dataclass
 
 
+from .. import utils
 from . import base
 
 log = logging.getLogger(__name__)
 
+
 @xconf.config
 class FileTemplate:
     path : str = xconf.field(help="Path to template FITS image")
-    ext : typing.Union[int,str] = xconf.field(default=0, help="Extension containing image data")
+    ext : typing.Union[int, str] = xconf.field(default=0, help="Extension containing image data")
+
 
 @xconf.config
 class GaussianTemplate:
     sigma_px : float = xconf.field(default=10, help="Template PSF kernel stddev in pixels")
+    size_px : int = xconf.field(default=128, help="Size of generated Gaussian template in pixels")
+
 
 @xconf.config
 class CutoutConfig:
@@ -36,22 +30,29 @@ class CutoutConfig:
     search_box_x : typing.Optional[int]
     search_box_height : typing.Optional[int]
     search_box_width : typing.Optional[int]
-    crop_px : int
-    template : typing.Union[FileTemplate,GaussianTemplate] = xconf.field(help=utils.unwrap("""
+    template : typing.Union[FileTemplate, GaussianTemplate] = xconf.field(
+        default=GaussianTemplate(),
+        help=utils.unwrap("""
     Template cross-correlated with the search region to align images to a common grid, either given as a FITS image
     or specified as a centered 2D Gaussian with given FWHM
     """))
 
+
+DEFAULT_CUTOUT = CutoutConfig(search_box_y=None, search_box_x=None, search_box_height=None,
+                              search_box_width=None, template=GaussianTemplate())
+
+
 @xconf.config
 class AlignedCutouts(base.MultiInputCommand):
     "Align PSF to template"
-    # name = "aligned_cutouts"
     cutouts : dict[str, CutoutConfig] = xconf.field(
-        default_factory=lambda: {'default': CutoutConfig(template=GaussianTemplate())},
+        default_factory=lambda: {'cutout': DEFAULT_CUTOUT},
         help="Specify one or more cutouts with names and template PSFs to generate aligned cutouts for",
     )
+    ext : typing.Union[str, int] = xconf.field(default=0, help="Extension index or name to load from input files")
 
     def main(self):
+        import dask
         from .. import pipelines
         from ..tasks import iofits, improc
 
@@ -64,10 +65,7 @@ class AlignedCutouts(base.MultiInputCommand):
         all_inputs = self.get_all_inputs()
         n_output_files = len(all_inputs)
         output_filepaths = [utils.join(self.destination, f"aligned_cutouts_{i:04}.fits") for i in range(n_output_files)]
-        for output_file in output_filepaths:
-            if dest_fs.exists(output_file):
-                log.error(f"Output exists: {output_file}")
-                sys.exit(1)
+        self.quit_if_outputs_exist(output_filepaths)
 
         input_coll = LazyPipelineCollection(all_inputs)
         coll = input_coll.map(iofits.load_fits_from_path)
@@ -92,8 +90,9 @@ class AlignedCutouts(base.MultiInputCommand):
             )
             tpl = cutout_config.template
             if isinstance(tpl, GaussianTemplate):
-                center = improc.arr_center(dimensions)
-                template_array = improc.gauss2d(dimensions, center, (tpl.sigma_px, tpl.sigma_px))
+                tpl_shape = tpl.size_px, tpl.size_px
+                center = improc.arr_center(tpl_shape)
+                template_array = improc.gauss2d(tpl_shape, center, (tpl.sigma_px, tpl.sigma_px))
             else:
                 hdul = iofits.load_fits_from_path()
                 template_array = hdul[tpl.ext].data
@@ -106,5 +105,6 @@ class AlignedCutouts(base.MultiInputCommand):
             log.debug(spec)
         output_coll = pipelines.align_to_templates(coll, cutout_specs)
         res = output_coll.zip_map(iofits.write_fits, output_filepaths, overwrite=True)
-        return dask.compute(res.items, rerun_exceptions_locally=True)
 
+        result = res.compute()
+        log.info(result)

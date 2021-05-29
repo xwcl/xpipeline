@@ -1,20 +1,5 @@
 import sys
-from astropy.io import fits
-import numpy as np
-import argparse
-import dask
-import fsspec.spec
-import os.path
 import logging
-
-# from . import constants as const
-from ..utils import unwrap
-from .. import utils
-from .. import pipelines  # , irods
-from ..core import LazyPipelineCollection
-from ..tasks import iofits, vapp  # obs_table, iofits, sky_model, detector, data_quality
-
-# from .ref import clio
 
 from .base import MultiInputCommand
 
@@ -24,7 +9,7 @@ log = logging.getLogger(__name__)
 def _optflag_to_attr(optflag):
     return optflag.replace("--", "").replace("-", "_")
 
-
+import numpy as np
 _DTYPE_LOOKUP = {
     "float32": np.float32,
     "float64": np.float64,
@@ -38,27 +23,26 @@ _DTYPE_LOOKUP = {
 
 
 class CollectDataset(MultiInputCommand):
-    name = "collect_dataset"
-    help = "Collect matching FITS files into a single data file"
+    """Collect matching FITS files into a single data file"""
 
-    _keyword_override_options = {
-        "--telescope": {
-            "keyword": "TELESCOP",
-            "help": "Name of telescope where data were taken",
-        },
-        "--instrument": {
-            "keyword": "INSTRUME",
-            "help": "Name of instrument with which data were taken",
-        },
-        "--observer": {
-            "keyword": "OBSERVER",
-            "help": "Name of observer",
-        },
-        "--object": {
-            "keyword": "OBJECT",
-            "help": "Name object observed",
-        },
-    }
+    # _keyword_override_options = {
+    #     "--telescope": {
+    #         "keyword": "TELESCOP",
+    #         "help": "Name of telescope where data were taken",
+    #     },
+    #     "--instrument": {
+    #         "keyword": "INSTRUME",
+    #         "help": "Name of instrument with which data were taken",
+    #     },
+    #     "--observer": {
+    #         "keyword": "OBSERVER",
+    #         "help": "Name of observer",
+    #     },
+    #     "--object": {
+    #         "keyword": "OBJECT",
+    #         "help": "Name object observed",
+    #     },
+    # }
 
     @staticmethod
     def add_arguments(parser: argparse.ArgumentParser):
@@ -151,6 +135,13 @@ class CollectDataset(MultiInputCommand):
         return out
 
     def main(self):
+        from ..utils import unwrap
+        from .. import utils
+        from .. import pipelines
+        from ..core import LazyPipelineCollection
+        from ..tasks import iofits, vapp
+        import fsspec
+
         destination = self.args.destination
         dest_fs = utils.get_fs(destination)
         assert isinstance(dest_fs, fsspec.spec.AbstractFileSystem)
