@@ -19,6 +19,7 @@ import dask.array as da
 import dask
 import logging
 import warnings
+from .. import constants
 
 log = logging.getLogger(__name__)
 
@@ -76,25 +77,37 @@ def separate_varying_header_keywords(all_headers):
     return non_varying_kw, varying_kw, varying_dtypes
 
 
-def construct_headers_table(all_headers):
+def construct_headers_table(all_headers : list[fits.Header], mask_values_keyword : str = constants.HEADER_KW_INTERPOLATED):
     """Given an iterable of astropy.io.fits.Header objects, identify
     repeated and varying keywords, extracting the former to a
     "static header" and the latter to a structured array
 
+    Parameters
+    ----------
+    all_headers : list[fits.Header]
+        List of all the headers to use
+
     Returns
     -------
     static_header : astropy.io.fits.Header
-    tbl_data : np.recarray
+    tbl_data : np.ndarray
+    tbl_mask : np.ndarray
     """
     non_varying_kw, varying_kw, varying_dtypes = separate_varying_header_keywords(
         all_headers
     )
     # for keywords that vary:
     tbl_data = np.zeros(len(all_headers), varying_dtypes)
+    mask_dtypes = []
+    for parts in varying_dtypes:
+        mask_dtypes.append((parts[0], np.bool))
+    tbl_mask = np.zeros(len(all_headers), mask_dtypes)
     for idx, header in enumerate(all_headers):
         for kw in varying_kw:
             if kw in header:
                 tbl_data[idx][kw] = header[kw]
+            else:
+                tbl_mask[idx][kw] = True  # true where value is missing/imputed and should be masked in maskedarray
 
     # for keywords that are static:
     static_header = fits.Header()
@@ -102,7 +115,7 @@ def construct_headers_table(all_headers):
         if card.keyword in non_varying_kw:
             static_header.append(card)
 
-    return static_header, tbl_data
+    return static_header, tbl_data, tbl_mask
 
 
 class DaskHDU:
@@ -198,6 +211,14 @@ class DaskHDUList:
 
     def __iter__(self):
         return self.hdus.__iter__()
+
+    @property
+    def extnames(self):
+        for idx, hdu in enumerate(self.hdus):
+            if 'EXTNAME' in hdu.header:
+                yield hdu.header['EXTNAME']
+            else:
+                yield idx
 
     @classmethod
     def from_fits(cls, hdus, distributed=False):

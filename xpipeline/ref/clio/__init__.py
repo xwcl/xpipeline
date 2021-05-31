@@ -136,7 +136,7 @@ def serial_split_frames_cube(all_hduls, filenames, ext=0):
                 card = hdul[ext].header.cards[kw]
                 new_hdul[0].header[kw] = (interps[kw][i], card.comment)
             new_hdul[0].header["ORIGFILE"] = filename
-            new_hdul[0].header["INTRPLTD"] = i != 0, "Are varying numeric header values interpolated?"
+            new_hdul[0].header[constants.HEADER_KW_INTERPOLATED] = i != 0, "Are varying numeric header values interpolated?"
             outputs.append(new_hdul)
     return outputs
 

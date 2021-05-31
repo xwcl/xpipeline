@@ -1,6 +1,7 @@
 import numpy
 import dask
 
+from dask.distributed import WorkerPlugin
 
 class YellingProxy:
     def __init__(self, package):
@@ -210,3 +211,10 @@ def reduce_bitwise_or(arr):
         return dask_array.blockwise(_dask_reduce_bitwise_or, 'jk', arr, 'ijk')
     else:
         return numpy.bitwise_or.reduce(arr, axis=0)
+
+
+class DaskWorkerPreloadPlugin(WorkerPlugin):
+    """Ensure xpipeline is preloaded in workers to avoid
+    confusing startup time with task time"""
+    def setup(self, worker: dask.distributed.Worker):
+        import xpipeline.pipelines

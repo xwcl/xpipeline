@@ -43,3 +43,4 @@ def _flatten_obs_method(the_dict):
 
 def flatten_obs_method(obs_method):
     return " ".join(_flatten_obs_method(obs_method))
+

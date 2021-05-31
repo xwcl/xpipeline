@@ -5,7 +5,7 @@ import os
 import sys
 import os.path
 import xconf
-from .. import utils
+from .. import core, utils
 
 log = logging.getLogger(__name__)
 
@@ -24,8 +24,8 @@ def _determine_temporary_directory():
 
 @xconf.config
 class DaskConfig:
-    distributed : bool = xconf.field(default=True, help="Whether to execute Dask workflows with a cluster of local threads to parallelize work")
-    log_level : str = xconf.field(default='INFO', help="What level of logs to show from the scheduler and workers")
+    distributed : bool = xconf.field(default=False, help="Whether to execute Dask workflows with a cluster of local threads to parallelize work")
+    log_level : str = xconf.field(default='WARN', help="What level of logs to show from the scheduler and workers")
 
 @xconf.config
 class BaseCommand(xconf.Command):
@@ -49,6 +49,8 @@ class BaseCommand(xconf.Command):
                 silence_logs=self.dask.log_level,
                 processes=True,
             )
+            log.info("Preloading xpipeline in Dask workers")
+            c.register_worker_plugin(core.DaskWorkerPreloadPlugin)
             log.info(f"Dask cluster: {c.scheduler.address} ({c.dashboard_link})")
 
 

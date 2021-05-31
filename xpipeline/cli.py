@@ -10,7 +10,6 @@ from .commands import (
     # klip,
     # eval_klip,
     # local_klip,
-    # collect_dataset,
     base,
     update_headers,
     clio_split,
@@ -20,13 +19,13 @@ from .commands import (
     diagnostic,
     aligned_cutouts,
     combine_images,
+    collect_dataset,
 )
 
 log = logging.getLogger(__name__)
 
 COMMANDS = {
     # copy_test.CopyTest,
-    # collect_dataset.CollectDataset,
     # klip.KLIP,
     # eval_klip.EvalKLIP,
     # local_klip.LocalKLIP,
@@ -41,6 +40,7 @@ COMMANDS = {
     sky_subtract.SkySubtract,
     aligned_cutouts.AlignedCutouts,
     combine_images.CombineImages,
+    collect_dataset.CollectDataset,
 }
 
 class Dispatcher(xconf.Dispatcher):

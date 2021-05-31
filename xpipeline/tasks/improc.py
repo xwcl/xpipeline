@@ -977,7 +977,7 @@ def make_transform(image_shape, rotation_deg):
     temp2 = rot(np.deg2rad(-rotation_deg))
     return trans(ctr_x, ctr_y) @ rot(np.deg2rad(-rotation_deg)) @ trans(-ctr_x, -ctr_y)
 
-@jit((float64, float64, float64, float64, float64), nopython=True)
+@jit((float64, float64, float64, float64, float64), nopython=True, cache=True)
 def cpu_cubic1d(t, f_minus1, f_0, f_1, f_2):
     a = 2 * f_0
     b = -1 * f_minus1 + f_1
@@ -985,7 +985,7 @@ def cpu_cubic1d(t, f_minus1, f_0, f_1, f_2):
     d = -1 * f_minus1 + 3 * f_0 - 3 * f_1 + f_2
     return 0.5 * (a + t * b + t ** 2 * c + t ** 3 * d)
 
-@jit(float64(float64[:, :], int64, int64, float64), nopython=True)
+@jit(float64(float64[:, :], int64, int64, float64), nopython=True, cache=True)
 def get_or_fill(arr, y, x, fill_value):
     '''Returns arr[y, x] unless that would
     be out of bounds, in which case returns 0.0'''
@@ -995,7 +995,7 @@ def get_or_fill(arr, y, x, fill_value):
     else:
         return np.nan
 
-@jit(float64(float64, float64, float64[:, :]), nopython=True)
+@jit(float64(float64, float64, float64[:, :]), nopython=True, cache=True)
 def cpu_bicubic(dx, dy, region):
     # Perform 4 1D interpolations by dx along the rows of region
     b_minus1 = cpu_cubic1d(dx, region[0, 0], region[0, 1], region[0, 2], region[0, 3])
@@ -1007,7 +1007,7 @@ def cpu_bicubic(dx, dy, region):
     return interpolated_value
 
 
-@jit(float64[:, :](float64[:, :], float64[:, :]), nopython=True)
+@jit(float64[:, :](float64[:, :], float64[:, :]), nopython=True, cache=True)
 def _interpolate_nonfinite(source_image, dest_image):
     for dest_y in range(dest_image.shape[0]):
         for dest_x in range(dest_image.shape[1]):
@@ -1041,7 +1041,7 @@ def interpolate_nonfinite(source_image, dest_image=None):
         dest_image = np.zeros_like(source_image)
     return _interpolate_nonfinite(source_image, dest_image)
 
-@jit(float64(float64[:, :], int64, int64, float64), nopython=True)
+@jit(float64(float64[:, :], int64, int64, float64), nopython=True, cache=True)
 def get_or_fill(arr, y, x, fill_value):
     """Returns arr[y, x] unless that would
     be out of bounds, in which case returns `fill_value`"""
@@ -1051,7 +1051,7 @@ def get_or_fill(arr, y, x, fill_value):
     else:
         return fill_value
 
-@jit(float64[:, :](float64[:, :], float64[:, :], float64[:, :], float64), nopython=True)
+@jit(float64[:, :](float64[:, :], float64[:, :], float64[:, :], float64), nopython=True, cache=True)
 def matrix_transform_image(source_image, transform_mtx, dest_image, fill_value):
     transform_mtx = np.ascontiguousarray(transform_mtx)  # should be a no-op but silences NumbaPerformanceWarning
     npix_y, npix_x = source_image.shape
