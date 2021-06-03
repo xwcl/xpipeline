@@ -4,7 +4,7 @@ import dask
 from typing import List
 from dataclasses import dataclass
 
-from . import improc
+from . import improc, iofits
 from .. import core
 
 da = core.dask_array

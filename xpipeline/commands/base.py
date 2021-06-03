@@ -81,7 +81,7 @@ class MultiInputCommand(BaseCommand):
             # handle single file
             else:
                 all_inputs = [self.input]
-        return all_inputs
+        return list(sorted(all_inputs))
 
     def check_for_outputs(self, output_paths):
         dest_fs = utils.get_fs(self.destination)

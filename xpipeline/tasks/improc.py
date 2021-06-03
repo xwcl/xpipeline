@@ -1,5 +1,5 @@
 import warnings
-from typing import Tuple, Union, List
+from typing import Tuple, Union, List, Optional
 import math
 from functools import partial
 import numpy as np
@@ -839,16 +839,39 @@ def regrid_image(image, x_prime, y_prime, method="cubic", mask=None, fill_value=
 
 
 def encircled_energy_and_profile(
-    data,
-    center,
-    arcsec_per_px=None,
-    normalize=None,
-    display=False,
+    data : np.ndarray,
+    center : tuple[float, float],
+    arcsec_per_px : float=None,
+    normalize : float =None,
+    display : bool=False,
     ee_ax=None,
     profile_ax=None,
-    label=None,
+    label : str=None,
+    saturated_pixel_threshold : Optional[float]=None,
 ):
     """Compute encircled energies and profiles
+
+    Parameters
+    ----------
+    data
+        2D image data array
+    center
+        y,x center coordinates for r=0
+    arcsec_per_px
+        conversion factor, changes returned values from pixels to arcsec
+    normalize
+        radius in pixels (or arcsec) where EE is fixed to be 1.0
+    display
+        whether to generate a plot
+    ee_ax
+        axes on which to plot encircled energy
+    profile_ax
+        axes on which to plot radial profile
+    label
+        label to attach to curves in ee_ax and profile_ax
+    saturated_pixel_threshold
+        annuli containing pixels above this threshold will
+        have a profile value of NaN
 
     Returns
     -------
@@ -884,9 +907,12 @@ def encircled_energy_and_profile(
             profile_bin_centers_rho.append(
                 (n - 0.5) * arcsec_per_px if arcsec_per_px is not None else n - 0.5
             )
-            profile_value = np.nansum(data[ring_mask]) / profile_npix
-            profile_value /= profile_npix
-            profile_value_at_rho.append(profile_value)
+            if saturated_pixel_threshold is not None and np.any(data[ring_mask] >= saturated_pixel_threshold):
+                profile_value_at_rho.append(np.nan)
+            else:
+                profile_value = np.nansum(data[ring_mask]) / profile_npix
+                profile_value /= profile_npix
+                profile_value_at_rho.append(profile_value)
 
     (
         ee_rho_steps,
@@ -1084,3 +1110,47 @@ def cpu_rotate(source_image, angle_deg, dest_image=None, fill_value=np.nan):
     transform_mtx = make_transform(source_image.shape, angle_deg)
     matrix_transform_image(source_image, transform_mtx, dest_image, fill_value)
     return dest_image
+
+def trim_radial_profile(image):
+    """Compute radial profile from image center, returning radii
+    and profile values for all radii up to the first one where
+    the profile value is zero or less
+
+    Returns
+    -------
+    radii
+    profile
+    """
+    radii, _, _, profile = encircled_energy_and_profile(
+        image,
+        arr_center(image)
+    )
+    # exclusive upper bound, this is the r where things went negative
+    max_r = radii[np.min(np.argwhere(profile < 0))]
+    return radii[radii < max_r], profile[radii < max_r]
+
+def template_scale_factor_from_image(image, template_radii, template_profile_values, saturated_pixel_threshold : Optional[float]=None):
+    template_min_r_px, template_max_r_px = np.min(template_radii), np.max(template_radii)
+    radii, _, _, profile_values = encircled_energy_and_profile(
+        image,
+        arr_center(image),
+        saturated_pixel_threshold=saturated_pixel_threshold
+    )
+    if len(np.argwhere(np.isnan(profile_values))):
+        min_r = radii[np.max(np.argwhere(np.isnan(profile_values)))]
+    else:
+        min_r = 0
+    max_r = np.min(np.argwhere(profile_values <= 0))
+    max_r = min(max_r, template_max_r_px)
+    min_r = max(min_r, template_min_r_px)
+    sat_mask = (
+        (radii < max_r) &
+        (radii > min_r)
+    )
+    template_mask = (
+        (template_radii < max_r) &
+        (template_radii > min_r)
+    )
+
+    scale_factor = np.average(profile_values[sat_mask] / template_profile_values[template_mask])
+    return scale_factor

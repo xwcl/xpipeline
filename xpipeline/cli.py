@@ -20,6 +20,7 @@ from .commands import (
     aligned_cutouts,
     combine_images,
     collect_dataset,
+    scale_templates,
 )
 
 log = logging.getLogger(__name__)
@@ -41,6 +42,7 @@ COMMANDS = {
     aligned_cutouts.AlignedCutouts,
     combine_images.CombineImages,
     collect_dataset.CollectDataset,
+    scale_templates.ScaleTemplates,
 }
 
 class Dispatcher(xconf.Dispatcher):

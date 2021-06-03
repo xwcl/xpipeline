@@ -1,3 +1,4 @@
+from enum import Enum
 from dataclasses import dataclass
 import argparse
 import glob
@@ -5,6 +6,7 @@ from multiprocessing import Pipe
 import os.path
 import logging
 from pprint import pformat
+from re import template
 import numpy as np
 import typing
 from astropy.io import fits
@@ -46,6 +48,7 @@ class KLIPParams:
     exclude_nearest_n_frames: int
     missing_data_value: float = np.nan
 
+
 distributed.protocol.register_generic(KLIPInput)
 distributed.protocol.register_generic(KLIPParams)
 
@@ -53,20 +56,47 @@ distributed.protocol.register_generic(KLIPParams)
 # and mustn't compute or branch on intermediate results.
 # They should return delayeds (for composition)
 
-from enum import Enum
+
 class CombineOperation(Enum):
     MEAN = 'mean'
+
 
 def combine_extension_to_new_hdu(
     inputs_collection : PipelineCollection,
     operation : CombineOperation,
-    ext : typing.Union[str,int],
-    plane_shape : tuple[int,int]
+    ext : typing.Union[str, int],
+    plane_shape : tuple[int, int]
 ):
     image_cube = iofits.hdulists_to_dask_cube(inputs_collection.items, plane_shape, ext=ext)
     if operation is CombineOperation.MEAN:
-        result = da.average(image_cube, axis=0)
+        result = da.nanmean(image_cube, axis=0)
     return dask.delayed(iofits.DaskHDU.from_array)(result, kind="image")
+
+
+def _compute_one_scale_factor(hdul : iofits.DaskHDUList, template_profiles : dict, saturated_pixel_threshold : float):
+    all_scales = []
+    for extname in template_profiles:
+        radii, values = template_profiles[extname]
+        scale = improc.template_scale_factor_from_image(
+            hdul[extname],
+            radii,
+            values,
+            saturated_pixel_threshold=saturated_pixel_threshold
+        )
+        all_scales.append(scale)
+    return np.average(all_scales)
+
+
+def compute_scale_factors(
+    inputs_collection : PipelineCollection,
+    template_hdul : iofits.DaskHDUList,
+    saturated_pixel_threshold : float
+):
+    template_profiles = {}
+    for extname in template_hdul.extnames:
+        template_profiles[extname] = improc.trim_radial_profile(template_hdul[extname].data)
+    return inputs_collection.map(_compute_one_scale_factor, template_profiles, saturated_pixel_threshold)
+
 
 def clio_split(
     inputs_coll: PipelineCollection,
@@ -163,11 +193,11 @@ def align_to_templates(
     d_hdus_for_cutouts = []
     for cspec in cutout_specs:
         d_hdus = (input_coll
-            .map(data_quality.get_masked_data, ext=ext, dq_ext=dq_ext)
-            .map(improc.aligned_cutout, cspec, upsample_factor=upsample_factor)
-            .map(iofits.DaskHDU.from_array, extname=cspec.name)
-            .items
-        )
+                  .map(data_quality.get_masked_data, ext=ext, dq_ext=dq_ext)
+                  .map(improc.aligned_cutout, cspec, upsample_factor=upsample_factor)
+                  .map(iofits.DaskHDU.from_array, extname=cspec.name)
+                  .items
+                  )
         d_hdus_for_cutouts.append(d_hdus)
 
     # collect as multi-extension FITS

@@ -162,15 +162,19 @@ class DaskHDU:
             new_header.update(new_headers)
         if history is not None:
             new_header.add_history(history)
-        return self.__class__(new_data, new_header)
+        return self.__class__(new_data, new_header, kind=self.kind)
 
     def to_fits(self):
+        if len(self.data.shape) == 0:
+            data = None
+        else:
+            data = self.data
         if self.kind == "image":
-            return fits.ImageHDU(self.data, self.header)
+            return fits.ImageHDU(data, self.header)
         elif self.kind == "bintable":
-            return fits.BinTableHDU(self.data, self.header)
+            return fits.BinTableHDU(data, self.header)
         elif self.kind == "primary":
-            return fits.PrimaryHDU(self.data, self.header)
+            return fits.PrimaryHDU(data, self.header)
         else:
             raise ValueError(f"Unknown kind: {self.kind}")
 
