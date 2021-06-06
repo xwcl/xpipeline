@@ -10,6 +10,7 @@ from .characterization import (
 )
 from . import improc
 from .. import core, pipelines
+from xpipeline.tasks import characterization
 
 da = core.dask_array
 
@@ -145,3 +146,9 @@ def test_end_to_end_dask():
     )
     recovered_signals = dask.compute(d_recovered_signals)[0]
     assert recovered_signals[0].snr > 12.0
+
+def test_calc_snr_mawet():
+    noises = [1, -1, 1, -1]  # stddev of 1, mean of zero by construction
+    signal = 10
+    snr = signal / np.sqrt(1 + 1/len(noises))
+    assert np.isclose(characterization.calc_snr_mawet(signal, noises), snr)
