@@ -165,7 +165,7 @@ class DaskHDU:
         return self.__class__(new_data, new_header, kind=self.kind)
 
     def to_fits(self):
-        if len(self.data.shape) == 0:
+        if self.data is None or len(self.data.shape) == 0:
             data = None
         else:
             data = self.data

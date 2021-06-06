@@ -1,7 +1,7 @@
 import logging
 import numpy as np
 import dask
-from typing import List
+from typing import List, Optional
 from dataclasses import dataclass
 
 from . import improc, iofits
@@ -51,21 +51,25 @@ def inject_signals(
     angles: np.ndarray,
     specs: List[CompanionSpec],
     template: np.ndarray,
+    scale_factors: Optional[np.ndarray] = None,
 ):
     xp = core.get_array_module(cube)
+    if scale_factors is None:
+        scale_factors = xp.ones(cube.shape[0])
     if xp is da:
         return da.blockwise(
-            inject_signals, "ijk", cube, "ijk", angles, "i", specs, None, template, None
+            inject_signals, "ijk", cube, "ijk", angles, "i", specs, None, template, None, scale_factors, "i"
         )
     frame_shape = cube.shape[1:]
     outcube = cube.copy()
+
     for frame_idx in range(cube.shape[0]):
         for spec in specs:
             if spec.scale == 0:
                 continue
             theta = np.deg2rad(90 + spec.pa_deg - angles[frame_idx])
             dx, dy = spec.r_px * np.cos(theta), spec.r_px * np.sin(theta)
-            addition = spec.scale * improc.ft_shift2(template, dy, dx, output_shape=frame_shape)
+            addition = spec.scale * scale_factors[frame_idx] * improc.ft_shift2(template, dy, dx, output_shape=frame_shape, flux_tol=None)
             outcube[frame_idx] += addition
     return outcube
 
@@ -226,7 +230,7 @@ def reduce_apertures(
 
 
 def calculate_snr(image, r_px, pa_deg, resolution_element_px, exclude_nearest):
-    locations, results = reduce_apertures(
+    _, results = reduce_apertures(
         image,
         r_px,
         pa_deg,
