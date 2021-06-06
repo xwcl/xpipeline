@@ -7,8 +7,6 @@ import numpy
 import xconf
 from .commands import (
     # copy_test,
-    # klip,
-    # eval_klip,
     # local_klip,
     base,
     update_headers,
@@ -21,15 +19,14 @@ from .commands import (
     combine_images,
     collect_dataset,
     scale_templates,
+    klip,
+    eval_klip,
 )
 
 log = logging.getLogger(__name__)
 
 COMMANDS = {
     # copy_test.CopyTest,
-    # klip.KLIP,
-    # eval_klip.EvalKLIP,
-    # local_klip.LocalKLIP,
     # diagnostic.Diagnostic,
     base.BaseCommand,
     base.MultiInputCommand,
@@ -43,6 +40,8 @@ COMMANDS = {
     combine_images.CombineImages,
     collect_dataset.CollectDataset,
     scale_templates.ScaleTemplates,
+    klip.Klip,
+    eval_klip.EvalKlip,
 }
 
 class Dispatcher(xconf.Dispatcher):

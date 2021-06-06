@@ -78,7 +78,7 @@ def _compute_one_scale_factor(hdul : iofits.DaskHDUList, template_profiles : dic
     for extname in template_profiles:
         radii, values = template_profiles[extname]
         scale = improc.template_scale_factor_from_image(
-            hdul[extname],
+            hdul[extname].data,
             radii,
             values,
             saturated_pixel_threshold=saturated_pixel_threshold
@@ -129,36 +129,6 @@ def clio_badpix_linearity(
     )
     log.debug("done assembling clio_badpix_linearity")
     return coll
-
-
-def clio_aligned(
-    sci_coll,
-    sky_coll,
-    badpix_arr,
-    n_components,
-    cutout_templates,
-    plane_shape,
-    test_fraction,
-    random_state,
-    mask_dilate_iters,
-) -> PipelineCollection:
-    sci_coll_bplcorr = clio_badpix_linearity(sci_coll, badpix_arr)
-    sky_coll_bplcorr = clio_badpix_linearity(sky_coll, badpix_arr)
-    model_sky = compute_sky_model(
-        sky_coll_bplcorr,
-        plane_shape,
-        test_fraction,
-        random_state,
-        n_components,
-        mask_dilate_iters,
-        badpix_arr,
-    )
-    sci_coll_skysub = sky_subtract(
-        sci_coll_bplcorr, model_sky, badpix_arr, mask_dilate_iters, n_sigma, ext
-    )
-    sci_coll_aligned = align_to_templates(sci_coll_skysub, cutout_templates)
-    return sci_coll_aligned
-
 
 def sky_subtract(
     input_coll: PipelineCollection,

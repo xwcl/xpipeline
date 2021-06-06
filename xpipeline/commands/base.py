@@ -24,8 +24,11 @@ def _determine_temporary_directory():
 
 @xconf.config
 class DaskConfig:
-    distributed : bool = xconf.field(default=False, help="Whether to execute Dask workflows with a cluster of local threads to parallelize work")
+    distributed : bool = xconf.field(default=False, help="Whether to execute Dask workflows with a cluster to parallelize work")
     log_level : str = xconf.field(default='WARN', help="What level of logs to show from the scheduler and workers")
+    port : int = xconf.field(default=8786, help="Port to contact dask-scheduler")
+    host : typing.Optional[str] = xconf.field(default=None, help="Hostname of running dask-scheduler")
+
 
 @xconf.config
 class BaseCommand(xconf.Command):
@@ -45,10 +48,13 @@ class BaseCommand(xconf.Command):
                 dask.config.refresh()
             log.info("Starting Dask LocalCluster")
             # registers with dask as a side-effect
-            c = Client(
-                silence_logs=self.dask.log_level,
-                processes=True,
-            )
+            if self.dask.host is not None:
+                c = Client(address=f'{self.dask.host}:{self.dask.port}')
+            else:
+                c = Client(
+                    silence_logs=self.dask.log_level,
+                    processes=False,
+                )
             log.info("Preloading xpipeline in Dask workers")
             c.register_worker_plugin(core.DaskWorkerPreloadPlugin)
             log.info(f"Dask cluster: {c.scheduler.address} ({c.dashboard_link})")
@@ -81,7 +87,7 @@ class MultiInputCommand(BaseCommand):
             # handle single file
             else:
                 all_inputs = [self.input]
-        return list(sorted(all_inputs))
+        return list(sorted(all_inputs))[::self.sample_every_n]
 
     def check_for_outputs(self, output_paths):
         dest_fs = utils.get_fs(self.destination)
