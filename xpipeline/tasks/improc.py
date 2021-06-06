@@ -400,10 +400,10 @@ def max_radius(center: Tuple[float, float], data_shape: Tuple[int, int]) -> floa
     that is completely within the data bounds"""
     if center[0] > (data_shape[1] - 1) or center[1] > (data_shape[0] - 1):
         raise ValueError("Coordinates for center are outside data_shape")
-    bottom_left = np.sqrt(center[0] ** 2 + center[1] ** 2)
     data_height, data_width = data_shape
-    top_right = np.sqrt((data_height - center[0]) ** 2 + (data_width - center[1]) ** 2)
-    return min(bottom_left, top_right)
+    dx, dy = center
+    odx, ody = data_width - dx, data_height - dy
+    return min(dx, dy, odx, ody)
 
 
 def ft_shift2(image: np.ndarray, dy: float, dx: float, flux_tol: Union[None, float] = 1e-15, output_shape=None):

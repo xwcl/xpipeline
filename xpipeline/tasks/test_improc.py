@@ -242,3 +242,9 @@ def test_rotate():
     # nb sense of angle reversed between this code and np/cp.rot90
     result3 = improc.cpu_rotate(image, -90, fill_value=0.0)  # TODO flip arrays first and only rotate the remaining <90deg
     assert np.allclose(result3, np.rot90(image)), "CPU interpolated image disagrees with simple 90deg rotation"
+
+
+def test_max_radius():
+    npix = 128
+    ctr = (npix - 1) / 2
+    assert improc.max_radius((ctr, ctr), (npix, npix)) == 63.5
