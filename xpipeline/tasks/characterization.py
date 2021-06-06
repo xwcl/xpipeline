@@ -1,10 +1,11 @@
 import logging
 import numpy as np
-import dask
 from typing import List, Optional
 from dataclasses import dataclass
 
-from . import improc, iofits
+from . import improc
+from numba import njit
+import math
 from .. import core
 
 da = core.dask_array
@@ -186,13 +187,26 @@ def show_simple_aperture_locations(
         )
     return im
 
+@njit
+def _calc_snr_mawet(signal, noises):
+    noise_total = 0
+    num_noises = noises.shape[0]
+    for i in range(num_noises):
+        noise_total += noises[i]
+    noise_avg = noise_total / num_noises
+    numerator = signal - noise_avg
+
+    stddev_inner_accum = 0
+    for i in range(num_noises):
+        meansub = (noises[i] - noise_avg)
+        stddev_inner_accum += meansub * meansub
+    noise_stddev = math.sqrt(stddev_inner_accum / num_noises)
+
+    denominator = noise_stddev * math.sqrt(1 + 1 / num_noises)
+    return numerator / denominator
 
 def calc_snr_mawet(signal, noises):
-    """Calculate signal to noise following the
-    two-sample t test as defined in Mawet 2014"""
-    return (signal - np.average(noises)) / (
-        np.std(noises) * np.sqrt(1 + 1 / len(noises))
-    )
+    return _calc_snr_mawet(signal, np.asarray(noises))
 
 def reduce_apertures(
     image,
