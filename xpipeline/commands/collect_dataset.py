@@ -178,7 +178,5 @@ class CollectDataset(MultiInputCommand):
         table_mask_hdu = iofits.DaskHDU(metadata_table_mask, kind="bintable")
         table_mask_hdu.header["EXTNAME"] = obs_table_mask_name
         hdul.append(table_mask_hdu)
-        import IPython
-        IPython.embed()
 
         return iofits.write_fits(hdul, output_filepath, overwrite=True)
