@@ -123,26 +123,31 @@ def simple_aperture_locations_r_theta(
     return np.repeat(r_px, n_apertures), start_theta + idxs * delta_theta
 
 
-def simple_aperture_locations(
-    r_px, pa_deg, resolution_element_px, exclude_nearest=0, exclude_planet=False
-):
-    """Aperture centers (x, y) in a ring of radius `r_px` and starting
-    at angle `pa_deg` E of N. Unless `exclude_planet` is True,
-    the first (x, y) pair gives the planet location (signal aperture).
-
-    Specifying `exclude_nearest` > 0 will skip that many apertures
-    from either side of the signal aperture's location"""
-    _, thetas = simple_aperture_locations_r_theta(
-        r_px,
-        pa_deg,
-        resolution_element_px,
-        exclude_nearest=exclude_nearest,
-        exclude_planet=exclude_planet,
-    )
+@njit
+def _simple_aperture_locations(r_px, pa_deg, resolution_element_px, xcenter=0, ycenter=0):
+    """Returns (x_center, y_center) for apertures in a ring of
+    radius `r_px` starting at angle `pa_deg` E of N. The first (x, y)
+    pair gives the planet location (signal aperture)."""
+    circumference = 2 * r_px * np.pi
+    aperture_pixel_diameter = resolution_element_px
+    n_apertures = int(circumference / aperture_pixel_diameter)
+    start_theta = np.deg2rad(pa_deg + 90)
+    delta_theta = np.deg2rad(360 / n_apertures)
+    idxs = np.arange(n_apertures)
+    thetas = start_theta + idxs * delta_theta
     offset_x = r_px * np.cos(thetas)
     offset_y = r_px * np.sin(thetas)
-    return np.stack((offset_x, offset_y), axis=-1)
 
+    return np.stack((offset_x + xcenter, offset_y + ycenter), axis=-1)
+
+def simple_aperture_locations(r_px, pa_deg, resolution_element_px, exclude_nearest=0,
+                              exclude_planet=False, xcenter=0, ycenter=0):
+    locs = _simple_aperture_locations(r_px, pa_deg, resolution_element_px, xcenter, ycenter)
+    if exclude_nearest != 0:
+        locs = np.concatenate([locs[0][np.newaxis,:], locs[1 + exclude_nearest:-exclude_nearest]])
+    if exclude_planet:
+        locs = locs[1:]
+    return locs
 
 def show_simple_aperture_locations(
     image,
