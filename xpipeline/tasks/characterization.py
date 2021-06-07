@@ -1,15 +1,17 @@
 import logging
+import warnings
 import numpy as np
 from typing import List, Optional
 from dataclasses import dataclass
-
-from . import improc
+import numba
 from numba import njit
 import math
+from scipy.signal import fftconvolve
+
+from . import improc
 from .. import core
 
 da = core.dask_array
-
 log = logging.getLogger()
 
 
@@ -125,9 +127,6 @@ def simple_aperture_locations_r_theta(
 
 @njit
 def _simple_aperture_locations(r_px, pa_deg, resolution_element_px, xcenter=0, ycenter=0):
-    """Returns (x_center, y_center) for apertures in a ring of
-    radius `r_px` starting at angle `pa_deg` E of N. The first (x, y)
-    pair gives the planet location (signal aperture)."""
     circumference = 2 * r_px * np.pi
     aperture_pixel_diameter = resolution_element_px
     n_apertures = int(circumference / aperture_pixel_diameter)
@@ -140,14 +139,19 @@ def _simple_aperture_locations(r_px, pa_deg, resolution_element_px, xcenter=0, y
 
     return np.stack((offset_x + xcenter, offset_y + ycenter), axis=-1)
 
+
 def simple_aperture_locations(r_px, pa_deg, resolution_element_px, exclude_nearest=0,
                               exclude_planet=False, xcenter=0, ycenter=0):
+    """Returns (x_center, y_center) for apertures in a ring of
+    radius `r_px` starting at angle `pa_deg` E of N. The first (x, y)
+    pair gives the planet location (signal aperture)."""
     locs = _simple_aperture_locations(r_px, pa_deg, resolution_element_px, xcenter, ycenter)
     if exclude_nearest != 0:
-        locs = np.concatenate([locs[0][np.newaxis,:], locs[1 + exclude_nearest:-exclude_nearest]])
+        locs = np.concatenate([locs[0][np.newaxis, :], locs[1 + exclude_nearest:-exclude_nearest]])
     if exclude_planet:
         locs = locs[1:]
     return locs
+
 
 def show_simple_aperture_locations(
     image,
@@ -192,26 +196,28 @@ def show_simple_aperture_locations(
         )
     return im
 
-@njit
+
+@njit(numba.float64(numba.float64, numba.float64[:]))
 def _calc_snr_mawet(signal, noises):
     noise_total = 0
-    num_noises = noises.shape[0]
-    for i in range(num_noises):
-        noise_total += noises[i]
+    num_noises = 0
+    for noise in noises:
+        noise_total += noise
+        num_noises += 1
     noise_avg = noise_total / num_noises
     numerator = signal - noise_avg
-
     stddev_inner_accum = 0
     for i in range(num_noises):
         meansub = (noises[i] - noise_avg)
         stddev_inner_accum += meansub * meansub
     noise_stddev = math.sqrt(stddev_inner_accum / num_noises)
-
     denominator = noise_stddev * math.sqrt(1 + 1 / num_noises)
     return numerator / denominator
 
+
 def calc_snr_mawet(signal, noises):
-    return _calc_snr_mawet(signal, np.asarray(noises))
+    return _calc_snr_mawet(float(signal), np.asarray(noises, dtype=np.float64))
+
 
 def reduce_apertures(
     image,
@@ -258,3 +264,78 @@ def calculate_snr(image, r_px, pa_deg, resolution_element_px, exclude_nearest):
         exclude_nearest=exclude_nearest,
     )
     return calc_snr_mawet(results[0], results[1:])
+
+
+@njit(parallel=True)
+def _calc_snr_image(convolved_image, rho, theta, mask, aperture_diameter_px, exclude_nearest, snr_image_out):
+    height, width = convolved_image.shape
+    yc, xc = (height - 1) / 2, (width - 1) / 2
+    for y in numba.prange(height):
+        for x in range(width):
+            if not mask[y, x]:
+                continue
+            loc_rho, loc_theta = rho[y, x], theta[y, x]
+            loc_pa_deg = np.rad2deg(loc_theta) - 90
+            locs = _simple_aperture_locations(
+                loc_rho, loc_pa_deg, aperture_diameter_px, xcenter=xc, ycenter=yc
+            )
+            n_apertures = locs.shape[0]
+            signal_x, signal_y = locs[0]
+            signal = convolved_image[round(signal_y), round(signal_x)]
+            n_noises = n_apertures - 1 - 2 * exclude_nearest
+            if n_noises < 2:
+                # note this is checked for in the wrapper
+                # as raising exceptions will leak memory allocated in numba functions
+                raise ValueError("Reached radius where only a single noise aperture is available for estimation. Change exclude_nearest or iwa_px.")
+            first_noise_offset = 1 + exclude_nearest
+            noises = np.zeros(n_noises)
+            for i in range(n_noises):
+                nidx = first_noise_offset + i
+                noise_x, noise_y = locs[nidx]
+                noises[i] = convolved_image[round(noise_y),round(noise_x)]
+            calculated_snr = _calc_snr_mawet(signal, noises)
+            snr_image_out[y, x] = calculated_snr
+    return snr_image_out
+
+
+def calc_snr_image(image, aperture_diameter_px, iwa_px, owa_px, exclude_nearest):
+    """Compute simple aperture photometry SNR at each pixel and return an image
+    with the SNR map"""
+    aperture_r = aperture_diameter_px / 2
+
+    # How close in can we really go?
+    num_excluded = exclude_nearest * 2 + 1  # some on either side, plus signal aperture itself
+    min_apertures = num_excluded + 2
+    real_iwa_px = (min_apertures * aperture_diameter_px) / (2 * np.pi)
+    if iwa_px < real_iwa_px:
+        warnings.warn(f'Requested {iwa_px=} < {real_iwa_px}, but at least two noise apertures are needed at the IWA for sensible output. Using {real_iwa_px} instead.')
+        min_r = real_iwa_px
+    else:
+        min_r = iwa_px
+
+    # How far out can we really go?
+    real_owa_px = improc.max_radius(improc.arr_center(image), image.shape) - aperture_r
+    if owa_px > real_owa_px:
+        warnings.warn(f'Requested {owa_px=} > {real_owa_px} but pixel values outside the image are unknown. Using {real_owa_px} instead.')
+        max_r = real_owa_px
+    else:
+        max_r = owa_px
+
+    rho, theta = improc.polar_coords(improc.arr_center(image), image.shape)
+    mask = (rho >= min_r) & (rho <= max_r)
+    kernel_npix = math.ceil(aperture_diameter_px) + 2  # one pixel border both sides for no reason
+    kernel = np.zeros((kernel_npix, kernel_npix))
+    kernel_rho, _ = improc.polar_coords(improc.arr_center(kernel), kernel.shape)
+    kernel[kernel_rho <= aperture_r] = 1
+    convolved_image = fftconvolve(image, kernel, mode='same')
+    snr_image = np.zeros_like(convolved_image)
+    _calc_snr_image(convolved_image, rho, theta, mask, aperture_diameter_px, exclude_nearest, snr_image)
+    return snr_image
+
+
+def locate_snr_peak(image, aperture_diameter_px, iwa_px, owa_px, exclude_nearest):
+    """Compute SNR from `aperture_diameter_px` simple apertures"""
+    snr_image = calc_snr_image(image, aperture_diameter_px, iwa_px, owa_px, exclude_nearest)
+    peak = np.argmax(snr_image)
+    peak_y, peak_x = np.unravel_index(peak, snr_image.shape)
+    return improc.Pixel(y=peak_y, x=peak_x), snr_image[peak_y, peak_x]

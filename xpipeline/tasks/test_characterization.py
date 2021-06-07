@@ -112,6 +112,12 @@ def test_end_to_end_dask():
     snr = calc_snr_mawet(results[0], results[1:])
     assert snr > 21.8
 
+    # can we get the same SNR from the image?
+    iwa_px, owa_px = 4, 47
+    peak_loc, peak_snr = characterization.locate_snr_peak(output_image, fwhm_naco, iwa_px, owa_px, exclude_nearest=1)
+    assert peak_loc == improc.Pixel(y=62, x=61), "Peak SNR isn't where we thought"
+    assert np.isclose(peak_snr,  25.469519756291053), "Peak SNR isn't what we thought"
+
     template_psf = data["psf"]
     avg_frame_total = np.average(np.sum(data["cube"], axis=(1, 2)))
     # scale up to star amplitude
