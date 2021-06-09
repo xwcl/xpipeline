@@ -61,9 +61,27 @@ class BaseCommand(xconf.Command):
 
 
 @xconf.config
-class MultiInputCommand(BaseCommand):
-    input : str = xconf.field(help="Input file, directory, or wildcard pattern matching multiple files")
+class InputCommand(BaseCommand):
+    input : str = xconf.field(help="Input file path")
     destination : str = xconf.field(help="Output directory")
+
+    def check_for_outputs(self, output_paths):
+        dest_fs = utils.get_fs(self.destination)
+        for op in output_paths:
+            if dest_fs.exists(op):
+                return True
+        return False
+
+    def quit_if_outputs_exist(self, output_paths):
+        if self.check_for_outputs(output_paths):
+            log.info(f"Outputs exist at {output_paths}")
+            log.info(f"Remove to re-run")
+            sys.exit(0)
+
+
+@xconf.config
+class MultiInputCommand(InputCommand):
+    input : str = xconf.field(help="Input file, directory, or wildcard pattern matching multiple files")
     sample_every_n : int = xconf.field(default=1, help="Take every Nth file from inputs (for speed of debugging)")
     file_extensions : list[str] = xconf.field(default=DEFAULT_EXTENSIONS, help="File extensions to match in the input (when given a directory)")
 
@@ -89,15 +107,3 @@ class MultiInputCommand(BaseCommand):
                 all_inputs = [self.input]
         return list(sorted(all_inputs))[::self.sample_every_n]
 
-    def check_for_outputs(self, output_paths):
-        dest_fs = utils.get_fs(self.destination)
-        for op in output_paths:
-            if dest_fs.exists(op):
-                return True
-        return False
-
-    def quit_if_outputs_exist(self, output_paths):
-        if self.check_for_outputs(output_paths):
-            log.info(f"Outputs exist at {output_paths}")
-            log.info(f"Remove to re-run")
-            sys.exit(0)
