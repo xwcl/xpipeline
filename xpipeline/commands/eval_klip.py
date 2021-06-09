@@ -40,6 +40,9 @@ class EvalKlip(Klip):
         location to exclude when calculating the noise (in other
         words, a value of 1 excludes two apertures total,
         one on each side)"""))
+    snr_threshold : float = xconf.field(default=5.0, help="Threshold above which peaks of interest should be reported")
+    search_iwa_px : float = xconf.field(default=None, help="Limit blind search to pixels more than this radius from center")
+    search_owa_px : float = xconf.field(default=None, help="Limit blind search to pixels less than this radius from center")
 
     def _load_inputs(self, *args, **kwargs):
         from ..tasks import iofits
@@ -79,13 +82,7 @@ class EvalKlip(Klip):
         apertures_to_exclude = self.apertures_to_exclude
         template_hdul = iofits.load_fits_from_path(self.template_path)
 
-
-        all_inputs = self.get_all_inputs()
-        if len(all_inputs) > 1:
-            raise RuntimeError(
-                f"Not sure what to do with multiple inputs: {all_inputs}"
-            )
-        dataset_path = all_inputs[0]
+        dataset_path = self.input
         srcfs = utils.get_fs(dataset_path)
 
         scale_factors = []
@@ -95,7 +92,7 @@ class EvalKlip(Klip):
                     continue
                 value = float(line)
                 scale_factors.append(value)
-        scale_factors = np.asarray(scale_factors)
+        scale_factors = np.asarray(scale_factors)[::self.sample_every_n]
 
         # process like the klip command
         klip_inputs, obs_method, derotation_angles = self._assemble_klip_inputs(dataset_path)
@@ -145,10 +142,20 @@ class EvalKlip(Klip):
         d_recovered_signals = dask.delayed(characterization.recover_signals)(
             out_image, specs, aperture_diameter_px, apertures_to_exclude
         )
+        if self.search_iwa_px is None:
+            self.search_iwa_px = self.mask_iwa_px
+        if self.search_owa_px is None:
+            self.search_owa_px = self.mask_owa_px
+        self.search_iwa_px, self.search_owa_px = characterization.working_radii_from_aperture_spacing(out_image.shape, self.aperture_diameter_px, apertures_to_exclude, self.search_iwa_px, self.search_owa_px)
+        d_all_candidates = dask.delayed(characterization.locate_snr_peaks)(
+            out_image, aperture_diameter_px, self.search_iwa_px, self.search_owa_px, apertures_to_exclude, self.snr_threshold
+        )
 
         log.info(f"Computing recovered signals")
-        out_image, recovered_signals = dask.compute(out_image, d_recovered_signals)
-        log.info(f"Done")
+        import time
+        start = time.perf_counter()
+        out_image, recovered_signals, all_candidates = dask.compute(out_image, d_recovered_signals, d_all_candidates)
+        log.info(f"Done in {time.perf_counter() - start} sec")
 
         iofits.write_fits(
             iofits.DaskHDUList([iofits.DaskHDU(out_image)]), output_klip_final
@@ -156,6 +163,7 @@ class EvalKlip(Klip):
 
         payload = xconf.asdict(self)
         payload['recovered_signals'] = [dataclasses.asdict(x) for x in recovered_signals]
+        payload['candidates'] = [dataclasses.asdict(x) for x in all_candidates]
         log.info(f"Result of KLIP + ADI signal injection and recovery:")
         log.info(pformat(payload))
 

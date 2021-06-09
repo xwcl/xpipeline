@@ -4,13 +4,13 @@ import logging
 from typing import Optional
 from .. import utils
 
-from .base import MultiInputCommand
+from .base import InputCommand
 
 log = logging.getLogger(__name__)
 
 
 @xconf.config
-class Klip(MultiInputCommand):
+class Klip(InputCommand):
     "Subtract starlight with KLIP"
     k_klip : int = xconf.field(default=10, help="Number of modes to subtract in starlight subtraction")
     exclude_nearest_n_frames : int = xconf.field(default=0, help="Number of additional temporally-adjacent frames to exclude from the sequence when computing the KLIP eigenimages")
@@ -21,6 +21,7 @@ class Klip(MultiInputCommand):
     estimation_mask_path : str = xconf.field(default=None, help="Path to file shaped like single plane of input with 1s where pixels should be included in starlight estimation (intersected with saturation and annular mask)")
     combination_mask_path : str = xconf.field(default=None, help="Path to file shaped like single plane of input with 1s where pixels should be included in final combination (intersected with other masks)")
     vapp_mask_angle : float = xconf.field(default=0, help="Angle in degrees E of N (+Y) of axis of symmetry for paired gvAPP-180 data (default: 0)")
+    sample_every_n : int = xconf.field(default=1, help="Take every Nth file from inputs (for speed of debugging)")
 
     def _get_derotation_angles(self, input_cube_hdul, obs_method):
         derotation_angles_where = obs_method["adi"]["derotation_angles"]
@@ -93,13 +94,7 @@ class Klip(MultiInputCommand):
         dest_fs.makedirs(destination, exist_ok=True)
         self.quit_if_outputs_exist([output_klip_final, output_exptime_map])
 
-        all_inputs = self.get_all_inputs()
-        if len(all_inputs) > 1:
-            raise RuntimeError(
-                f"Not sure what to do with multiple inputs: {self.all_files}"
-            )
-
-        klip_inputs, obs_method, derotation_angles = self._assemble_klip_inputs(all_inputs[0])
+        klip_inputs, obs_method, derotation_angles = self._assemble_klip_inputs(self.input)
         klip_params = self._assemble_klip_params()
         outcubes = pipelines.klip_multi(klip_inputs, klip_params)
         out_image = self._assemble_out_image(obs_method, outcubes, derotation_angles)
