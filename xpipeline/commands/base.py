@@ -44,7 +44,7 @@ class BaseCommand(xconf.Command):
             from dask.distributed import Client
             temp_dir = _determine_temporary_directory()
             if temp_dir is not None:
-                dask.config.set('temporary-directory', temp_dir)
+                dask.config.set({'temporary-directory': temp_dir})
             # registers with dask as a side-effect
             if self.dask.host is not None:
                 log.info("Connecting to existing cluster")
