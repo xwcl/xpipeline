@@ -4,6 +4,9 @@ import os.path
 from urllib.parse import urlparse
 import fsspec
 import threading
+import logging
+
+log = logging.getLogger(__name__)
 
 _LOCAL = threading.local()
 _LOCAL.filesystems = {}
