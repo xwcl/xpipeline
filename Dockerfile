@@ -25,9 +25,10 @@ RUN conda install --quiet --yes -c conda-forge \
     python-dateutil \
     orjson \
     fsspec \
+    numba \
     && conda clean --all -f -y 
 RUN pip install git+https://github.com/xwcl/irods_fsspec.git#egg=irods_fsspec
-RUN pip install git+https://github.com/xwcl/exao_dap_client.git#egg=exao_dap_client
+RUN pip install git+https://github.com/xwcl/xconf.git#egg=xconf
 RUN mkdir -p /opt/xpipeline
 ADD . /opt/xpipeline/
 # ADD ./xpipeline /opt/xpipeline/xpipeline

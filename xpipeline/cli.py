@@ -46,7 +46,7 @@ COMMANDS = {
 
 class Dispatcher(xconf.Dispatcher):
     def configure_logging(self, level):
-        for name in ["xpipeline", "irods_fsspec", "exao_dap_client"]:
+        for name in ["xpipeline", "irods_fsspec"]:
             logger = logging.getLogger(name)
             coloredlogs.install(level="DEBUG", logger=logger)
             logger.setLevel(level)

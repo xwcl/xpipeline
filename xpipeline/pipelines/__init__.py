@@ -328,27 +328,30 @@ def klip(
     return outcube
 
 
-def evaluate_starlight_subtraction(
-    klip_input: KLIPInput,
-    derotation_angles: da.core.Array,
-    specs: List[characterization.CompanionSpec],
-    template_psf: np.ndarray,
-    klip_params: KLIPParams,
-    aperture_diameter_px: float,
-    apertures_to_exclude: int,
-):
-    injected_sci_arr = characterization.inject_signals(
-        klip_input.sci_arr, derotation_angles, specs, template_psf
-    )
-    outcube = klip_one(
-        KLIPInput(
-            injected_sci_arr, klip_input.estimation_mask, klip_input.combination_mask
-        ),
-        klip_params,
-    )
-    out_image = adi(outcube, derotation_angles)
+# def evaluate_starlight_subtraction(
+#     klip_input: KLIPInput,
+#     derotation_angles: da.core.Array,
+#     specs: List[characterization.CompanionSpec],
+#     template_psf: np.ndarray,
+#     klip_params: KLIPParams,
+#     aperture_diameter_px: float,
+#     apertures_to_exclude: int,
+#     snr_threshold : float,
+#     search_iwa_px : float,
+#     search_owa_px : float,
+# ):
+#     injected_sci_arr = characterization.inject_signals(
+#         klip_input.sci_arr, derotation_angles, specs, template_psf
+#     )
+#     outcube = klip_one(
+#         KLIPInput(
+#             injected_sci_arr, klip_input.estimation_mask, klip_input.combination_mask
+#         ),
+#         klip_params,
+#     )
+#     out_image = adi(outcube, derotation_angles)
 
-    recovered_signals = dask.delayed(characterization.recover_signals)(
-        out_image, specs, aperture_diameter_px, apertures_to_exclude
-    )
-    return recovered_signals
+#     recovered_signals = dask.delayed(characterization.recover_signals)(
+#         out_image, specs, aperture_diameter_px, apertures_to_exclude
+#     )
+#     return recovered_signals

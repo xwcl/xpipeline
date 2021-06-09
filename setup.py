@@ -42,7 +42,8 @@ setup(
         'sphinx-argparse>=0.2.5',
         'sphinx-rtd-theme>=0.4.3',
         'python-dateutil>=2.8.1,<3',
-        'dacite>=1.6.0,<2.0'
+        'dacite>=1.6.0,<2.0',
+        'numba>=0.53.1,<1.0'
     ],
     entry_points={
         'console_scripts': [
