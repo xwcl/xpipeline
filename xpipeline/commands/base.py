@@ -29,11 +29,11 @@ class DaskConfig:
     port : int = xconf.field(default=8786, help="Port to contact dask-scheduler")
     host : typing.Optional[str] = xconf.field(default=None, help="Hostname of running dask-scheduler")
 
-
 @xconf.config
 class BaseCommand(xconf.Command):
     dask : DaskConfig = xconf.field(default_factory=lambda: DaskConfig(), help="Configure Dask executor")
     random_state : int = xconf.field(default=0, help="Initialize NumPy's random number generator with this seed")
+    cpus : int = xconf.field(default=utils.available_cpus(), help="Number of CPUs free for use")
 
     def __post_init__(self):
         numpy.random.seed(self.random_state)
@@ -44,16 +44,22 @@ class BaseCommand(xconf.Command):
             from dask.distributed import Client
             temp_dir = _determine_temporary_directory()
             if temp_dir is not None:
-                os.environ["DASK_TEMPORARY_DIRECTORY"] = temp_dir
-                dask.config.refresh()
-            log.info("Starting Dask LocalCluster")
+                dask.config.set('temporary-directory', temp_dir)
             # registers with dask as a side-effect
             if self.dask.host is not None:
+                log.info("Connecting to existing cluster")
                 c = Client(address=f'{self.dask.host}:{self.dask.port}')
             else:
+                log.info("Starting Dask LocalCluster")
+                # This has to be done by us because Dask is using psutil process
+                # affinity and on Puma that automatically detects only 1 CPU
+                from distributed.deploy.utils import nprocesses_nthreads
+                nproc, nthread = nprocesses_nthreads(self.cpus)
+                log.info(f'Using {nproc} processes with {nthread} threads per process')
                 c = Client(
+                    n_workers=nproc,
+                    threads_per_worker=nthread,
                     silence_logs=self.dask.log_level,
-                    processes=False,
                 )
             log.info("Preloading xpipeline in Dask workers")
             c.register_worker_plugin(core.DaskWorkerPreloadPlugin)

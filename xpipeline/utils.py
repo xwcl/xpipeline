@@ -1,4 +1,5 @@
 import re
+import os
 import os.path
 from urllib.parse import urlparse
 import fsspec
@@ -80,3 +81,12 @@ def _flatten_obs_method(the_dict):
 def flatten_obs_method(obs_method):
     return " ".join(_flatten_obs_method(obs_method))
 
+def available_cpus() -> int:
+    if 'OMP_NUM_THREADS' in os.environ:
+        log.debug(f'Counting CPUs from OMP_NUM_THREADS')
+        cpus = int(os.environ['OMP_NUM_THREADS'])
+    else:
+        log.debug(f'Counting CPUs from os.cpu_count')
+        cpus = os.cpu_count()
+    log.debug(f'Found {cpus=}')
+    return cpus
