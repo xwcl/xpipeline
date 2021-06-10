@@ -113,10 +113,14 @@ def test_end_to_end_dask():
     assert snr > 21.8
 
     # can we get the same SNR from the image?
-    iwa_px, owa_px = 4, 47
-    peak_loc, peak_snr = characterization.locate_snr_peak(output_image, fwhm_naco, iwa_px, owa_px, exclude_nearest=1)
-    assert peak_loc == improc.Pixel(y=62, x=61), "Peak SNR isn't where we thought"
-    assert np.isclose(peak_snr,  25.469519756291053), "Peak SNR isn't what we thought"
+    iwa_px, owa_px = 7, 47
+    detections = characterization.locate_snr_peaks(output_image, fwhm_naco, iwa_px, owa_px, exclude_nearest=1, snr_threshold=8)
+    peak = detections[0]
+    # n.b. not the same as the VIP tutorial quotes, but this is here to make sure
+    # we don't change locate_snr_peaks outputs by accident
+    assert np.isclose(peak.r_px, 16.98528775146303)
+    assert np.isclose(peak.pa_deg, 317.3859440303888)
+    assert np.isclose(peak.snr, 25.469519756291053)
 
     template_psf = data["psf"]
     avg_frame_total = np.average(np.sum(data["cube"], axis=(1, 2)))
