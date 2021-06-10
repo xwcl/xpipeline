@@ -15,7 +15,9 @@ ADD https://repo.anaconda.com/miniconda/Miniconda3-py39_4.9.2-Linux-x86_64.sh mi
 ENV CONDA_DIR=/opt/miniconda3
 ENV PATH=$CONDA_DIR/bin:$PATH
 RUN bash miniconda3.sh -b -p ${CONDA_DIR}
+# note that openblas and numba can both leverage openmp
 RUN conda install --quiet --yes -c conda-forge \
+    openblas=*=openmp* \
     numpy \
     scipy \
     matplotlib \
