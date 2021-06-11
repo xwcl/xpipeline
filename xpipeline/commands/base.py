@@ -54,9 +54,9 @@ class BaseCommand(xconf.Command):
                 c = Client(address=f'{self.dask.host}:{self.dask.port}')
             else:
                 log.info("Starting Dask LocalCluster")
-                # This has to be done by us because Dask is using psutil process
-                # affinity and on Puma that automatically detects only 1 CPU
                 from distributed.deploy.utils import nprocesses_nthreads
+                # This has to be done by us because Dask is using psutil process
+                # affinity and on Puma that automatically detects only 1 CPU:
                 nproc, nthread = nprocesses_nthreads(self.cpus)
                 if self.dask.n_processes is not None:
                     nproc = self.dask.n_processes
