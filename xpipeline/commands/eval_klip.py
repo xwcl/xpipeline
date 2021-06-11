@@ -151,11 +151,18 @@ class EvalKlip(Klip):
             out_image, aperture_diameter_px, self.search_iwa_px, self.search_owa_px, apertures_to_exclude, self.snr_threshold
         )
 
-        log.info(f"Computing recovered signals")
-        import time
-        start = time.perf_counter()
-        out_image, recovered_signals, all_candidates = dask.compute(out_image, d_recovered_signals, d_all_candidates)
-        log.info(f"Done in {time.perf_counter() - start} sec")
+        _ = dask.visualize(out_image, d_recovered_signals, d_all_candidates, filename='eval_klip.svg')
+        if self.dask.distributed:
+            from dask.distributed import performance_report
+            with performance_report():
+                out_image, recovered_signals, all_candidates = dask.compute(out_image, d_recovered_signals, d_all_candidates)
+        else:
+
+            log.info(f"Computing recovered signals")
+            import time
+            start = time.perf_counter()
+            out_image, recovered_signals, all_candidates = dask.compute(out_image, d_recovered_signals, d_all_candidates)
+            log.info(f"Done in {time.perf_counter() - start} sec")
 
         iofits.write_fits(
             iofits.DaskHDUList([iofits.DaskHDU(out_image)]), output_klip_final
