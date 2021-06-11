@@ -29,12 +29,13 @@ RUN conda install --quiet --yes -c conda-forge \
     fsspec \
     numba \
     jupyter-server-proxy \
+    py-spy \
+    memory_profiler \
     && conda clean --all -f -y 
 RUN pip install git+https://github.com/xwcl/irods_fsspec.git#egg=irods_fsspec
 RUN pip install git+https://github.com/xwcl/xconf.git#egg=xconf
 RUN mkdir -p /opt/xpipeline
 ADD . /opt/xpipeline/
-# ADD ./xpipeline /opt/xpipeline/xpipeline
 RUN pip install -e /opt/xpipeline
 RUN mkdir -p /srv
 WORKDIR /srv

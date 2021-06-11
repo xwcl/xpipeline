@@ -28,6 +28,9 @@ class DaskConfig:
     log_level : str = xconf.field(default='WARN', help="What level of logs to show from the scheduler and workers")
     port : int = xconf.field(default=8786, help="Port to contact dask-scheduler")
     host : typing.Optional[str] = xconf.field(default=None, help="Hostname of running dask-scheduler")
+    n_processes : int = xconf.field(default=None, help="Override automatically selected number of processes to spawn")
+    n_threads : int = xconf.field(default=None, help="Override automatically selected number of threads per process to spawn")
+    synchronous : bool = xconf.field(default=True, help="Whether to disable Dask's parallelism in favor of lower levels (ignored when distributed=True)")
 
 @xconf.config
 class BaseCommand(xconf.Command):
@@ -39,13 +42,13 @@ class BaseCommand(xconf.Command):
         numpy.random.seed(self.random_state)
         log.debug(f"Set NumPy random seed to {self.random_state}")
 
+        import dask
+        temp_dir = _determine_temporary_directory()
+        if temp_dir is not None:
+            dask.config.set({'temporary-directory': temp_dir})
         if self.dask.distributed:
-            import dask
             from dask.distributed import Client
-            temp_dir = _determine_temporary_directory()
-            if temp_dir is not None:
-                dask.config.set({'temporary-directory': temp_dir})
-            # registers with dask as a side-effect
+            # instantiating Client registers with dask as a side-effect
             if self.dask.host is not None:
                 log.info("Connecting to existing cluster")
                 c = Client(address=f'{self.dask.host}:{self.dask.port}')
@@ -55,6 +58,10 @@ class BaseCommand(xconf.Command):
                 # affinity and on Puma that automatically detects only 1 CPU
                 from distributed.deploy.utils import nprocesses_nthreads
                 nproc, nthread = nprocesses_nthreads(self.cpus)
+                if self.dask.n_processes is not None:
+                    nproc = self.dask.n_processes
+                if self.dask.n_threads is not None:
+                    nthread = self.dask.n_threads
                 log.info(f'Using {nproc} processes with {nthread} threads per process')
                 c = Client(
                     n_workers=nproc,
@@ -64,6 +71,8 @@ class BaseCommand(xconf.Command):
             log.info("Preloading xpipeline in Dask workers")
             c.register_worker_plugin(core.DaskWorkerPreloadPlugin)
             log.info(f"Dask cluster: {c.scheduler.address} ({c.dashboard_link})")
+        elif self.dask.synchronous:
+            dask.config.set(scheduler='synchronous')
 
 
 @xconf.config
