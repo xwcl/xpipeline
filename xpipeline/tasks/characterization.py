@@ -333,14 +333,16 @@ def working_radii_from_aperture_spacing(image_shape, aperture_diameter_px, exclu
     min_apertures = num_excluded + 2
     real_iwa_px = (min_apertures * aperture_diameter_px) / (2 * np.pi) + aperture_r
     if iwa_px is None or iwa_px < real_iwa_px:
-        warnings.warn(f'Requested {iwa_px=} < {real_iwa_px}, but at least two noise apertures are needed at the IWA for sensible output. Using {real_iwa_px} instead.')
+        if iwa_px is not None:
+            warnings.warn(f'Requested {iwa_px=} < {real_iwa_px}, but at least two noise apertures are needed at the IWA for sensible output. Using {real_iwa_px} instead.')
         min_r = real_iwa_px
     else:
         min_r = iwa_px
     # How far out can we really go?
     real_owa_px = improc.max_radius(improc.arr_center(image_shape), image_shape) - aperture_r
     if owa_px is None or owa_px > real_owa_px:
-        warnings.warn(f'Requested {owa_px=} > {real_owa_px} but pixel values outside the image are unknown. Using {real_owa_px} instead.')
+        if owa_px is not None:
+            warnings.warn(f'Requested {owa_px=} > {real_owa_px} but pixel values outside the image are unknown. Using {real_owa_px} instead.')
         max_r = real_owa_px
     else:
         max_r = owa_px
