@@ -30,7 +30,7 @@ from ..tasks import (
     characterization,
     vapp,
 )
-from ..tasks.starlight_subtraction import KLIPInput, KlipStrategy, KLIPParams
+from ..tasks.starlight_subtraction import KlipInput, KlipStrategy, KlipParams
 from ..ref import clio
 
 log = logging.getLogger(__name__)
@@ -197,7 +197,7 @@ def compute_sky_model(
     return model
 
 
-def klip_multi(klip_inputs: List[KLIPInput], klip_params: KLIPParams):
+def klip_multi(klip_inputs: List[KlipInput], klip_params: KlipParams):
     log.debug("assembling klip_multi")
     matrices = []
     subset_indices = []
@@ -253,7 +253,7 @@ def klip_multi(klip_inputs: List[KLIPInput], klip_params: KLIPParams):
     return cubes
 
 
-def klip_one(klip_input: KLIPInput, klip_params: KLIPParams):
+def klip_one(klip_input: KlipInput, klip_params: KlipParams):
     cubes = klip_multi([klip_input], klip_params)
     return cubes[0]
 
@@ -311,11 +311,11 @@ def klip(
 
 
 def evaluate_starlight_subtraction(
-    klip_input: KLIPInput,
+    klip_input: KlipInput,
     derotation_angles: da.core.Array,
     specs: List[characterization.CompanionSpec],
     template_psf: np.ndarray,
-    klip_params: KLIPParams,
+    klip_params: KlipParams,
     aperture_diameter_px: float,
     apertures_to_exclude: int,
     # snr_threshold : float,
@@ -327,7 +327,7 @@ def evaluate_starlight_subtraction(
         klip_input.sci_arr, derotation_angles, specs, template_psf
     )
     outcube = klip_one(
-        KLIPInput(
+        KlipInput(
             injected_sci_arr, klip_input.estimation_mask, klip_input.combination_mask
         ),
         klip_params,

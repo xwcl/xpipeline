@@ -93,8 +93,8 @@ def test_end_to_end_dask():
     rot_arr = da.asarray(data["angles"])
 
     d_outcube = pipelines.klip_one(
-        pipelines.KLIPInput(sci_arr, good_pix_mask, good_pix_mask),
-        pipelines.KLIPParams(exclude_nearest_n_frames=0, k_klip_value=n_modes),
+        pipelines.KlipInput(sci_arr, good_pix_mask, good_pix_mask),
+        pipelines.KlipParams(exclude_nearest_n_frames=0, k_klip_value=n_modes),
     )
     d_output_image = pipelines.adi(d_outcube, rot_arr)
     output_image = dask.compute(d_output_image)[0]
@@ -132,11 +132,11 @@ def test_end_to_end_dask():
     ]
 
     d_recovered_signals = pipelines.evaluate_starlight_subtraction(
-        pipelines.KLIPInput(sci_arr, good_pix_mask, good_pix_mask),
+        pipelines.KlipInput(sci_arr, good_pix_mask, good_pix_mask),
         rot_arr,
         specs,
         template_psf,
-        pipelines.KLIPParams(exclude_nearest_n_frames=0, k_klip_value=n_modes),
+        pipelines.KlipParams(exclude_nearest_n_frames=0, k_klip_value=n_modes),
         aperture_diameter_px=data["fwhm"],
         apertures_to_exclude=1,
     )
@@ -146,11 +146,11 @@ def test_end_to_end_dask():
     # try with an injected signal now
     specs = [CompanionSpec(r_px=30, pa_deg=90, scale=0.001)]
     d_recovered_signals = pipelines.evaluate_starlight_subtraction(
-        pipelines.KLIPInput(sci_arr, good_pix_mask, good_pix_mask),
+        pipelines.KlipInput(sci_arr, good_pix_mask, good_pix_mask),
         rot_arr,
         specs,
         template_psf,
-        pipelines.KLIPParams(exclude_nearest_n_frames=0, k_klip_value=n_modes),
+        pipelines.KlipParams(exclude_nearest_n_frames=0, k_klip_value=n_modes),
         aperture_diameter_px=data["fwhm"],
         apertures_to_exclude=1,
     )

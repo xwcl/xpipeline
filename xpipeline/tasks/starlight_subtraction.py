@@ -9,29 +9,30 @@ from . import learning, improc
 
 
 @dataclass
-class KLIPInput:
+class KlipInput:
     sci_arr: da.core.Array
     estimation_mask: np.ndarray
     combination_mask: Union[np.ndarray, None]
 
 
 class KlipStrategy(Enum):
-    SVD = 1
-    COMPRESSED_SVD = 2
+    SVD = 1  # TODO
+    COMPRESSED_SVD = 2  # TODO
     DOWNDATE_SVD = 3
-    DOWNDATE_COMPRESSED_SVD = 4
-    COVARIANCE = 5
+    DOWNDATE_COMPRESSED_SVD = 4  # TODO
+    COVARIANCE = 5  # TODO
+    COVARIANCE_TOP_K = 6  # TODO
 
 @dataclass
-class KLIPParams:
+class KlipParams:
     k_klip_value: int
     exclude_nearest_n_frames: int
     missing_data_value: float = np.nan
     strategy : KlipStrategy = KlipStrategy.DOWNDATE_SVD
 
 distributed.protocol.register_generic(KlipStrategy)
-distributed.protocol.register_generic(KLIPInput)
-distributed.protocol.register_generic(KLIPParams)
+distributed.protocol.register_generic(KlipInput)
+distributed.protocol.register_generic(KlipParams)
 
 import logging
 
@@ -167,31 +168,38 @@ def klip_chunk_downdate(
     log.debug(f"klipped! {mem_mb} MB RAM in use")
     return output
 
-def klip_mtx(image_vecs, params : KLIPParams):
+def klip_mtx(image_vecs, params : KlipParams):
+    xp = core.get_array_module(image_vecs)
+    image_vecs_meansub, mean_vec = mean_subtract_vecs(image_vecs)
+    if xp is da:
+        image_vecs_meansub = image_vecs_meansub.rechunk(
+            {0: -1, 1: "auto"}
+        )  # TODO should we allow chunking in both dims with Halko SVD?
+    log.debug(f"{image_vecs_meansub=} {image_vecs_meansub.numblocks=}")
     if params.strategy is KlipStrategy.DOWNDATE_SVD:
-        return klip_mtx_downdate(image_vecs, params.k_klip_value, params.exclude_nearest_n_frames)
+        return klip_mtx_downdate(image_vecs_meansub, params.k_klip_value, params.exclude_nearest_n_frames)
+    elif params.strategy is KlipStrategy.COVARIANCE:
+        return klip_mtx_covariance(image_vecs_meansub, params.k_klip_value, params.exclude_nearest_n_frames)
     else:
         raise ValueError(f"Unknown strategy value in {params=}")
 
-def klip_mtx_downdate(image_vecs, k_klip : int, exclude_nearest_n_frames : int):
-    xp = core.get_array_module(image_vecs)
-    output = xp.zeros_like(image_vecs)
-    total_n_frames = image_vecs.shape[1]
+def klip_mtx_covariance(image_vecs, k_klip, exclude_nearest_n_frames):
+    pass
+
+def klip_mtx_downdate(image_vecs_meansub, k_klip : int, exclude_nearest_n_frames : int):
+    xp = core.get_array_module(image_vecs_meansub)
+    output = xp.zeros_like(image_vecs_meansub)
+    total_n_frames = image_vecs_meansub.shape[1]
     idxs = xp.arange(total_n_frames)
     # extra modes:
     # to remove 1 image vector by downdating, the initial decomposition
     # should retain k_klip + 1 singular value triplets.
     initial_k = k_klip + exclude_nearest_n_frames + 1
     log.debug(
-        f"{image_vecs.shape=}, {k_klip=}, {exclude_nearest_n_frames=}, {initial_k=}"
+        f"{image_vecs_meansub.shape=}, {k_klip=}, {exclude_nearest_n_frames=}, {initial_k=}"
     )
-    if image_vecs.shape[0] < initial_k or image_vecs.shape[1] < initial_k:
+    if image_vecs_meansub.shape[0] < initial_k or image_vecs_meansub.shape[1] < initial_k:
         raise ValueError(f"Number of modes requested exceeds dimensions of input")
-    image_vecs_meansub, mean_vec = mean_subtract_vecs(image_vecs)
-    image_vecs_meansub = image_vecs_meansub.rechunk(
-        {0: -1, 1: "auto"}
-    )  # TODO should we allow chunking in both dims with Halko SVD?
-    log.debug(f"{image_vecs_meansub=} {image_vecs_meansub.numblocks=}")
     mtx_u0, diag_s0, mtx_v0 = learning.generic_svd(image_vecs_meansub, initial_k)
     log.debug(
         f"{image_vecs_meansub.shape=}, {mtx_u0.shape=}, {diag_s0.shape=}, {mtx_v0.shape=}"

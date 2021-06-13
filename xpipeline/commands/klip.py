@@ -113,7 +113,7 @@ class Klip(InputCommand):
 
     def _assemble_klip_params(self):
         from .. import pipelines
-        klip_params = pipelines.KLIPParams(self.k_klip, self.exclude_nearest_n_frames)
+        klip_params = pipelines.KlipParams(self.k_klip, self.exclude_nearest_n_frames)
         return klip_params
 
     def _assemble_klip_inputs(self, dataset_path):
@@ -142,14 +142,14 @@ class Klip(InputCommand):
             )
 
             klip_inputs.append(
-                pipelines.KLIPInput(
+                pipelines.KlipInput(
                     da.from_array(sci_arr_left),
                     estimation_mask_left,
                     combination_mask_left,
                 )
             )
             klip_inputs.append(
-                pipelines.KLIPInput(
+                pipelines.KlipInput(
                     da.from_array(sci_arr_right),
                     estimation_mask_right,
                     combination_mask_right,
@@ -165,7 +165,7 @@ class Klip(InputCommand):
             sci_arr = self._get_sci_arr(input_cube_hdul, extname)
             estimation_mask, combination_mask = self._make_masks(sci_arr, extname)
             klip_inputs.append(
-                pipelines.KLIPInput(
+                pipelines.KlipInput(
                     da.from_array(sci_arr), estimation_mask, combination_mask
                 )
             )
