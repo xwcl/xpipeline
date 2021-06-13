@@ -17,7 +17,7 @@ from typing import List, Union
 
 from .. import constants as const
 from ..core import PipelineCollection, reduce_bitwise_or
-import distributed.protocol
+
 from ..tasks import (
     obs_table,
     iofits,
@@ -30,27 +30,10 @@ from ..tasks import (
     characterization,
     vapp,
 )
+from ..tasks.starlight_subtraction import KLIPInput, KlipStrategy, KLIPParams
 from ..ref import clio
 
 log = logging.getLogger(__name__)
-
-
-@dataclass
-class KLIPInput:
-    sci_arr: da.core.Array
-    estimation_mask: np.ndarray
-    combination_mask: Union[np.ndarray, None]
-
-
-@dataclass
-class KLIPParams:
-    k_klip_value: int
-    exclude_nearest_n_frames: int
-    missing_data_value: float = np.nan
-
-
-distributed.protocol.register_generic(KLIPInput)
-distributed.protocol.register_generic(KLIPParams)
 
 # To preserve sanity, pipelines mustn't do anything you can't do to a dask.delayed
 # and mustn't compute or branch on intermediate results.
@@ -230,14 +213,13 @@ def klip_multi(klip_inputs: List[KLIPInput], klip_params: KLIPParams):
 
     mtx_x = da.vstack(matrices)
     subtracted_mtx = starlight_subtraction.klip_mtx(
-        mtx_x, klip_params.k_klip_value, klip_params.exclude_nearest_n_frames
+        mtx_x, klip_params
     )
     start_idx = 0
     cubes = []
     for input_data, subset_idxs in zip(klip_inputs, subset_indices):
-        n_features = subset_idxs.shape[
-            1
-        ]  # first axis selects "which axis", second axis has an entry per retained pixel
+        # first axis selects "which axis", second axis has an entry per retained pixel
+        n_features = subset_idxs.shape[1]
         end_idx = start_idx + n_features
         if input_data.combination_mask is not None:
             submatrix = subtracted_mtx[start_idx:end_idx]

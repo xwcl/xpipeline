@@ -1,9 +1,37 @@
+from enum import Enum
 from dataclasses import dataclass
+from typing import Union
 import numpy as np
 import dask.array as da
+import distributed.protocol
 from .. import core, utils
 from . import learning, improc
 
+
+@dataclass
+class KLIPInput:
+    sci_arr: da.core.Array
+    estimation_mask: np.ndarray
+    combination_mask: Union[np.ndarray, None]
+
+
+class KlipStrategy(Enum):
+    SVD = 1
+    COMPRESSED_SVD = 2
+    DOWNDATE_SVD = 3
+    DOWNDATE_COMPRESSED_SVD = 4
+    COVARIANCE = 5
+
+@dataclass
+class KLIPParams:
+    k_klip_value: int
+    exclude_nearest_n_frames: int
+    missing_data_value: float = np.nan
+    strategy : KlipStrategy = KlipStrategy.DOWNDATE_SVD
+
+distributed.protocol.register_generic(KlipStrategy)
+distributed.protocol.register_generic(KLIPInput)
+distributed.protocol.register_generic(KLIPParams)
 
 import logging
 
@@ -114,7 +142,7 @@ def klip_to_modes(image_vecs, decomp_class, n_modes, exclude_nearest=0):
     return output
 
 
-def klip_chunk(
+def klip_chunk_downdate(
     image_vecs_meansub, mtx_u0, diag_s0, mtx_v0, k_klip, exclude_nearest_n_frames
 ):
     if image_vecs_meansub.shape == (0, 0):
@@ -139,10 +167,14 @@ def klip_chunk(
     log.debug(f"klipped! {mem_mb} MB RAM in use")
     return output
 
+def klip_mtx(image_vecs, params : KLIPParams):
+    if params.strategy is KlipStrategy.DOWNDATE_SVD:
+        return klip_mtx_downdate(image_vecs, params.k_klip_value, params.exclude_nearest_n_frames)
+    else:
+        raise ValueError(f"Unknown strategy value in {params=}")
 
-def klip_mtx(image_vecs, k_klip: int, exclude_nearest_n_frames: int):
+def klip_mtx_downdate(image_vecs, k_klip : int, exclude_nearest_n_frames : int):
     xp = core.get_array_module(image_vecs)
-
     output = xp.zeros_like(image_vecs)
     total_n_frames = image_vecs.shape[1]
     idxs = xp.arange(total_n_frames)
@@ -166,7 +198,7 @@ def klip_mtx(image_vecs, k_klip: int, exclude_nearest_n_frames: int):
     )
     if xp is da:
         output = da.blockwise(
-            klip_chunk,
+            klip_chunk_downdate,
             "ij",
             image_vecs_meansub,
             "ij",
@@ -182,7 +214,7 @@ def klip_mtx(image_vecs, k_klip: int, exclude_nearest_n_frames: int):
             None,
         )
     else:
-        output = klip_chunk(
+        output = klip_chunk_downdate(
             image_vecs_meansub,
             mtx_u0,
             diag_s0,
