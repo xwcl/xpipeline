@@ -40,20 +40,29 @@ log = logging.getLogger(__name__)
 
 
 def drop_idx_range_cols(arr, min_excluded_idx, max_excluded_idx):
-    """Note exclusive upper bound: [min_excluded_idx, max_excluded_idx)"""
+    '''Note exclusive upper bound: [min_excluded_idx, max_excluded_idx)'''
+    return drop_idx_range_rows(arr.T, min_excluded_idx, max_excluded_idx).T
+
+def drop_idx_range_rows(arr, min_excluded_idx, max_excluded_idx):
+    '''Note exclusive upper bound: [min_excluded_idx, max_excluded_idx)'''
     xp = core.get_array_module(arr)
     rows, cols = arr.shape
+    if min_excluded_idx < 0:
+        raise ValueError("Negative indexing unsupported")
+    if max_excluded_idx > rows or max_excluded_idx < min_excluded_idx:
+        raise ValueError("Upper limit of excluded indices out of bounds")
     n_drop = max_excluded_idx - min_excluded_idx
-    out_shape = (rows, cols - n_drop)
+    out_shape = (rows - n_drop, cols)
     out = xp.empty(out_shape, dtype=arr.dtype)
-    # L | |  R
+    #  U
+    # ===
+    #  L
 
+    # U
+    out[:min_excluded_idx] = arr[:min_excluded_idx]
     # L
-    out[:, :min_excluded_idx] = arr[:, :min_excluded_idx]
-    # R
-    out[:, min_excluded_idx:] = arr[:, max_excluded_idx:]
+    out[min_excluded_idx:] = arr[max_excluded_idx:]
     return out
-
 
 def mean_subtract_vecs(image_vecs):
     xp = core.get_array_module(image_vecs)
@@ -170,12 +179,12 @@ def klip_chunk_downdate(
 
 def klip_mtx(image_vecs, params : KlipParams):
     xp = core.get_array_module(image_vecs)
-    image_vecs_meansub, mean_vec = mean_subtract_vecs(image_vecs)
+    image_vecs_meansub, _ = mean_subtract_vecs(image_vecs)
     if xp is da:
         image_vecs_meansub = image_vecs_meansub.rechunk(
             {0: -1, 1: "auto"}
         )  # TODO should we allow chunking in both dims with Halko SVD?
-    log.debug(f"{image_vecs_meansub=} {image_vecs_meansub.numblocks=}")
+        log.debug(f"{image_vecs_meansub.shape=} {image_vecs_meansub.numblocks=}")
     if params.strategy is KlipStrategy.DOWNDATE_SVD:
         return klip_mtx_downdate(image_vecs_meansub, params.k_klip_value, params.exclude_nearest_n_frames)
     elif params.strategy is KlipStrategy.COVARIANCE:
@@ -183,8 +192,69 @@ def klip_mtx(image_vecs, params : KlipParams):
     else:
         raise ValueError(f"Unknown strategy value in {params=}")
 
-def klip_mtx_covariance(image_vecs, k_klip, exclude_nearest_n_frames):
-    pass
+def drop_idx_range_rows_cols(arr, min_excluded_idx, max_excluded_idx):
+    '''Note exclusive upper bound: [min_excluded_idx, max_excluded_idx)'''
+    xp = core.get_array_module(arr)
+    rows, cols = arr.shape
+    assert rows == cols
+    n_drop = max_excluded_idx - min_excluded_idx
+    out_shape = (rows - n_drop, cols - n_drop)
+    out = xp.empty(out_shape, dtype=arr.dtype)
+    # UL | | U R
+    # ===   ====
+    # LL | | L R
+
+    # UL
+    out[:min_excluded_idx,:min_excluded_idx] = arr[:min_excluded_idx,:min_excluded_idx]
+    # UR
+    out[:min_excluded_idx,min_excluded_idx:] = arr[:min_excluded_idx,max_excluded_idx:]
+    # LL
+    out[min_excluded_idx:,:min_excluded_idx] = arr[max_excluded_idx:,:min_excluded_idx]
+    # LR
+    out[min_excluded_idx:,min_excluded_idx:] = arr[max_excluded_idx:,max_excluded_idx:]
+    return out
+
+def klip_mtx_covariance(image_vecs_meansub, k_klip : int, exclude_nearest_n_frames : int):
+    xp = core.get_array_module(image_vecs_meansub)
+    mtx_e_all = image_vecs_meansub.T @ image_vecs_meansub
+    if xp is da:
+        output = da.blockwise(
+            klip_chunk_covariance,
+            "ij",
+            image_vecs_meansub,
+            "ij",
+            mtx_e_all,
+            None,
+            k_klip,
+            None,
+            exclude_nearest_n_frames,
+            None,
+        )
+    else:
+        output = klip_chunk_covariance(image_vecs_meansub, mtx_e_all, k_klip, exclude_nearest_n_frames)
+    return output
+
+
+def klip_chunk_covariance(image_vecs_meansub, mtx_e_all, k_klip : int, exclude_nearest_n_frames : int):
+    if image_vecs_meansub.shape == (0, 0):
+        # called by dask to infer dtype
+        return np.zeros_like(image_vecs_meansub)
+
+    output = np.zeros_like(image_vecs_meansub)
+    for i in range(image_vecs_meansub.shape[1]):
+        min_excluded_idx, max_excluded_idx = i - exclude_nearest_n_frames, i + exclude_nearest_n_frames
+        mtx_e = drop_idx_range_rows_cols(mtx_e_all, min_excluded_idx, max_excluded_idx)
+        lambda_values_out, mtx_c_out = np.linalg.eigh(mtx_e)  # TODO swappable solvers
+
+        # flip so evals are descending, truncate to k_klip
+        lambda_values = np.flip(lambda_values_out)[:k_klip]
+        mtx_c = np.flip(mtx_c_out, axis=1)[:,:k_klip]
+
+        eigenimages = drop_idx_range_cols(image_vecs_meansub, min_excluded_idx, max_excluded_idx) @ (mtx_c * np.power(lambda_values, -1/2))
+        meansub_target = image_vecs_meansub[:,i]
+        output[:,i] = meansub_target - eigenimages @ (eigenimages.T @ meansub_target)
+    return output
+
 
 def klip_mtx_downdate(image_vecs_meansub, k_klip : int, exclude_nearest_n_frames : int):
     xp = core.get_array_module(image_vecs_meansub)

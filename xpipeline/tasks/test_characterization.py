@@ -1,3 +1,4 @@
+import pytest
 from importlib import resources
 import numpy as np
 import dask
@@ -10,7 +11,7 @@ from .characterization import (
 )
 from . import improc
 from .. import core, pipelines
-from xpipeline.tasks import characterization
+from xpipeline.tasks import characterization, starlight_subtraction
 
 da = core.dask_array
 
@@ -81,7 +82,8 @@ def test_inject_signals():
     assert np.isclose(outcube[3][128 // 2 - r_px, 128 // 2], out_pix_val)
 
 
-def test_end_to_end_dask():
+@pytest.mark.parametrize('strategy', [starlight_subtraction.KlipStrategy.COVARIANCE, starlight_subtraction.KlipStrategy.DOWNDATE_SVD])
+def test_end_to_end_dask(strategy):
     res_handle = resources.open_binary(
         "xpipeline.ref", "naco_betapic_preproc_absil2013_gonzalez2017.npz"
     )
@@ -92,10 +94,10 @@ def test_end_to_end_dask():
     sci_arr = da.asarray(data["cube"])
     rot_arr = da.asarray(data["angles"])
 
-    d_outcube = pipelines.klip_one(
-        pipelines.KlipInput(sci_arr, good_pix_mask, good_pix_mask),
-        pipelines.KlipParams(exclude_nearest_n_frames=0, k_klip_value=n_modes),
-    )
+    pristine_input = pipelines.KlipInput(sci_arr, good_pix_mask, good_pix_mask)
+    klip_params = pipelines.KlipParams(exclude_nearest_n_frames=0, k_klip_value=n_modes, strategy=strategy)
+
+    d_outcube = pipelines.klip_one(pristine_input, klip_params)
     d_output_image = pipelines.adi(d_outcube, rot_arr)
     output_image = dask.compute(d_output_image)[0]
     r_px, pa_deg = 18.4, -42.8
@@ -110,7 +112,7 @@ def test_end_to_end_dask():
         exclude_nearest=1,
     )
     snr = calc_snr_mawet(results[0], results[1:])
-    assert snr > 21.8
+    assert snr > 21.2
 
     # can we get the same SNR from the image?
     iwa_px, owa_px = 7, 47
@@ -120,7 +122,7 @@ def test_end_to_end_dask():
     # we don't change locate_snr_peaks outputs by accident
     assert np.isclose(peak.r_px, 16.98528775146303)
     assert np.isclose(peak.pa_deg, 317.3859440303888)
-    assert np.isclose(peak.snr, 25.469519756291053)
+    assert peak.snr > 23.7
 
     template_psf = data["psf"]
     avg_frame_total = np.average(np.sum(data["cube"], axis=(1, 2)))
@@ -132,11 +134,11 @@ def test_end_to_end_dask():
     ]
 
     d_recovered_signals = pipelines.evaluate_starlight_subtraction(
-        pipelines.KlipInput(sci_arr, good_pix_mask, good_pix_mask),
+        pristine_input,
         rot_arr,
         specs,
         template_psf,
-        pipelines.KlipParams(exclude_nearest_n_frames=0, k_klip_value=n_modes),
+        klip_params,
         aperture_diameter_px=data["fwhm"],
         apertures_to_exclude=1,
     )
@@ -146,11 +148,11 @@ def test_end_to_end_dask():
     # try with an injected signal now
     specs = [CompanionSpec(r_px=30, pa_deg=90, scale=0.001)]
     d_recovered_signals = pipelines.evaluate_starlight_subtraction(
-        pipelines.KlipInput(sci_arr, good_pix_mask, good_pix_mask),
+        pristine_input,
         rot_arr,
         specs,
         template_psf,
-        pipelines.KlipParams(exclude_nearest_n_frames=0, k_klip_value=n_modes),
+        klip_params,
         aperture_diameter_px=data["fwhm"],
         apertures_to_exclude=1,
     )
