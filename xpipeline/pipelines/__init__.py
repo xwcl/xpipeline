@@ -30,7 +30,8 @@ from ..tasks import (
     characterization,
     vapp,
 )
-from ..tasks.starlight_subtraction import KlipInput, KlipStrategy, KlipParams
+from ..tasks.starlight_subtraction import KlipInput, KlipParams
+from ..constants import KlipStrategy
 from ..ref import clio
 
 log = logging.getLogger(__name__)

@@ -2,7 +2,7 @@ import xconf
 import sys
 import logging
 from typing import Optional
-from .. import utils
+from .. import utils, constants
 
 from .base import InputCommand
 
@@ -14,6 +14,7 @@ class Klip(InputCommand):
     "Subtract starlight with KLIP"
     k_klip : int = xconf.field(default=10, help="Number of modes to subtract in starlight subtraction")
     exclude_nearest_n_frames : int = xconf.field(default=0, help="Number of additional temporally-adjacent frames to exclude from the sequence when computing the KLIP eigenimages")
+    strategy : constants.KlipStrategy = xconf.field(default=constants.KlipStrategy.DOWNDATE_SVD, help="Implementation of KLIP to use")
     combine_by : str = xconf.field(default="sum", help="Operation used to combine final derotated frames into a single output frame")
     saturation_threshold : Optional[float] = xconf.field(default=None, help="Value in counts above which pixels should be considered saturated and ignored")
     mask_iwa_px : int = xconf.field(default=None, help="Apply radial mask excluding pixels < iwa_px from center")

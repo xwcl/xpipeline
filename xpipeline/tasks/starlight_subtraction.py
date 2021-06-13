@@ -4,7 +4,7 @@ from typing import Union
 import numpy as np
 import dask.array as da
 import distributed.protocol
-from .. import core, utils
+from .. import core, utils, constants
 from . import learning, improc
 
 
@@ -15,22 +15,13 @@ class KlipInput:
     combination_mask: Union[np.ndarray, None]
 
 
-class KlipStrategy(Enum):
-    SVD = 1  # TODO
-    COMPRESSED_SVD = 2  # TODO
-    DOWNDATE_SVD = 3
-    DOWNDATE_COMPRESSED_SVD = 4  # TODO
-    COVARIANCE = 5  # TODO
-    COVARIANCE_TOP_K = 6  # TODO
-
 @dataclass
 class KlipParams:
     k_klip_value: int
     exclude_nearest_n_frames: int
     missing_data_value: float = np.nan
-    strategy : KlipStrategy = KlipStrategy.DOWNDATE_SVD
+    strategy : constants.KlipStrategy = constants.KlipStrategy.DOWNDATE_SVD
 
-distributed.protocol.register_generic(KlipStrategy)
 distributed.protocol.register_generic(KlipInput)
 distributed.protocol.register_generic(KlipParams)
 
@@ -185,9 +176,9 @@ def klip_mtx(image_vecs, params : KlipParams):
             {0: -1, 1: "auto"}
         )  # TODO should we allow chunking in both dims with Halko SVD?
         log.debug(f"{image_vecs_meansub.shape=} {image_vecs_meansub.numblocks=}")
-    if params.strategy is KlipStrategy.DOWNDATE_SVD:
+    if params.strategy is constants.KlipStrategy.DOWNDATE_SVD:
         return klip_mtx_downdate(image_vecs_meansub, params.k_klip_value, params.exclude_nearest_n_frames)
-    elif params.strategy is KlipStrategy.COVARIANCE:
+    elif params.strategy is constants.KlipStrategy.COVARIANCE:
         return klip_mtx_covariance(image_vecs_meansub, params.k_klip_value, params.exclude_nearest_n_frames)
     else:
         raise ValueError(f"Unknown strategy value in {params=}")

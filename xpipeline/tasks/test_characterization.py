@@ -10,7 +10,7 @@ from .characterization import (
     calc_snr_mawet,
 )
 from . import improc
-from .. import core, pipelines
+from .. import core, pipelines, constants
 from xpipeline.tasks import characterization, starlight_subtraction
 
 da = core.dask_array
@@ -82,7 +82,7 @@ def test_inject_signals():
     assert np.isclose(outcube[3][128 // 2 - r_px, 128 // 2], out_pix_val)
 
 
-@pytest.mark.parametrize('strategy', [starlight_subtraction.KlipStrategy.COVARIANCE, starlight_subtraction.KlipStrategy.DOWNDATE_SVD])
+@pytest.mark.parametrize('strategy', [constants.KlipStrategy.COVARIANCE, constants.KlipStrategy.DOWNDATE_SVD])
 def test_end_to_end_dask(strategy):
     res_handle = resources.open_binary(
         "xpipeline.ref", "naco_betapic_preproc_absil2013_gonzalez2017.npz"
