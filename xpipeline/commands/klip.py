@@ -21,7 +21,7 @@ class Klip(InputCommand):
     mask_owa_px : int = xconf.field(default=None, help="Apply radial mask excluding pixels > owa_px from center")
     estimation_mask_path : str = xconf.field(default=None, help="Path to file shaped like single plane of input with 1s where pixels should be included in starlight estimation (intersected with saturation and annular mask)")
     combination_mask_path : str = xconf.field(default=None, help="Path to file shaped like single plane of input with 1s where pixels should be included in final combination (intersected with other masks)")
-    vapp_mask_angle : float = xconf.field(default=0, help="Angle in degrees E of N (+Y) of axis of symmetry for paired gvAPP-180 data (default: 0)")
+    vapp_mask_angle : float = xconf.field(default=0, help="Angle in degrees E of N (+Y) of axis of symmetry for paired gvAPP-180 data")
     sample_every_n : int = xconf.field(default=1, help="Take every Nth file from inputs (for speed of debugging)")
 
     def _get_derotation_angles(self, input_cube_hdul, obs_method):

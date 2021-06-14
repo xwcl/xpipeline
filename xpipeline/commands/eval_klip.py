@@ -1,5 +1,6 @@
 import xconf
 import logging
+from typing import Optional
 
 # from . import constants as const
 from .. import utils
@@ -33,7 +34,7 @@ class EvalKlip(Klip):
     scale_factors_path : str = xconf.field(help=utils.unwrap(
         """Path to text file with one scale factor per line that matches template intensity to host PSF intensity"""
     ))
-    companions : list[CompanionConfig] = xconf.field(help="Companions to inject (optionally) and measure SNR for")
+    companions : Optional[list[CompanionConfig]] = xconf.field(help="Companions to inject (optionally) and measure SNR for")
     aperture_diameter_px : float = xconf.field(help="Diameter of the SNR estimation aperture (~lambda/D) in pixels")
     apertures_to_exclude : int = xconf.field(default=1, help=utils.unwrap(
         """Number of apertures on *each side* of the specified target
@@ -43,6 +44,11 @@ class EvalKlip(Klip):
     snr_threshold : float = xconf.field(default=5.0, help="Threshold above which peaks of interest should be reported")
     search_iwa_px : float = xconf.field(default=None, help="Limit blind search to pixels more than this radius from center")
     search_owa_px : float = xconf.field(default=None, help="Limit blind search to pixels less than this radius from center")
+
+    def __post_init__(self):
+        if companions is None:
+            companions = []
+        return super().__post_init__()
 
     def _load_inputs(self, *args, **kwargs):
         from ..tasks import iofits

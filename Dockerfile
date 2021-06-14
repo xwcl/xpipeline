@@ -1,13 +1,13 @@
-FROM opensciencegrid/osgvo-ubuntu-20.04:latest@sha256:5b765d01fbd5c151c3b531f9979ca3d181d5ca98779bd00e1a6bc66314868b39
-# RUN apt-get -q update \
-#  && apt-get install -yq --no-install-recommends \
-#     wget \
-#     ca-certificates \
-#     sudo \
-#     locales \
-#     fonts-liberation \
-#     run-one \
-#  && apt-get clean && rm -rf /var/lib/apt/lists/*
+FROM ubuntu@sha256:86ac87f73641c920fb42cc9612d4fb57b5626b56ea2a19b894d0673fd5b4f2e9
+RUN apt-get -q update \
+ && apt-get install -yq --no-install-recommends \
+    wget \
+    ca-certificates \
+    locales \
+    fonts-liberation \
+    git \
+    build-essential \
+ && apt-get clean && rm -rf /var/lib/apt/lists/*
 # irrelevant for Singularity, good practice for Docker to make an unprivileged user:
 RUN useradd -ms /bin/bash containeruser
 WORKDIR /tmp
@@ -22,6 +22,9 @@ RUN conda install --quiet --yes -c conda-forge \
     scipy \
     matplotlib \
     astropy \
+    scikit-image \
+    graphviz \
+    python-graphviz \
     dask \
     distributed \
     python-dateutil \
