@@ -114,7 +114,11 @@ class Klip(InputCommand):
 
     def _assemble_klip_params(self):
         from .. import pipelines
-        klip_params = pipelines.KlipParams(self.k_klip, self.exclude_nearest_n_frames)
+        klip_params = pipelines.KlipParams(
+            self.k_klip,
+            self.exclude_nearest_n_frames,
+            strategy=self.strategy
+        )
         return klip_params
 
     def _assemble_klip_inputs(self, dataset_path):

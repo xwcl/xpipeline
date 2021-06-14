@@ -4,6 +4,7 @@ from typing import Union
 import numpy as np
 import dask.array as da
 import distributed.protocol
+from scipy import linalg
 from .. import core, utils, constants
 from . import learning, improc
 
@@ -179,7 +180,9 @@ def klip_mtx(image_vecs, params : KlipParams):
     if params.strategy is constants.KlipStrategy.DOWNDATE_SVD:
         return klip_mtx_downdate(image_vecs_meansub, params.k_klip_value, params.exclude_nearest_n_frames)
     elif params.strategy is constants.KlipStrategy.COVARIANCE:
-        return klip_mtx_covariance(image_vecs_meansub, params.k_klip_value, params.exclude_nearest_n_frames)
+        return klip_mtx_covariance(image_vecs_meansub, params.k_klip_value, params.exclude_nearest_n_frames, _eigh_full_decomposition)
+    elif params.strategy is constants.KlipStrategy.COVARIANCE_TOP_K:
+        return klip_mtx_covariance(image_vecs_meansub, params.k_klip_value, params.exclude_nearest_n_frames, _eigh_top_k)
     else:
         raise ValueError(f"Unknown strategy value in {params=}")
 
@@ -205,7 +208,7 @@ def drop_idx_range_rows_cols(arr, min_excluded_idx, max_excluded_idx):
     out[min_excluded_idx:,min_excluded_idx:] = arr[max_excluded_idx:,max_excluded_idx:]
     return out
 
-def klip_mtx_covariance(image_vecs_meansub, k_klip : int, exclude_nearest_n_frames : int):
+def klip_mtx_covariance(image_vecs_meansub, k_klip : int, exclude_nearest_n_frames : int, driver):
     xp = core.get_array_module(image_vecs_meansub)
     mtx_e_all = image_vecs_meansub.T @ image_vecs_meansub
     if xp is da:
@@ -214,32 +217,47 @@ def klip_mtx_covariance(image_vecs_meansub, k_klip : int, exclude_nearest_n_fram
             "ij",
             image_vecs_meansub,
             "ij",
+            image_vecs_meansub,
+            None,
             mtx_e_all,
             None,
             k_klip,
             None,
             exclude_nearest_n_frames,
             None,
+            driver,
+            None,
+            dtype=image_vecs_meansub.dtype
         )
     else:
-        output = klip_chunk_covariance(image_vecs_meansub, mtx_e_all, k_klip, exclude_nearest_n_frames)
+        output = klip_chunk_covariance(image_vecs_meansub, image_vecs_meansub, mtx_e_all, k_klip, exclude_nearest_n_frames, driver)
     return output
 
+def _eigh_full_decomposition(mtx, k_klip):
+    lambda_values_out, mtx_c_out = linalg.eigh(mtx, np.eye(mtx.shape[0]), driver="gvd")
+    # flip so evals are descending, truncate to k_klip
+    lambda_values = np.flip(lambda_values_out)[:k_klip]
+    mtx_c = np.flip(mtx_c_out, axis=1)[:,:k_klip]
+    return lambda_values, mtx_c
 
-def klip_chunk_covariance(image_vecs_meansub, mtx_e_all, k_klip : int, exclude_nearest_n_frames : int):
-    if image_vecs_meansub.shape == (0, 0):
+def _eigh_top_k(mtx, k_klip):
+    n = mtx.shape[0]
+    lambda_values_out, mtx_c_out = linalg.eigh(mtx, subset_by_index=[n - k_klip, n - 1])
+    lambda_values = np.flip(lambda_values_out)[:k_klip]
+    mtx_c = np.flip(mtx_c_out, axis=1)[:,:k_klip]
+    return lambda_values, mtx_c
+
+def klip_chunk_covariance(image_vecs_meansub_chunk, image_vecs_meansub, mtx_e_all, k_klip : int, exclude_nearest_n_frames : int, driver):
+    if image_vecs_meansub_chunk.shape == (0, 0):
         # called by dask to infer dtype
-        return np.zeros_like(image_vecs_meansub)
+        return np.zeros_like(image_vecs_meansub_chunk)
 
-    output = np.zeros_like(image_vecs_meansub)
-    for i in range(image_vecs_meansub.shape[1]):
+    output = np.zeros_like(image_vecs_meansub_chunk)
+    for i in range(image_vecs_meansub_chunk.shape[1]):
         min_excluded_idx, max_excluded_idx = i - exclude_nearest_n_frames, i + exclude_nearest_n_frames
         mtx_e = drop_idx_range_rows_cols(mtx_e_all, min_excluded_idx, max_excluded_idx)
-        lambda_values_out, mtx_c_out = np.linalg.eigh(mtx_e)  # TODO swappable solvers
 
-        # flip so evals are descending, truncate to k_klip
-        lambda_values = np.flip(lambda_values_out)[:k_klip]
-        mtx_c = np.flip(mtx_c_out, axis=1)[:,:k_klip]
+        lambda_values, mtx_c = driver(mtx_e, k_klip)
 
         eigenimages = drop_idx_range_cols(image_vecs_meansub, min_excluded_idx, max_excluded_idx) @ (mtx_c * np.power(lambda_values, -1/2))
         meansub_target = image_vecs_meansub[:,i]

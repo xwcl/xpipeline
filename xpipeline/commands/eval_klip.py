@@ -46,8 +46,8 @@ class EvalKlip(Klip):
     search_owa_px : float = xconf.field(default=None, help="Limit blind search to pixels less than this radius from center")
 
     def __post_init__(self):
-        if companions is None:
-            companions = []
+        if self.companions is None:
+            self.companions = []
         return super().__post_init__()
 
     def _load_inputs(self, *args, **kwargs):

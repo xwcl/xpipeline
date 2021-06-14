@@ -34,6 +34,8 @@ RUN conda install --quiet --yes -c conda-forge \
     jupyter-server-proxy \
     py-spy \
     memory_profiler \
+    sphinx \
+    pytest \
     && conda clean --all -f -y 
 RUN pip install git+https://github.com/xwcl/irods_fsspec.git#egg=irods_fsspec
 RUN pip install git+https://github.com/xwcl/xconf.git#egg=xconf
