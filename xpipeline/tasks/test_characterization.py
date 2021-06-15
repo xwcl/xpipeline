@@ -82,8 +82,14 @@ def test_inject_signals():
     assert np.isclose(outcube[3][128 // 2 - r_px, 128 // 2], out_pix_val)
 
 
-@pytest.mark.parametrize('strategy', [constants.KlipStrategy.COVARIANCE, constants.KlipStrategy.DOWNDATE_SVD])
-def test_end_to_end_dask(strategy):
+@pytest.mark.parametrize('strategy,reuse,snr_threshold,driver', [
+    (constants.KlipStrategy.COVARIANCE, False, 21.2, starlight_subtraction._eigh_full_decomposition),
+    (constants.KlipStrategy.COVARIANCE, True, 21.2, starlight_subtraction._eigh_full_decomposition),
+    (constants.KlipStrategy.COVARIANCE, False, 21.2, starlight_subtraction._eigh_top_k),
+    (constants.KlipStrategy.COVARIANCE, True, 21.2, starlight_subtraction._eigh_top_k),
+    (constants.KlipStrategy.DOWNDATE_SVD, False, 22, None),
+])
+def test_end_to_end_dask(strategy, reuse, snr_threshold, driver):
     res_handle = resources.open_binary(
         "xpipeline.ref", "naco_betapic_preproc_absil2013_gonzalez2017.npz"
     )
@@ -95,7 +101,13 @@ def test_end_to_end_dask(strategy):
     rot_arr = da.asarray(data["angles"])
 
     pristine_input = pipelines.KlipInput(sci_arr, good_pix_mask, good_pix_mask)
-    klip_params = pipelines.KlipParams(exclude_nearest_n_frames=0, k_klip_value=n_modes, strategy=strategy)
+    klip_params = pipelines.KlipParams(
+        exclude_nearest_n_frames=0,
+        k_klip_value=n_modes,
+        strategy=strategy,
+        reuse=reuse,
+        driver=driver
+    )
 
     d_outcube = pipelines.klip_one(pristine_input, klip_params)
     d_output_image = pipelines.adi(d_outcube, rot_arr)
@@ -112,7 +124,7 @@ def test_end_to_end_dask(strategy):
         exclude_nearest=1,
     )
     snr = calc_snr_mawet(results[0], results[1:])
-    assert snr > 21.2
+    assert snr > snr_threshold
 
     # can we get the same SNR from the image?
     iwa_px, owa_px = 7, 47

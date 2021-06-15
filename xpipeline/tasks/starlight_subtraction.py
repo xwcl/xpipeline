@@ -2,6 +2,7 @@ from enum import Enum
 import dask
 from dataclasses import dataclass
 from typing import Union, Optional
+from collections.abc import Callable
 import numpy as np
 import dask.array as da
 import distributed.protocol
@@ -27,6 +28,8 @@ class ExclusionValues:
 class KlipParams:
     k_klip_value: int
     exclude_nearest_n_frames: int
+    reuse : bool
+    driver : Callable
     missing_data_value: float = np.nan
     strategy : constants.KlipStrategy = constants.KlipStrategy.DOWNDATE_SVD
 
@@ -162,9 +165,15 @@ def klip_mtx(image_vecs, params : KlipParams):
     if params.strategy is constants.KlipStrategy.DOWNDATE_SVD:
         return klip_mtx_downdate(image_vecs_meansub, params.k_klip_value, params.exclude_nearest_n_frames)
     elif params.strategy is constants.KlipStrategy.COVARIANCE:
-        return klip_mtx_covariance(image_vecs_meansub, params.k_klip_value, params.exclude_nearest_n_frames, _eigh_full_decomposition)
+        return klip_mtx_covariance(image_vecs_meansub, params)
+    elif params.strategy is constants.KlipStrategy.SVD:
+        return klip_mtx_svd(image_vecs_meansub, params)
     elif params.strategy is constants.KlipStrategy.COVARIANCE_TOP_K:
-        return klip_mtx_covariance(image_vecs_meansub, params.k_klip_value, params.exclude_nearest_n_frames, _eigh_top_k)
+        return klip_mtx_covariance(image_vecs_meansub, params.k_klip_value, params.exclude_nearest_n_frames, _eigh_top_k, reuse=False)
+    elif params.strategy is constants.KlipStrategy.REUSE_COVARIANCE:
+        return klip_mtx_covariance(image_vecs_meansub, params.k_klip_value, params.exclude_nearest_n_frames, _eigh_full_decomposition, reuse=True)
+    elif params.strategy is constants.KlipStrategy.REUSE_COVARIANCE_TOP_K:
+        return klip_mtx_covariance(image_vecs_meansub, params.k_klip_value, params.exclude_nearest_n_frames, _eigh_top_k, reuse=True)
     else:
         raise ValueError(f"Unknown strategy value in {params=}")
 
@@ -205,35 +214,52 @@ def _eigh_top_k(mtx, k_klip):
     mtx_c = np.flip(mtx_c_out, axis=1)[:,:k_klip]
     return lambda_values, mtx_c
 
-def _klip_mtx_covariance(image_vecs_meansub, mtx_e_all, k_klip : int, exclude_nearest_n_frames : int, driver):
-    output = np.zeros_like(image_vecs_meansub)
-    n_images = image_vecs_meansub.shape[1]
-    # indices = np.arange(n_images)
-    for i in range(n_images):
-        min_excluded_idx, max_excluded_idx = i - exclude_nearest_n_frames, i + exclude_nearest_n_frames
-        min_excluded_idx = max(min_excluded_idx, 0)
-        max_excluded_idx = min(n_images, max_excluded_idx)
-        mtx_e = drop_idx_range_rows_cols(mtx_e_all, min_excluded_idx, max_excluded_idx)
+def _klip_mtx_covariance(image_vecs_meansub : np.ndarray, params : KlipParams):
+    '''Apply KLIP to mean-subtracted image column vectors
 
-        lambda_values, mtx_c = driver(mtx_e, k_klip)
-        ref_subset = np.hstack((image_vecs_meansub[:,:min_excluded_idx], image_vecs_meansub[:,max_excluded_idx:]))
-        eigenimages = ref_subset @ (mtx_c * np.power(lambda_values, -1/2))
+    Parameters
+    ----------
+    image_vecs_meansub : np.ndarray
+        image vectors, one column per image
+    params : KlipParams
+        configuration for tunable parameters
+    '''
+    k_klip = params.k_klip_value
+    exclude_nearest_n_frames = params.exclude_nearest_n_frames
+    driver = params.driver
+    reuse = params.reuse
+
+    output = np.zeros_like(image_vecs_meansub)
+    mtx_e_all = image_vecs_meansub.T @ image_vecs_meansub
+    n_images = image_vecs_meansub.shape[1]
+    if reuse:
+        lambda_values, mtx_c = driver(mtx_e_all, k_klip)
+        eigenimages = image_vecs_meansub @ (mtx_c * np.power(lambda_values, -1/2))
+    for i in range(n_images):
+        if not reuse:
+            min_excluded_idx, max_excluded_idx = i - exclude_nearest_n_frames, i + exclude_nearest_n_frames
+            min_excluded_idx = max(min_excluded_idx, 0)
+            max_excluded_idx = min(n_images, max_excluded_idx)
+            mtx_e = drop_idx_range_rows_cols(mtx_e_all, min_excluded_idx, max_excluded_idx)
+            lambda_values, mtx_c = driver(mtx_e, k_klip)
+            ref_subset = np.hstack((image_vecs_meansub[:,:min_excluded_idx], image_vecs_meansub[:,max_excluded_idx:]))
+            eigenimages = ref_subset @ (mtx_c * np.power(lambda_values, -1/2))
+
         meansub_target = image_vecs_meansub[:,i]
         output[:,i] = meansub_target - eigenimages @ (eigenimages.T @ meansub_target)
     return output
 
-def klip_mtx_covariance(image_vecs_meansub, k_klip : int, exclude_nearest_n_frames : int, driver):
+def klip_mtx_covariance(image_vecs_meansub, params):
     xp = core.get_array_module(image_vecs_meansub)
-    mtx_e_all = image_vecs_meansub.T @ image_vecs_meansub
     if xp is da:
-        d_output = dask.delayed(_klip_mtx_covariance)(image_vecs_meansub, mtx_e_all, k_klip, exclude_nearest_n_frames, driver)
+        d_output = dask.delayed(_klip_mtx_covariance)(image_vecs_meansub, params)
         output = da.from_delayed(
             d_output,
             shape=image_vecs_meansub.shape,
             dtype=image_vecs_meansub.dtype
         )
     else:
-        output = _klip_mtx_covariance(image_vecs_meansub, mtx_e_all, k_klip, exclude_nearest_n_frames, driver)
+        output = _klip_mtx_covariance(image_vecs_meansub, params)
     return output
 
 def klip_chunk_downdate(

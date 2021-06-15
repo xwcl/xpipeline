@@ -13,7 +13,10 @@ class KlipStrategy(Enum):
     COMPRESSED_SVD = 'compressed_svd'  # TODO
     DOWNDATE_SVD = 'downdate_svd'
     DOWNDATE_COMPRESSED_SVD = 'downdate_compressed_svd'  # TODO
-    COVARIANCE = 'covariance'  # TODO
-    COVARIANCE_TOP_K = 'covariance_top_k'  # TODO
+    COVARIANCE = 'covariance'
+    COVARIANCE_TOP_K = 'covariance_top_k'
+    REUSE_COVARIANCE = 'reuse_covariance'  # TODO
+    REUSE_COVARIANCE_TOP_K = 'reuse_covariance_top_k'
+    REUSE_SVD = 'reuse_svd' # TODO
 
 # distributed.protocol.register_generic(KlipStrategy)
