@@ -9,14 +9,8 @@ DQ_BG_ESTIMATE_PIX = 0b00010000
 HEADER_KW_INTERPOLATED = "INTRPLTD"
 
 class KlipStrategy(Enum):
-    SVD = 'svd'  # TODO
-    COMPRESSED_SVD = 'compressed_svd'  # TODO
+    SVD = 'svd'
     DOWNDATE_SVD = 'downdate_svd'
-    DOWNDATE_COMPRESSED_SVD = 'downdate_compressed_svd'  # TODO
     COVARIANCE = 'covariance'
-    COVARIANCE_TOP_K = 'covariance_top_k'
-    REUSE_COVARIANCE = 'reuse_covariance'  # TODO
-    REUSE_COVARIANCE_TOP_K = 'reuse_covariance_top_k'
-    REUSE_SVD = 'reuse_svd' # TODO
-
+    
 # distributed.protocol.register_generic(KlipStrategy)

@@ -26,12 +26,19 @@ class ExclusionValues:
 
 @dataclass
 class KlipParams:
-    k_klip_value: int
+    k_klip: int
     exclude_nearest_n_frames: int
-    reuse : bool
-    driver : Callable
+    decomposer : Callable
+    reuse : bool = False
+    initial_decomposer : Optional[Callable] = None
     missing_data_value: float = np.nan
     strategy : constants.KlipStrategy = constants.KlipStrategy.DOWNDATE_SVD
+
+    def __post_init__(self):
+        if self.initial_decomposer is None:
+            self.initial_decomposer = self.decomposer
+
+
 
 distributed.protocol.register_generic(KlipInput)
 distributed.protocol.register_generic(KlipParams)
@@ -119,7 +126,6 @@ def klip_frame(target, decomposer, exclude_idx_min, exclude_idx_max):
     meansub_target = target - decomposer.mean_vec
     return meansub_target - eigenimages @ (eigenimages.T @ meansub_target)
 
-
 def klip_to_modes(image_vecs, decomp_class, n_modes, exclude_nearest=0):
     """
     Parameters
@@ -162,18 +168,10 @@ def klip_mtx(image_vecs, params : KlipParams):
             {0: -1, 1: "auto"}
         )  # TODO should we allow chunking in both dims with Halko SVD?
         log.debug(f"{image_vecs_meansub.shape=} {image_vecs_meansub.numblocks=}")
-    if params.strategy is constants.KlipStrategy.DOWNDATE_SVD:
-        return klip_mtx_downdate(image_vecs_meansub, params.k_klip_value, params.exclude_nearest_n_frames)
+    if params.strategy in (constants.KlipStrategy.DOWNDATE_SVD, constants.KlipStrategy.SVD):
+        return klip_mtx_svd(image_vecs_meansub, params)
     elif params.strategy is constants.KlipStrategy.COVARIANCE:
         return klip_mtx_covariance(image_vecs_meansub, params)
-    elif params.strategy is constants.KlipStrategy.SVD:
-        return klip_mtx_svd(image_vecs_meansub, params)
-    elif params.strategy is constants.KlipStrategy.COVARIANCE_TOP_K:
-        return klip_mtx_covariance(image_vecs_meansub, params.k_klip_value, params.exclude_nearest_n_frames, _eigh_top_k, reuse=False)
-    elif params.strategy is constants.KlipStrategy.REUSE_COVARIANCE:
-        return klip_mtx_covariance(image_vecs_meansub, params.k_klip_value, params.exclude_nearest_n_frames, _eigh_full_decomposition, reuse=True)
-    elif params.strategy is constants.KlipStrategy.REUSE_COVARIANCE_TOP_K:
-        return klip_mtx_covariance(image_vecs_meansub, params.k_klip_value, params.exclude_nearest_n_frames, _eigh_top_k, reuse=True)
     else:
         raise ValueError(f"Unknown strategy value in {params=}")
 
@@ -224,24 +222,22 @@ def _klip_mtx_covariance(image_vecs_meansub : np.ndarray, params : KlipParams):
     params : KlipParams
         configuration for tunable parameters
     '''
-    k_klip = params.k_klip_value
+    k_klip = params.k_klip
     exclude_nearest_n_frames = params.exclude_nearest_n_frames
-    driver = params.driver
-    reuse = params.reuse
 
     output = np.zeros_like(image_vecs_meansub)
     mtx_e_all = image_vecs_meansub.T @ image_vecs_meansub
     n_images = image_vecs_meansub.shape[1]
-    if reuse:
-        lambda_values, mtx_c = driver(mtx_e_all, k_klip)
+    if params.reuse:
+        lambda_values, mtx_c = params.decomposer(mtx_e_all, k_klip)
         eigenimages = image_vecs_meansub @ (mtx_c * np.power(lambda_values, -1/2))
     for i in range(n_images):
-        if not reuse:
+        if not params.reuse:
             min_excluded_idx, max_excluded_idx = i - exclude_nearest_n_frames, i + exclude_nearest_n_frames
             min_excluded_idx = max(min_excluded_idx, 0)
             max_excluded_idx = min(n_images, max_excluded_idx)
             mtx_e = drop_idx_range_rows_cols(mtx_e_all, min_excluded_idx, max_excluded_idx)
-            lambda_values, mtx_c = driver(mtx_e, k_klip)
+            lambda_values, mtx_c = params.decomposer(mtx_e, k_klip)
             ref_subset = np.hstack((image_vecs_meansub[:,:min_excluded_idx], image_vecs_meansub[:,max_excluded_idx:]))
             eigenimages = ref_subset @ (mtx_c * np.power(lambda_values, -1/2))
 
@@ -262,40 +258,56 @@ def klip_mtx_covariance(image_vecs_meansub, params):
         output = _klip_mtx_covariance(image_vecs_meansub, params)
     return output
 
-def klip_chunk_downdate(
-    image_vecs_meansub, mtx_u0, diag_s0, mtx_v0, k_klip, exclude_nearest_n_frames
+def klip_chunk_svd(
+    image_vecs_meansub, params : KlipParams, mtx_u0, diag_s0, mtx_v0
 ):
+    k_klip, exclude_nearest_n_frames = params.k_klip, params.exclude_nearest_n_frames
     if image_vecs_meansub.shape == (0, 0):
         # called by dask to infer dtype
         return np.zeros_like(image_vecs_meansub)
     log.debug(f"Klipping a chunk {image_vecs_meansub.shape=}")
     n_frames = image_vecs_meansub.shape[1]
-    total_n_frames = mtx_v0.shape[0]
+    n_images = mtx_v0.shape[0]
     output = np.zeros_like(image_vecs_meansub)
     for i in range(n_frames):
-        new_u, new_s, new_v = learning.minimal_downdate(
-            mtx_u0,
-            diag_s0,
-            mtx_v0,
-            min_col_to_remove=max(i - exclude_nearest_n_frames, 0),
-            max_col_to_remove=min(i + 1 + exclude_nearest_n_frames, total_n_frames),
-        )
-        eigenimages = new_u[:, :k_klip]
+        if not params.reuse:
+            min_excluded_idx, max_excluded_idx = i - exclude_nearest_n_frames, i + exclude_nearest_n_frames
+            min_excluded_idx = max(min_excluded_idx, 0)
+            max_excluded_idx = min(n_images, max_excluded_idx)
+            if params.strategy is constants.KlipStrategy.DOWNDATE_SVD:
+                print('downdating')
+                new_u, _, _ = learning.minimal_downdate(
+                    mtx_u0,
+                    diag_s0,
+                    mtx_v0,
+                    min_col_to_remove=min_excluded_idx,
+                    max_col_to_remove=max_excluded_idx,
+                )
+                eigenimages = new_u[:, :k_klip]
+            else:
+                subset_image_vecs = drop_idx_range_cols(image_vecs_meansub, min_excluded_idx, max_excluded_idx)
+                eigenimages, _, _ = learning.generic_svd(subset_image_vecs, k_klip) # TODO use driver
+        else:
+            eigenimages = mtx_u0
         meansub_target = image_vecs_meansub[:, i]
         output[:, i] = meansub_target - eigenimages @ (eigenimages.T @ meansub_target)
     mem_mb = utils.get_memory_use_mb()
     log.debug(f"klipped! {mem_mb} MB RAM in use")
     return output
 
-def klip_mtx_downdate(image_vecs_meansub, k_klip : int, exclude_nearest_n_frames : int):
+def klip_mtx_svd(image_vecs_meansub, params : KlipParams):
+    k_klip = params.k_klip
+    exclude_nearest_n_frames = params.exclude_nearest_n_frames
     xp = core.get_array_module(image_vecs_meansub)
     output = xp.zeros_like(image_vecs_meansub)
     total_n_frames = image_vecs_meansub.shape[1]
-    idxs = xp.arange(total_n_frames)
-    # extra modes:
-    # to remove 1 image vector by downdating, the initial decomposition
-    # should retain k_klip + 1 singular value triplets.
-    initial_k = k_klip + exclude_nearest_n_frames + 1
+    if params.strategy is constants.KlipStrategy.DOWNDATE_SVD:
+        # extra modes:
+        # to remove 1 image vector by downdating, the initial decomposition
+        # should retain k_klip + 1 singular value triplets.
+        initial_k = k_klip + exclude_nearest_n_frames + 1
+    else:
+        initial_k = k_klip
     log.debug(
         f"{image_vecs_meansub.shape=}, {k_klip=}, {exclude_nearest_n_frames=}, {initial_k=}"
     )
@@ -307,23 +319,21 @@ def klip_mtx_downdate(image_vecs_meansub, k_klip : int, exclude_nearest_n_frames
     )
     if xp is da:
         output = da.blockwise(
-            klip_chunk_downdate,
+            klip_chunk_svd,
             "ij",
             image_vecs_meansub,
             "ij",
+            params,
+            None,
             mtx_u0,
             None,
             diag_s0,
             None,
             mtx_v0,
             None,
-            k_klip,
-            None,
-            exclude_nearest_n_frames,
-            None,
         )
     else:
-        output = klip_chunk_downdate(
+        output = klip_chunk_svd(
             image_vecs_meansub,
             mtx_u0,
             diag_s0,
@@ -355,3 +365,9 @@ def make_good_pix_mask(
             mask &= rho <= outer_radius
 
     return mask
+
+DEFAULT_DECOMPOSERS = {
+    constants.KlipStrategy.DOWNDATE_SVD: learning.generic_svd,
+    constants.KlipStrategy.SVD: learning.generic_svd,
+    constants.KlipStrategy.COVARIANCE: _eigh_top_k,
+}

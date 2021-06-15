@@ -15,6 +15,7 @@ class Klip(InputCommand):
     k_klip : int = xconf.field(default=10, help="Number of modes to subtract in starlight subtraction")
     exclude_nearest_n_frames : int = xconf.field(default=0, help="Number of additional temporally-adjacent frames to exclude from the sequence when computing the KLIP eigenimages")
     strategy : constants.KlipStrategy = xconf.field(default=constants.KlipStrategy.DOWNDATE_SVD, help="Implementation of KLIP to use")
+    reuse_eigenimages : bool = xconf.field(default=False, help="Apply KLIP without adjusting the eigenimages at each step (much faster, less powerful)")
     combine_by : str = xconf.field(default="sum", help="Operation used to combine final derotated frames into a single output frame")
     saturation_threshold : Optional[float] = xconf.field(default=None, help="Value in counts above which pixels should be considered saturated and ignored")
     mask_iwa_px : int = xconf.field(default=None, help="Apply radial mask excluding pixels < iwa_px from center")
@@ -113,11 +114,13 @@ class Klip(InputCommand):
         return output_file
 
     def _assemble_klip_params(self):
-        from .. import pipelines
-        klip_params = pipelines.KlipParams(
+        from ..tasks import starlight_subtraction
+        klip_params = starlight_subtraction.KlipParams(
             self.k_klip,
             self.exclude_nearest_n_frames,
-            strategy=self.strategy
+            strategy=self.strategy,
+            reuse=self.reuse_eigenimages,
+            decomposer=starlight_subtraction.DEFAULT_DECOMPOSERS[self.strategy]
         )
         return klip_params
 

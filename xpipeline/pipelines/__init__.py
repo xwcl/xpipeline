@@ -297,14 +297,14 @@ def klip(
     estimation_mask: np.ndarray,
     combination_mask: np.ndarray,
     exclude_nearest_n_frames: int,
-    k_klip_value: int,
+    k_klip: int,
 ):
     log.debug("Assembling pipeline...")
     mtx_x, subset_idxs = improc.unwrap_cube(sci_arr, estimation_mask)
     log.debug(f"{mtx_x.shape=}")
 
     subtracted_mtx = starlight_subtraction.klip_mtx(
-        mtx_x, k_klip_value, exclude_nearest_n_frames
+        mtx_x, k_klip, exclude_nearest_n_frames
     )
     outcube = improc.wrap_matrix(subtracted_mtx, sci_arr.shape, subset_idxs)
     # TODO apply combination_mask

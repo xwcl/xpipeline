@@ -82,14 +82,14 @@ def test_inject_signals():
     assert np.isclose(outcube[3][128 // 2 - r_px, 128 // 2], out_pix_val)
 
 
-@pytest.mark.parametrize('strategy,reuse,snr_threshold,driver', [
+@pytest.mark.parametrize('strategy,reuse,snr_threshold,decomposer', [
     (constants.KlipStrategy.COVARIANCE, False, 21.2, starlight_subtraction._eigh_full_decomposition),
     (constants.KlipStrategy.COVARIANCE, True, 21.2, starlight_subtraction._eigh_full_decomposition),
     (constants.KlipStrategy.COVARIANCE, False, 21.2, starlight_subtraction._eigh_top_k),
     (constants.KlipStrategy.COVARIANCE, True, 21.2, starlight_subtraction._eigh_top_k),
-    (constants.KlipStrategy.DOWNDATE_SVD, False, 22, None),
+    (constants.KlipStrategy.DOWNDATE_SVD, False, 21.2, None),
 ])
-def test_end_to_end_dask(strategy, reuse, snr_threshold, driver):
+def test_end_to_end_dask(strategy, reuse, snr_threshold, decomposer):
     res_handle = resources.open_binary(
         "xpipeline.ref", "naco_betapic_preproc_absil2013_gonzalez2017.npz"
     )
@@ -103,10 +103,10 @@ def test_end_to_end_dask(strategy, reuse, snr_threshold, driver):
     pristine_input = pipelines.KlipInput(sci_arr, good_pix_mask, good_pix_mask)
     klip_params = pipelines.KlipParams(
         exclude_nearest_n_frames=0,
-        k_klip_value=n_modes,
+        k_klip=n_modes,
         strategy=strategy,
         reuse=reuse,
-        driver=driver
+        decomposer=decomposer
     )
 
     d_outcube = pipelines.klip_one(pristine_input, klip_params)
