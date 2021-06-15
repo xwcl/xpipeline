@@ -1,6 +1,7 @@
 from enum import Enum
+import dask
 from dataclasses import dataclass
-from typing import Union
+from typing import Union, Optional
 import numpy as np
 import dask.array as da
 import distributed.protocol
@@ -15,6 +16,12 @@ class KlipInput:
     estimation_mask: np.ndarray
     combination_mask: Union[np.ndarray, None]
 
+@dataclass
+class ExclusionValues:
+    limit_kind : str
+    min_value : Union[int,float]
+    max_value : Union[int,float]
+    values : np.ndarray
 
 @dataclass
 class KlipParams:
@@ -144,31 +151,6 @@ def klip_to_modes(image_vecs, decomp_class, n_modes, exclude_nearest=0):
     return output
 
 
-def klip_chunk_downdate(
-    image_vecs_meansub, mtx_u0, diag_s0, mtx_v0, k_klip, exclude_nearest_n_frames
-):
-    if image_vecs_meansub.shape == (0, 0):
-        # called by dask to infer dtype
-        return np.zeros_like(image_vecs_meansub)
-    log.debug(f"Klipping a chunk {image_vecs_meansub.shape=}")
-    n_frames = image_vecs_meansub.shape[1]
-    total_n_frames = mtx_v0.shape[0]
-    output = np.zeros_like(image_vecs_meansub)
-    for i in range(n_frames):
-        new_u, new_s, new_v = learning.minimal_downdate(
-            mtx_u0,
-            diag_s0,
-            mtx_v0,
-            min_col_to_remove=max(i - exclude_nearest_n_frames, 0),
-            max_col_to_remove=min(i + 1 + exclude_nearest_n_frames, total_n_frames),
-        )
-        eigenimages = new_u[:, :k_klip]
-        meansub_target = image_vecs_meansub[:, i]
-        output[:, i] = meansub_target - eigenimages @ (eigenimages.T @ meansub_target)
-    mem_mb = utils.get_memory_use_mb()
-    log.debug(f"klipped! {mem_mb} MB RAM in use")
-    return output
-
 def klip_mtx(image_vecs, params : KlipParams):
     xp = core.get_array_module(image_vecs)
     image_vecs_meansub, _ = mean_subtract_vecs(image_vecs)
@@ -208,30 +190,6 @@ def drop_idx_range_rows_cols(arr, min_excluded_idx, max_excluded_idx):
     out[min_excluded_idx:,min_excluded_idx:] = arr[max_excluded_idx:,max_excluded_idx:]
     return out
 
-def klip_mtx_covariance(image_vecs_meansub, k_klip : int, exclude_nearest_n_frames : int, driver):
-    xp = core.get_array_module(image_vecs_meansub)
-    mtx_e_all = image_vecs_meansub.T @ image_vecs_meansub
-    if xp is da:
-        output = da.blockwise(
-            klip_chunk_covariance,
-            "ij",
-            image_vecs_meansub,
-            "ij",
-            image_vecs_meansub,
-            None,
-            mtx_e_all,
-            None,
-            k_klip,
-            None,
-            exclude_nearest_n_frames,
-            None,
-            driver,
-            None,
-            dtype=image_vecs_meansub.dtype
-        )
-    else:
-        output = klip_chunk_covariance(image_vecs_meansub, image_vecs_meansub, mtx_e_all, k_klip, exclude_nearest_n_frames, driver)
-    return output
 
 def _eigh_full_decomposition(mtx, k_klip):
     lambda_values_out, mtx_c_out = linalg.eigh(mtx, np.eye(mtx.shape[0]), driver="gvd")
@@ -247,23 +205,61 @@ def _eigh_top_k(mtx, k_klip):
     mtx_c = np.flip(mtx_c_out, axis=1)[:,:k_klip]
     return lambda_values, mtx_c
 
-def klip_chunk_covariance(image_vecs_meansub_chunk, image_vecs_meansub, mtx_e_all, k_klip : int, exclude_nearest_n_frames : int, driver):
-    if image_vecs_meansub_chunk.shape == (0, 0):
-        # called by dask to infer dtype
-        return np.zeros_like(image_vecs_meansub_chunk)
-
-    output = np.zeros_like(image_vecs_meansub_chunk)
-    for i in range(image_vecs_meansub_chunk.shape[1]):
+def _klip_mtx_covariance(image_vecs_meansub, mtx_e_all, k_klip : int, exclude_nearest_n_frames : int, driver):
+    output = np.zeros_like(image_vecs_meansub)
+    n_images = image_vecs_meansub.shape[1]
+    # indices = np.arange(n_images)
+    for i in range(n_images):
         min_excluded_idx, max_excluded_idx = i - exclude_nearest_n_frames, i + exclude_nearest_n_frames
+        min_excluded_idx = max(min_excluded_idx, 0)
+        max_excluded_idx = min(n_images, max_excluded_idx)
         mtx_e = drop_idx_range_rows_cols(mtx_e_all, min_excluded_idx, max_excluded_idx)
 
         lambda_values, mtx_c = driver(mtx_e, k_klip)
-
-        eigenimages = drop_idx_range_cols(image_vecs_meansub, min_excluded_idx, max_excluded_idx) @ (mtx_c * np.power(lambda_values, -1/2))
+        ref_subset = np.hstack((image_vecs_meansub[:,:min_excluded_idx], image_vecs_meansub[:,max_excluded_idx:]))
+        eigenimages = ref_subset @ (mtx_c * np.power(lambda_values, -1/2))
         meansub_target = image_vecs_meansub[:,i]
         output[:,i] = meansub_target - eigenimages @ (eigenimages.T @ meansub_target)
     return output
 
+def klip_mtx_covariance(image_vecs_meansub, k_klip : int, exclude_nearest_n_frames : int, driver):
+    xp = core.get_array_module(image_vecs_meansub)
+    mtx_e_all = image_vecs_meansub.T @ image_vecs_meansub
+    if xp is da:
+        d_output = dask.delayed(_klip_mtx_covariance)(image_vecs_meansub, mtx_e_all, k_klip, exclude_nearest_n_frames, driver)
+        output = da.from_delayed(
+            d_output,
+            shape=image_vecs_meansub.shape,
+            dtype=image_vecs_meansub.dtype
+        )
+    else:
+        output = _klip_mtx_covariance(image_vecs_meansub, mtx_e_all, k_klip, exclude_nearest_n_frames, driver)
+    return output
+
+def klip_chunk_downdate(
+    image_vecs_meansub, mtx_u0, diag_s0, mtx_v0, k_klip, exclude_nearest_n_frames
+):
+    if image_vecs_meansub.shape == (0, 0):
+        # called by dask to infer dtype
+        return np.zeros_like(image_vecs_meansub)
+    log.debug(f"Klipping a chunk {image_vecs_meansub.shape=}")
+    n_frames = image_vecs_meansub.shape[1]
+    total_n_frames = mtx_v0.shape[0]
+    output = np.zeros_like(image_vecs_meansub)
+    for i in range(n_frames):
+        new_u, new_s, new_v = learning.minimal_downdate(
+            mtx_u0,
+            diag_s0,
+            mtx_v0,
+            min_col_to_remove=max(i - exclude_nearest_n_frames, 0),
+            max_col_to_remove=min(i + 1 + exclude_nearest_n_frames, total_n_frames),
+        )
+        eigenimages = new_u[:, :k_klip]
+        meansub_target = image_vecs_meansub[:, i]
+        output[:, i] = meansub_target - eigenimages @ (eigenimages.T @ meansub_target)
+    mem_mb = utils.get_memory_use_mb()
+    log.debug(f"klipped! {mem_mb} MB RAM in use")
+    return output
 
 def klip_mtx_downdate(image_vecs_meansub, k_klip : int, exclude_nearest_n_frames : int):
     xp = core.get_array_module(image_vecs_meansub)

@@ -16,6 +16,7 @@ import pandas as pd
 from typing import List, Union
 
 from .. import constants as const
+from .. import core
 from ..core import PipelineCollection, reduce_bitwise_or
 
 from ..tasks import (
@@ -202,6 +203,7 @@ def klip_multi(klip_inputs: List[KlipInput], klip_params: KlipParams):
     log.debug("assembling klip_multi")
     matrices = []
     subset_indices = []
+    xp = core.get_array_module(klip_inputs[0].sci_arr)
     for idx, input_data in enumerate(klip_inputs):
         mtx_x, subset_idxs = improc.unwrap_cube(
             input_data.sci_arr, input_data.estimation_mask
@@ -212,7 +214,7 @@ def klip_multi(klip_inputs: List[KlipInput], klip_params: KlipParams):
         matrices.append(mtx_x)
         subset_indices.append(subset_idxs)
 
-    mtx_x = da.vstack(matrices)
+    mtx_x = xp.vstack(matrices)
     subtracted_mtx = starlight_subtraction.klip_mtx(
         mtx_x, klip_params
     )

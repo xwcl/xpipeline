@@ -294,7 +294,7 @@ def calculate_snr(image, r_px, pa_deg, resolution_element_px, exclude_nearest):
     return calc_snr_mawet(results[0], results[1:])
 
 
-@njit(parallel=True)
+@njit(parallel=True, cache=True)
 def _calc_snr_image(convolved_image, rho, theta, mask, aperture_diameter_px, exclude_nearest, snr_image_out):
     height, width = convolved_image.shape
     yc, xc = (height - 1) / 2, (width - 1) / 2

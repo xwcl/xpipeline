@@ -157,19 +157,21 @@ class EvalKlip(Klip):
             out_image, aperture_diameter_px, self.search_iwa_px, self.search_owa_px, apertures_to_exclude, self.snr_threshold
         )
 
+        import time
         _ = dask.visualize(out_image, d_recovered_signals, d_all_candidates, filename='eval_klip.svg')
+        log.info(f"Computing recovered signals")
         if self.dask.distributed:
             from dask.distributed import performance_report
             with performance_report():
+                start = time.perf_counter()
                 out_image, recovered_signals, all_candidates = dask.compute(out_image, d_recovered_signals, d_all_candidates)
+                end = time.perf_counter()
         else:
-
-            log.info(f"Computing recovered signals")
-            import time
             start = time.perf_counter()
             out_image, recovered_signals, all_candidates = dask.compute(out_image, d_recovered_signals, d_all_candidates)
-            log.info(f"Done in {time.perf_counter() - start} sec")
-
+            end = time.perf_counter()
+        time_elapsed_sec = end - start
+        log.info(f"Done in {time_elapsed_sec} sec")
         iofits.write_fits(
             iofits.DaskHDUList([iofits.DaskHDU(out_image)]), output_klip_final
         )
@@ -177,6 +179,7 @@ class EvalKlip(Klip):
         payload = xconf.asdict(self)
         payload['recovered_signals'] = [dataclasses.asdict(x) for x in recovered_signals]
         payload['candidates'] = [dataclasses.asdict(x) for x in all_candidates]
+        payload['time_elapsed_sec'] = time_elapsed_sec
         log.info(f"Result of KLIP + ADI signal injection and recovery:")
         log.info(pformat(payload))
 
