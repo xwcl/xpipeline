@@ -12,5 +12,10 @@ class KlipStrategy(Enum):
     SVD = 'svd'
     DOWNDATE_SVD = 'downdate_svd'
     COVARIANCE = 'covariance'
-    
+
+class ValueFilter(Enum):
+    DIFFERENCE_FROM_CURRENT = 'difference_from_current'
+    ABSOLUTE = 'absolute'
+
+
 # distributed.protocol.register_generic(KlipStrategy)

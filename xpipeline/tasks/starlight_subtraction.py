@@ -19,7 +19,7 @@ class KlipInput:
 
 @dataclass
 class ExclusionValues:
-    limit_kind : str
+    limit_kind : constants.ValueFilter
     min_value : Union[int,float]
     max_value : Union[int,float]
     values : np.ndarray
@@ -28,6 +28,7 @@ class ExclusionValues:
 class KlipParams:
     k_klip: int
     exclude_nearest_n_frames: int
+    # exclusion : list[ExclusionValues]
     decomposer : Callable
     reuse : bool = False
     initial_decomposer : Optional[Callable] = None
@@ -271,11 +272,11 @@ def klip_chunk_svd(
     output = np.zeros_like(image_vecs_meansub)
     for i in range(n_frames):
         if not params.reuse:
+
             min_excluded_idx, max_excluded_idx = i - exclude_nearest_n_frames, i + exclude_nearest_n_frames
             min_excluded_idx = max(min_excluded_idx, 0)
             max_excluded_idx = min(n_images, max_excluded_idx)
             if params.strategy is constants.KlipStrategy.DOWNDATE_SVD:
-                print('downdating')
                 new_u, _, _ = learning.minimal_downdate(
                     mtx_u0,
                     diag_s0,

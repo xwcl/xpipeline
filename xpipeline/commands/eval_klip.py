@@ -21,6 +21,11 @@ class CompanionConfig:
     r_px : float = xconf.field(help="Radius at which to measure SNR")
     pa_deg : float = xconf.field(help="Position angle in degrees East of North at which to measure SNR")
 
+@xconf.config
+class SearchConfig:
+    search_iwa_px : float = xconf.field(default=None, help="Limit blind search to pixels more than this radius from center")
+    search_owa_px : float = xconf.field(default=None, help="Limit blind search to pixels less than this radius from center")
+    snr_threshold : float = xconf.field(default=5.0, help="Threshold above which peaks of interest should be reported")
 
 @xconf.config
 class EvalKlip(Klip):
@@ -41,9 +46,7 @@ class EvalKlip(Klip):
         location to exclude when calculating the noise (in other
         words, a value of 1 excludes two apertures total,
         one on each side)"""))
-    snr_threshold : float = xconf.field(default=5.0, help="Threshold above which peaks of interest should be reported")
-    search_iwa_px : float = xconf.field(default=None, help="Limit blind search to pixels more than this radius from center")
-    search_owa_px : float = xconf.field(default=None, help="Limit blind search to pixels less than this radius from center")
+    search : SearchConfig = xconf.field(help="Configure blind search", default=SearchConfig())
 
     def __post_init__(self):
         if self.companions is None:
