@@ -19,7 +19,7 @@ import dask.array as da
 import dask
 import logging
 import warnings
-from .. import constants
+from .. import constants, version
 
 log = logging.getLogger(__name__)
 
@@ -326,14 +326,7 @@ def write_fits(hdul, destination_path, overwrite=False):
     with fs.open(destination_path, mode="wb") as destfh:
         log.info(f"Writing FITS HDUList to {destination_path}")
         real_hdul = hdul.to_fits()
-        # OSG jobs have a variable OSGVO_SUBMITTER=josephlong@services.ci-connect.net
-        if "OSGVO_SUBMTITER" in os.environ:
-            pipeline_user = os.environ["OSGVO_SUBMITTER"].split("@")[0]
-        else:
-            pipeline_user = getpass.getuser()
-        history_msg = f"written from xpipeline by {pipeline_user}"
-        log.debug(history_msg)
-        real_hdul[0].header.add_history(history_msg)
+        real_hdul[0].header['XVERS'] = (version.version, "xpipeline version")
         real_hdul.writeto(destfh)
     return destination_path
 
