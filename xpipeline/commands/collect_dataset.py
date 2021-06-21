@@ -135,7 +135,7 @@ class CollectDataset(MultiInputCommand):
             metadata_table = np.lib.recfunctions.append_fields(
                 metadata_table, "derotation_angle_deg", derotation_angles
             )
-            if "ADI" not in obs_method:
+            if "adi" not in obs_method:
                 obs_method["adi"] = {}
             obs_method["adi"][
                 "derotation_angles"
@@ -154,6 +154,8 @@ class CollectDataset(MultiInputCommand):
             log.debug(
                 f"After crop: {cubes[left_extname].shape=} {cubes[right_extname].shape=}"
             )
+            if "vapp" not in obs_method:
+                obs_method['vapp'] = {}
             obs_method['vapp']['left'] = left_extname
             obs_method['vapp']['right'] = right_extname
 

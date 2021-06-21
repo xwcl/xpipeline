@@ -18,7 +18,7 @@ class ExcludedRegion:
 class SkySubtract(MultiInputCommand):
     """Subtract sky background with a PCA basis model file"""
     sky_model_path : str = xconf.field(help="Path to FITS file with sky model basis")
-    mask_dilate_iters : int = xconf.field(default=6, help="Number of times to grow mask regions before selecting estimation pixels")
+    mask_dilate_iters : int = xconf.field(default=2, help="Number of times to grow mask regions before selecting estimation pixels")
     n_sigma : float = xconf.field(default=3, help="Number of sigma (standard deviations of the background model input frames) beyond which pixel is considered illuminated and excluded from background estimation")
     excluded_regions : dict[str, ExcludedRegion] = xconf.field(default_factory=dict, help="Regions presumed illuminated to be excluded from background estimation")
 

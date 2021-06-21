@@ -295,12 +295,10 @@ def klip_chunk_svd(
     for i in range(n_frames):
         if not params.reuse:
             mask = np.zeros(n_images, dtype=bool)
-            log.debug(f'{all_indices=}')
             mask[all_indices[i]] = True
             for excl in params.exclusions:
-                log.debug(f'{excl=}')
                 individual_mask = excl.get_mask(excl.values[i])
-                log.debug(f'Masking {np.count_nonzero(individual_mask)} from {excl}')
+                # log.debug(f'Masking {np.count_nonzero(individual_mask)} from {excl}')
                 mask |= individual_mask
             indices = np.argwhere(mask)
             min_excluded_idx = np.min(indices)
@@ -309,7 +307,7 @@ def klip_chunk_svd(
             contiguous_mask = (frame_idxs >= min_excluded_idx) & (frame_idxs <= max_excluded_idx)
             if np.count_nonzero(mask ^ contiguous_mask):
                 raise ValueError("Non-contiguous ranges to exclude detected, but we don't handle that")
-            log.debug(f'Excluding from {min_excluded_idx} to {max_excluded_idx} + 1')
+            # log.debug(f'Excluding from {min_excluded_idx} to {max_excluded_idx} + 1')
             if params.strategy is constants.KlipStrategy.DOWNDATE_SVD:
                 new_u, _, _ = learning.minimal_downdate(
                     mtx_u0,

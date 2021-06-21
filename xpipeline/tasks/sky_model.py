@@ -10,6 +10,7 @@ import scipy.ndimage
 
 from . import iofits, improc
 from ..utils import unwrap
+from .. import core
 
 log = logging.getLogger(__name__)
 
@@ -62,18 +63,22 @@ distributed.protocol.register_generic(SkyModel)
 
 
 def compute_components(sky_cube, n_components):
+    xp = core.get_array_module(sky_cube)
     log.debug(f"{sky_cube=}")
-    sky_cube[da.isnan(sky_cube)] = 0.0
-    mean_sky_image = da.mean(sky_cube, axis=0)
-    stddev_sky_image = da.std(sky_cube, axis=0)
+    sky_cube[xp.isnan(sky_cube)] = 0.0
+    mean_sky_image = xp.mean(sky_cube, axis=0)
+    stddev_sky_image = xp.std(sky_cube, axis=0)
     planes, rows, cols = sky_cube.shape
     all_real_mtx = (
         (sky_cube - mean_sky_image).reshape((planes, rows * cols)).T
     )  # now cube is rows*cols x planes
     log.info(f"requesting SVD of {all_real_mtx.shape} matrix")
-    mtx_u, _, _ = da.linalg.svd_compressed(
-        all_real_mtx, k=n_components
-    )  # mtx_u is rows*cols x n_components
+    if xp is da:
+        mtx_u, _, _ = da.linalg.svd_compressed(
+            all_real_mtx, k=n_components
+        )  # mtx_u is rows*cols x n_components
+    else:
+        mtx_u, _, _ = np.linalg.svd(all_real_mtx, full_matrices=False)
 
     if n_components > mtx_u.shape[1]:
         raise ValueError(
@@ -145,7 +150,7 @@ def generate_background_mask(
         for bbox in exclude:
             yslice, xslice = bbox.slices
             bad_bg_pix_mask[yslice, xslice] = True
-    assert np.count_nonzero(~bad_bg_pix_mask) >= 0.05 * std_bg_arr.size
+    assert np.count_nonzero(~bad_bg_pix_mask) >= 0.05 * std_bg_arr.size, f"{np.count_nonzero(~bad_bg_pix_mask)} pixels marked good, but {std_bg_arr.size=}"
     return bad_bg_pix_mask
 
 
