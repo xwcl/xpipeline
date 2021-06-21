@@ -105,7 +105,7 @@ class EvalKlip(Klip):
 
         # process like the klip command
         klip_inputs, obs_method, derotation_angles = self._assemble_klip_inputs(dataset_path)
-        klip_params = self._assemble_klip_params()
+        klip_params = self._assemble_klip_params(klip_inputs, derotation_angles)
 
         # inject signals
         if "vapp" in obs_method:

@@ -7,8 +7,23 @@ import numpy as np
 import dask.array as da
 import distributed.protocol
 from scipy import linalg
+from numba import njit
 from .. import core, utils, constants
 from . import learning, improc
+
+@njit
+def _count_max_excluded(values, delta_excluded):
+    max_excluded = 0
+    n_values = values.shape[0]
+    for i in range(n_values):
+        excluded_for_val1 = 0
+        val1 = values[i]
+        for j in range(n_values):
+            delta = values[j] - val1
+            if -delta_excluded <= delta <= delta_excluded:
+                excluded_for_val1 += 1
+        max_excluded = excluded_for_val1 if excluded_for_val1 > max_excluded else max_excluded
+    return max_excluded
 
 
 @dataclass
@@ -16,19 +31,29 @@ class KlipInput:
     sci_arr: da.core.Array
     estimation_mask: np.ndarray
     combination_mask: Union[np.ndarray, None]
+distributed.protocol.register_generic(KlipInput)
 
 @dataclass
 class ExclusionValues:
-    limit_kind : constants.ValueFilter
-    min_value : Union[int,float]
-    max_value : Union[int,float]
+    exclude_within_delta : Union[int,float]
     values : np.ndarray
+    num_excluded_max : Optional[int] = None  # Downdate depends on knowing ahead of time how many frames you'll need to remove
+
+    def __post_init__(self):
+        if self.num_excluded_max is None:
+            self.num_excluded_max = _count_max_excluded(self.values, self.exclude_within_delta)
+            log.debug(f'initialized {self.num_excluded_max=} for {self.values=}')
+
+    def get_mask(self, current_value=None):
+        deltas = np.abs(self.values - current_value)
+        return deltas <= self.exclude_within_delta
+
+distributed.protocol.register_generic(ExclusionValues)
 
 @dataclass
 class KlipParams:
     k_klip: int
-    exclude_nearest_n_frames: int
-    # exclusion : list[ExclusionValues]
+    exclusions : list[ExclusionValues]
     decomposer : Callable
     reuse : bool = False
     initial_decomposer : Optional[Callable] = None
@@ -38,10 +63,6 @@ class KlipParams:
     def __post_init__(self):
         if self.initial_decomposer is None:
             self.initial_decomposer = self.decomposer
-
-
-
-distributed.protocol.register_generic(KlipInput)
 distributed.protocol.register_generic(KlipParams)
 
 import logging
@@ -260,29 +281,42 @@ def klip_mtx_covariance(image_vecs_meansub, params):
     return output
 
 def klip_chunk_svd(
-    image_vecs_meansub, params : KlipParams, mtx_u0, diag_s0, mtx_v0
+    image_vecs_meansub, all_indices, params : KlipParams, mtx_u0, diag_s0, mtx_v0
 ):
-    k_klip, exclude_nearest_n_frames = params.k_klip, params.exclude_nearest_n_frames
+    k_klip = params.k_klip
     if image_vecs_meansub.shape == (0, 0):
         # called by dask to infer dtype
         return np.zeros_like(image_vecs_meansub)
     log.debug(f"Klipping a chunk {image_vecs_meansub.shape=}")
     n_frames = image_vecs_meansub.shape[1]
     n_images = mtx_v0.shape[0]
+    frame_idxs = np.arange(n_images)  # for detecting non-contiguous masked ranges
     output = np.zeros_like(image_vecs_meansub)
     for i in range(n_frames):
         if not params.reuse:
-
-            min_excluded_idx, max_excluded_idx = i - exclude_nearest_n_frames, i + exclude_nearest_n_frames
-            min_excluded_idx = max(min_excluded_idx, 0)
-            max_excluded_idx = min(n_images, max_excluded_idx)
+            mask = np.zeros(n_images, dtype=bool)
+            log.debug(f'{all_indices=}')
+            mask[all_indices[i]] = True
+            for excl in params.exclusions:
+                log.debug(f'{excl=}')
+                individual_mask = excl.get_mask(excl.values[i])
+                log.debug(f'Masking {np.count_nonzero(individual_mask)} from {excl}')
+                mask |= individual_mask
+            indices = np.argwhere(mask)
+            min_excluded_idx = np.min(indices)
+            max_excluded_idx = np.max(indices)
+            # detect if this isn't a simple range (which we can't handle)
+            contiguous_mask = (frame_idxs >= min_excluded_idx) & (frame_idxs <= max_excluded_idx)
+            if np.count_nonzero(mask ^ contiguous_mask):
+                raise ValueError("Non-contiguous ranges to exclude detected, but we don't handle that")
+            log.debug(f'Excluding from {min_excluded_idx} to {max_excluded_idx} + 1')
             if params.strategy is constants.KlipStrategy.DOWNDATE_SVD:
                 new_u, _, _ = learning.minimal_downdate(
                     mtx_u0,
                     diag_s0,
                     mtx_v0,
                     min_col_to_remove=min_excluded_idx,
-                    max_col_to_remove=max_excluded_idx,
+                    max_col_to_remove=max_excluded_idx + 1,
                 )
                 eigenimages = new_u[:, :k_klip]
             else:
@@ -298,19 +332,21 @@ def klip_chunk_svd(
 
 def klip_mtx_svd(image_vecs_meansub, params : KlipParams):
     k_klip = params.k_klip
-    exclude_nearest_n_frames = params.exclude_nearest_n_frames
     xp = core.get_array_module(image_vecs_meansub)
     output = xp.zeros_like(image_vecs_meansub)
     total_n_frames = image_vecs_meansub.shape[1]
-    if params.strategy is constants.KlipStrategy.DOWNDATE_SVD:
+    indices = np.arange(total_n_frames)
+    if not params.reuse and params.strategy is constants.KlipStrategy.DOWNDATE_SVD:
+        extra_modes = max([1,] + [excl.num_excluded_max for excl in params.exclusions])
         # extra modes:
         # to remove 1 image vector by downdating, the initial decomposition
         # should retain k_klip + 1 singular value triplets.
-        initial_k = k_klip + exclude_nearest_n_frames + 1
+        initial_k = k_klip + extra_modes
+        log.debug(f'{initial_k=} from {k_klip=} and {extra_modes=}')
     else:
         initial_k = k_klip
     log.debug(
-        f"{image_vecs_meansub.shape=}, {k_klip=}, {exclude_nearest_n_frames=}, {initial_k=}"
+        f"{image_vecs_meansub.shape=}, {k_klip=}, {initial_k=}"
     )
     if image_vecs_meansub.shape[0] < initial_k or image_vecs_meansub.shape[1] < initial_k:
         raise ValueError(f"Number of modes requested exceeds dimensions of input")
@@ -324,6 +360,8 @@ def klip_mtx_svd(image_vecs_meansub, params : KlipParams):
             "ij",
             image_vecs_meansub,
             "ij",
+            indices,
+            "j",
             params,
             None,
             mtx_u0,
@@ -336,11 +374,10 @@ def klip_mtx_svd(image_vecs_meansub, params : KlipParams):
     else:
         output = klip_chunk_svd(
             image_vecs_meansub,
+            params,
             mtx_u0,
             diag_s0,
             mtx_v0,
-            k_klip,
-            exclude_nearest_n_frames,
         )
     return output
 

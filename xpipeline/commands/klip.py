@@ -1,19 +1,39 @@
+from multiprocessing import Value
 import xconf
 import sys
 import logging
 from typing import Optional
+from enum import Enum
 from .. import utils, constants
 
 from .base import InputCommand
 
 log = logging.getLogger(__name__)
 
+class RotationUnit(Enum):
+    PX = 'px'
+    DEG = 'deg'
+
+@xconf.config
+class AngleExclusionConfig:
+    unit : RotationUnit = xconf.field(default=RotationUnit.DEG, help="Interpret limits as either px or deg")
+    delta : float = xconf.field(default=0, help="Minimum absolute difference between target frame value and nearest included reference")
+    r_px : float = xconf.field(default=None, help="Radius at which to calculate motion in pixels, ignored when unit == 'deg'")
+
+    def __post_init__(self):
+        if self.r_px is None and self.unit is RotationUnit.PX:
+            raise ValueError("Cannot apply angular exclusion with units of pixels without r_px set")
+
+@xconf.config
+class ExclusionConfig:
+    angle : AngleExclusionConfig = xconf.field(default=AngleExclusionConfig(), help="Apply exclusion to derotation angles")
+    nearest_n_frames : int = xconf.field(default=0, help="Number of additional temporally-adjacent frames (besides the target frame) to exclude from the sequence when computing the KLIP eigenimages")
 
 @xconf.config
 class Klip(InputCommand):
     "Subtract starlight with KLIP"
     k_klip : int = xconf.field(default=10, help="Number of modes to subtract in starlight subtraction")
-    exclude_nearest_n_frames : int = xconf.field(default=0, help="Number of additional temporally-adjacent frames to exclude from the sequence when computing the KLIP eigenimages")
+    exclude : ExclusionConfig = xconf.field(default=ExclusionConfig(), help="How to exclude frames from reference sample")
     strategy : constants.KlipStrategy = xconf.field(default=constants.KlipStrategy.DOWNDATE_SVD, help="Implementation of KLIP to use")
     reuse_eigenimages : bool = xconf.field(default=False, help="Apply KLIP without adjusting the eigenimages at each step (much faster, less powerful)")
     combine_by : str = xconf.field(default="sum", help="Operation used to combine final derotated frames into a single output frame")
@@ -97,7 +117,7 @@ class Klip(InputCommand):
         self.quit_if_outputs_exist([output_klip_final, output_exptime_map])
 
         klip_inputs, obs_method, derotation_angles = self._assemble_klip_inputs(self.input)
-        klip_params = self._assemble_klip_params()
+        klip_params = self._assemble_klip_params(klip_inputs, derotation_angles)
         outcubes = pipelines.klip_multi(klip_inputs, klip_params)
         out_image = self._assemble_out_image(obs_method, outcubes, derotation_angles)
 
@@ -113,14 +133,44 @@ class Klip(InputCommand):
         )
         return output_file
 
-    def _assemble_klip_params(self):
+    def _make_exclusions(self, exclude : ExclusionConfig, derotation_angles):
+        import numpy as np
         from ..tasks import starlight_subtraction
+        exclusions = []
+        if exclude.nearest_n_frames > 0:
+            indices = np.arange(derotation_angles.shape[0])
+            exc = starlight_subtraction.ExclusionValues(
+                exclude_within_delta=exclude.nearest_n_frames,
+                values=indices,
+                num_excluded_max=2 * exclude.nearest_n_frames + 1
+            )
+            exclusions.append(exc)
+        if exclude.angle.delta > 0:
+            if exclude.angle.unit is RotationUnit.DEG:
+                exc = starlight_subtraction.ExclusionValues(
+                    exclude_within_delta=exclude.angle.delta,
+                    values=derotation_angles
+                )
+            elif exclude.angle.unit is RotationUnit.PX:
+                exc = starlight_subtraction.ExclusionValues(
+                    exclude_within_delta=exclude.angle.delta,
+                    values=exclude.angle.r_px * np.unwrap(np.deg2rad(derotation_angles))
+                )
+            else:
+                raise ValueError("Invalid exclude.angle.unit shouldn't happen")
+            exclusions.append(exc)
+        return exclusions
+
+    def _assemble_klip_params(self, klip_inputs, derotation_angles):
+        import numpy as np
+        from ..tasks import starlight_subtraction
+        exclusions = self._make_exclusions(self.exclude, derotation_angles)
         klip_params = starlight_subtraction.KlipParams(
             self.k_klip,
-            self.exclude_nearest_n_frames,
+            exclusions,
+            decomposer=starlight_subtraction.DEFAULT_DECOMPOSERS[self.strategy],
             strategy=self.strategy,
             reuse=self.reuse_eigenimages,
-            decomposer=starlight_subtraction.DEFAULT_DECOMPOSERS[self.strategy]
         )
         return klip_params
 
