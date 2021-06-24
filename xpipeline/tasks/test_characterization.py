@@ -100,13 +100,20 @@ def test_end_to_end_dask(strategy, reuse, snr_threshold, decomposer):
     sci_arr = da.asarray(data["cube"])
     rot_arr = da.asarray(data["angles"])
 
-    pristine_input = pipelines.KlipInput(sci_arr, good_pix_mask, good_pix_mask)
-    klip_params = pipelines.KlipParams(
-        exclude_nearest_n_frames=0,
-        k_klip=n_modes,
+    pristine_input = starlight_subtraction.KlipInput(sci_arr, good_pix_mask, good_pix_mask)
+    exclusions = []
+    # indices = np.arange(rot_arr.shape[0])
+    # exc = starlight_subtraction.ExclusionValues(
+    #     exclude_within_delta=exclude.nearest_n_frames,
+    #     values=indices,
+    #     num_excluded_max=2 * exclude.nearest_n_frames + 1
+    # )
+    # exclusions.append(exc)
+    klip_params = starlight_subtraction.KlipParams(
+        n_modes,
+        exclusions,
+        decomposer=decomposer,
         strategy=strategy,
-        reuse=reuse,
-        decomposer=decomposer
     )
 
     d_outcube = pipelines.klip_one(pristine_input, klip_params)

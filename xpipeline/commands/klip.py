@@ -202,6 +202,7 @@ class Klip(InputCommand):
             klip_inputs.append(
                 pipelines.KlipInput(
                     da.from_array(sci_arr_left),
+                    # sci_arr_left,
                     estimation_mask_left,
                     combination_mask_left,
                 )
@@ -209,6 +210,7 @@ class Klip(InputCommand):
             klip_inputs.append(
                 pipelines.KlipInput(
                     da.from_array(sci_arr_right),
+                    # sci_arr_right,
                     estimation_mask_right,
                     combination_mask_right,
                 )
@@ -224,7 +226,9 @@ class Klip(InputCommand):
             estimation_mask, combination_mask = self._make_masks(sci_arr, extname)
             klip_inputs.append(
                 pipelines.KlipInput(
-                    da.from_array(sci_arr), estimation_mask, combination_mask
+                    # da.from_array(sci_arr),
+                    sci_arr,
+                    estimation_mask, combination_mask
                 )
             )
         return klip_inputs, obs_method, derotation_angles

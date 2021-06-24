@@ -226,28 +226,28 @@ def klip_multi(klip_inputs: List[KlipInput], klip_params: KlipParams):
         end_idx = start_idx + n_features
         if input_data.combination_mask is not None:
             submatrix = subtracted_mtx[start_idx:end_idx]
-            log.debug(f"{submatrix=}")
+            # log.debug(f"{submatrix=}")
             cube = improc.wrap_matrix(
                 submatrix,
                 input_data.sci_arr.shape,
                 subset_idxs,
                 fill_value=klip_params.missing_data_value,
             )
-            log.debug(
-                f"after slicing submatrix and rewrapping with indices from estimation mask: {cube=}"
-            )
+            # log.debug(
+            #     f"after slicing submatrix and rewrapping with indices from estimation mask: {cube=}"
+            # )
             # TODO is there a better way?
             unwrapped, subset_idxs = improc.unwrap_cube(
                 cube, input_data.combination_mask
             )
-            log.debug(f"{unwrapped=} {subset_idxs.shape=}")
+            # log.debug(f"{unwrapped=} {subset_idxs.shape=}")
             cube = improc.wrap_matrix(
                 unwrapped,
                 cube.shape,
                 subset_idxs,
                 fill_value=klip_params.missing_data_value,
             )
-            log.debug(f"after rewrapping with combination mask indices: {cube=}")
+            # log.debug(f"after rewrapping with combination mask indices: {cube=}")
         else:
             cube = None
         cubes.append(cube)

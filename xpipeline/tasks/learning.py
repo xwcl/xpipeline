@@ -111,7 +111,7 @@ def torch_svd(array, full_matrices=False, n_modes=None):
         return mtx_u, diag_s, mtx_v
 
 
-def generic_svd(mtx_x, n_modes, n_power_iter=0):
+def generic_svd(mtx_x, n_modes, n_power_iter=2):
     """Computes SVD of mtx_x returning U, s, and V such that
     allclose(mtx_x, U @ diag(s) @ V.T) (with some tolerance).
 
@@ -145,8 +145,9 @@ def generic_svd(mtx_x, n_modes, n_power_iter=0):
     """
     xp = core.get_array_module(mtx_x)
     if xp is da:
-        mtx_u, diag_s, mtx_v = da.linalg.svd(mtx_x)
+        mtx_u, diag_s, mtx_v = da.linalg.svd_compressed(mtx_x, n_modes, n_power_iter=n_power_iter)
     elif xp in (np, cp):
+        log.debug('Doing a regular svd')
         mtx_u, diag_s, mtx_vt = xp.linalg.svd(mtx_x, full_matrices=False)
         mtx_v = mtx_vt.T
     return mtx_u[:, :n_modes], diag_s[:n_modes], mtx_v[:, :n_modes]

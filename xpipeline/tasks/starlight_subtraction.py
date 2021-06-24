@@ -186,10 +186,8 @@ def klip_mtx(image_vecs, params : KlipParams):
     xp = core.get_array_module(image_vecs)
     image_vecs_meansub, _ = mean_subtract_vecs(image_vecs)
     if xp is da:
-        image_vecs_meansub = image_vecs_meansub.rechunk(
-            {0: -1, 1: "auto"}
-        )  # TODO should we allow chunking in both dims with Halko SVD?
-        log.debug(f"{image_vecs_meansub.shape=} {image_vecs_meansub.numblocks=}")
+        image_vecs_meansub = image_vecs_meansub.rechunk({0: -1, 1: "auto"})
+        log.debug(f"Rechunked {image_vecs_meansub.shape=} into {image_vecs_meansub.numblocks=}")
     if params.strategy in (constants.KlipStrategy.DOWNDATE_SVD, constants.KlipStrategy.SVD):
         return klip_mtx_svd(image_vecs_meansub, params)
     elif params.strategy is constants.KlipStrategy.COVARIANCE:
@@ -280,8 +278,30 @@ def klip_mtx_covariance(image_vecs_meansub, params):
         output = _klip_mtx_covariance(image_vecs_meansub, params)
     return output
 
+def exclusions_to_mask(n_images, current_idx, exclusions):
+    mask = np.zeros(n_images, dtype=bool)
+    mask[current_idx] = True  # exclude at least the current frame
+    # mask[i] = True
+    for excl in exclusions:
+        individual_mask = excl.get_mask(excl.values[current_idx])
+        # log.debug(f'Masking {np.count_nonzero(individual_mask)} from {excl}')
+        mask |= individual_mask
+    return mask
+
+def exclusions_to_range(n_images, current_idx, exclusions):
+    mask = exclusions_to_mask(n_images, current_idx, exclusions)
+    indices = np.argwhere(mask)
+    min_excluded_idx = np.min(indices)
+    max_excluded_idx = np.max(indices)
+    # detect if this isn't a simple range (which we can't handle)
+    frame_idxs = np.arange(n_images)
+    contiguous_mask = (frame_idxs >= min_excluded_idx) & (frame_idxs <= max_excluded_idx)
+    if np.count_nonzero(mask ^ contiguous_mask):
+        raise ValueError("Non-contiguous ranges to exclude detected, but we don't handle that")
+    return min_excluded_idx, max_excluded_idx
+
 def klip_chunk_svd(
-    image_vecs_meansub, all_indices, params : KlipParams, mtx_u0, diag_s0, mtx_v0
+    image_vecs_meansub, n_images, chunk_image_indices, params : KlipParams, mtx_u0, diag_s0, mtx_v0
 ):
     k_klip = params.k_klip
     if image_vecs_meansub.shape == (0, 0):
@@ -289,25 +309,16 @@ def klip_chunk_svd(
         return np.zeros_like(image_vecs_meansub)
     log.debug(f"Klipping a chunk {image_vecs_meansub.shape=}")
     n_frames = image_vecs_meansub.shape[1]
-    n_images = mtx_v0.shape[0]
-    frame_idxs = np.arange(n_images)  # for detecting non-contiguous masked ranges
+    frame_idxs = np.arange(n_frames)  # for detecting non-contiguous masked ranges
     output = np.zeros_like(image_vecs_meansub)
     for i in range(n_frames):
         if not params.reuse:
-            mask = np.zeros(n_images, dtype=bool)
-            mask[all_indices[i]] = True
-            for excl in params.exclusions:
-                individual_mask = excl.get_mask(excl.values[i])
-                # log.debug(f'Masking {np.count_nonzero(individual_mask)} from {excl}')
-                mask |= individual_mask
-            indices = np.argwhere(mask)
-            min_excluded_idx = np.min(indices)
-            max_excluded_idx = np.max(indices)
-            # detect if this isn't a simple range (which we can't handle)
-            contiguous_mask = (frame_idxs >= min_excluded_idx) & (frame_idxs <= max_excluded_idx)
-            if np.count_nonzero(mask ^ contiguous_mask):
-                raise ValueError("Non-contiguous ranges to exclude detected, but we don't handle that")
-            # log.debug(f'Excluding from {min_excluded_idx} to {max_excluded_idx} + 1')
+            min_excluded_idx, max_excluded_idx = exclusions_to_range(
+                n_images=n_images,
+                current_idx=i,
+                exclusions=params.exclusions,
+            )
+            log.debug(f'Excluding from {min_excluded_idx} to {max_excluded_idx} + 1')
             if params.strategy is constants.KlipStrategy.DOWNDATE_SVD:
                 new_u, _, _ = learning.minimal_downdate(
                     mtx_u0,
@@ -353,11 +364,14 @@ def klip_mtx_svd(image_vecs_meansub, params : KlipParams):
         f"{image_vecs_meansub.shape=}, {mtx_u0.shape=}, {diag_s0.shape=}, {mtx_v0.shape=}"
     )
     if xp is da:
+        log.debug('Taking Dask path')
         output = da.blockwise(
             klip_chunk_svd,
             "ij",
             image_vecs_meansub,
             "ij",
+            total_n_frames,
+            None,
             indices,
             "j",
             params,
@@ -370,8 +384,11 @@ def klip_mtx_svd(image_vecs_meansub, params : KlipParams):
             None,
         )
     else:
+        log.debug('Taking pure NumPy path')
         output = klip_chunk_svd(
             image_vecs_meansub,
+            total_n_frames,
+            indices,
             params,
             mtx_u0,
             diag_s0,

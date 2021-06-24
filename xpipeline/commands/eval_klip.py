@@ -23,8 +23,8 @@ class CompanionConfig:
 
 @xconf.config
 class SearchConfig:
-    search_iwa_px : float = xconf.field(default=None, help="Limit blind search to pixels more than this radius from center")
-    search_owa_px : float = xconf.field(default=None, help="Limit blind search to pixels less than this radius from center")
+    iwa_px : float = xconf.field(default=None, help="Limit blind search to pixels more than this radius from center")
+    owa_px : float = xconf.field(default=None, help="Limit blind search to pixels less than this radius from center")
     snr_threshold : float = xconf.field(default=5.0, help="Threshold above which peaks of interest should be reported")
 
 @xconf.config
@@ -151,13 +151,13 @@ class EvalKlip(Klip):
         d_recovered_signals = dask.delayed(characterization.recover_signals)(
             out_image, specs, aperture_diameter_px, apertures_to_exclude
         )
-        if self.search_iwa_px is None:
-            self.search_iwa_px = self.mask_iwa_px
-        if self.search_owa_px is None:
-            self.search_owa_px = self.mask_owa_px
-        self.search_iwa_px, self.search_owa_px = characterization.working_radii_from_aperture_spacing(out_image.shape, self.aperture_diameter_px, apertures_to_exclude, self.search_iwa_px, self.search_owa_px)
+        if self.search.iwa_px is None:
+            self.search.iwa_px = self.mask_iwa_px
+        if self.search.owa_px is None:
+            self.search.owa_px = self.mask_owa_px
+        self.search.iwa_px, self.search.owa_px = characterization.working_radii_from_aperture_spacing(out_image.shape, self.aperture_diameter_px, apertures_to_exclude, self.search.iwa_px, self.search.owa_px)
         d_all_candidates = dask.delayed(characterization.locate_snr_peaks)(
-            out_image, aperture_diameter_px, self.search_iwa_px, self.search_owa_px, apertures_to_exclude, self.snr_threshold
+            out_image, aperture_diameter_px, self.search.iwa_px, self.search.owa_px, apertures_to_exclude, self.search.snr_threshold
         )
 
         import time
