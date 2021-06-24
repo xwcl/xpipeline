@@ -114,6 +114,7 @@ def test_end_to_end_dask(strategy, reuse, snr_threshold, decomposer):
         exclusions,
         decomposer=decomposer,
         strategy=strategy,
+        chunks={0: 500, 1: -1}
     )
 
     d_outcube = pipelines.klip_one(pristine_input, klip_params)

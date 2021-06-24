@@ -59,6 +59,7 @@ class KlipParams:
     initial_decomposer : Optional[Callable] = None
     missing_data_value: float = np.nan
     strategy : constants.KlipStrategy = constants.KlipStrategy.DOWNDATE_SVD
+    chunks : Optional[Union[tuple, int, dict]] = None
 
     def __post_init__(self):
         if self.initial_decomposer is None:
@@ -185,10 +186,22 @@ def klip_to_modes(image_vecs, decomp_class, n_modes, exclude_nearest=0):
 def klip_mtx(image_vecs, params : KlipParams):
     xp = core.get_array_module(image_vecs)
     image_vecs_meansub, _ = mean_subtract_vecs(image_vecs)
-    if xp is da:
-        image_vecs_meansub = image_vecs_meansub.rechunk({0: -1, 1: "auto"})
-        log.debug(f"Rechunked {image_vecs_meansub.shape=} into {image_vecs_meansub.numblocks=}")
     if params.strategy in (constants.KlipStrategy.DOWNDATE_SVD, constants.KlipStrategy.SVD):
+        if xp is da:
+            if params.chunks is None:
+                # For the Dask chunked exact SVD:
+                # "The memory constraints here are that if you have an n by m tall
+                # and skinny array (n >> m) cut into k blocks then you need to have
+                # about m**2 * k space."
+                # -- https://blog.dask.org/2020/05/13/large-svds
+                if image_vecs_meansub.shape[0] > image_vecs_meansub.shape[1]:
+                    chunk_request = {0: "auto", 1: -1}
+                else:
+                    chunk_request = {0: -1, 1: "auto"}
+            else:
+                chunk_request = params.chunks
+            image_vecs_meansub = image_vecs_meansub.rechunk(chunk_request)
+            log.debug(f"Rechunked {image_vecs_meansub.shape=} into {image_vecs_meansub.numblocks=}")
         return klip_mtx_svd(image_vecs_meansub, params)
     elif params.strategy is constants.KlipStrategy.COVARIANCE:
         return klip_mtx_covariance(image_vecs_meansub, params)
@@ -365,6 +378,8 @@ def klip_mtx_svd(image_vecs_meansub, params : KlipParams):
     )
     if xp is da:
         log.debug('Taking Dask path')
+        if image_vecs_meansub.numblocks[1] != 1:
+            image_vecs_meansub = image_vecs_meansub.rechunk({0: "auto", 1: -1})
         output = da.blockwise(
             klip_chunk_svd,
             "ij",
