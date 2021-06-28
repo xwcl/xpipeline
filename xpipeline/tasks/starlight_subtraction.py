@@ -378,8 +378,8 @@ def klip_mtx_svd(image_vecs_meansub, params : KlipParams):
     )
     if xp is da:
         log.debug('Taking Dask path')
-        if image_vecs_meansub.numblocks[1] != 1:
-            image_vecs_meansub = image_vecs_meansub.rechunk({0: "auto", 1: -1})
+        if image_vecs_meansub.numblocks[0] != 1:
+            image_vecs_meansub = image_vecs_meansub.rechunk({0: -1, 1: "auto"})
         output = da.blockwise(
             klip_chunk_svd,
             "ij",
