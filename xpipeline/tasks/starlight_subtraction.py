@@ -256,7 +256,6 @@ def _klip_mtx_covariance(image_vecs_meansub : np.ndarray, params : KlipParams):
         configuration for tunable parameters
     '''
     k_klip = params.k_klip
-    exclude_nearest_n_frames = params.exclude_nearest_n_frames
 
     output = np.zeros_like(image_vecs_meansub)
     mtx_e_all = image_vecs_meansub.T @ image_vecs_meansub
@@ -266,7 +265,11 @@ def _klip_mtx_covariance(image_vecs_meansub : np.ndarray, params : KlipParams):
         eigenimages = image_vecs_meansub @ (mtx_c * np.power(lambda_values, -1/2))
     for i in range(n_images):
         if not params.reuse:
-            min_excluded_idx, max_excluded_idx = i - exclude_nearest_n_frames, i + exclude_nearest_n_frames
+            min_excluded_idx, max_excluded_idx = exclusions_to_range(
+                n_images=n_images,
+                current_idx=i,
+                exclusions=params.exclusions,
+            )
             min_excluded_idx = max(min_excluded_idx, 0)
             max_excluded_idx = min(n_images, max_excluded_idx)
             mtx_e = drop_idx_range_rows_cols(mtx_e_all, min_excluded_idx, max_excluded_idx)
