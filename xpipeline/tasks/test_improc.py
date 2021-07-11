@@ -212,7 +212,7 @@ def test_derotate_cube(xp):
     assert np.all(out_cube[:, 2, 1] > 0.99)
 
 
-def test_aligned_cutout():
+def test_aligned_cutout_oversized_template():
     picshape = 128, 128
     psfim = improc.gauss2d(picshape, improc.arr_center(picshape), (10, 10))
     sci_arr = improc.ft_shift2(psfim, -4.33, -5.75)[15:100,20:90]
@@ -224,6 +224,17 @@ def test_aligned_cutout():
     res = improc.aligned_cutout(sci_arr, spec)
     assert np.average((res - psfim)[15:100,20:90]) < 1e-5
 
+def test_aligned_cutout_undersized_template():
+    picshape = 128, 128
+    psfim = improc.gauss2d(picshape, improc.arr_center(picshape), (10, 10))
+    sci_arr = improc.ft_shift2(psfim, -4.33, -5.75)
+    spec = improc.CutoutTemplateSpec(
+        search_box=improc.BBox(origin=improc.Pixel(0,0), extent=improc.PixelExtent(*picshape)),
+        template=psfim[5:-5,5:-5],
+        name="primary"
+    )
+    res = improc.aligned_cutout(sci_arr, spec)
+    assert np.average((res - psfim[5:-5,5:-5])) < 1e-5
 
 def test_rotate():
     # cpu
