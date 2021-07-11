@@ -37,7 +37,9 @@ class EvalKlip(Klip):
         scaled planet PSF"""
     ))
     scale_factors_path : str = xconf.field(help=utils.unwrap(
-        """Path to text file with one scale factor per line that matches template intensity to host PSF intensity"""
+        """Path to FITS file with extensions for each data extension
+        containing 1D arrays of scale factors that match template PSF
+        intensity to real PSF intensity per-frame"""
     ))
     companions : Optional[list[CompanionConfig]] = xconf.field(help="Companions to inject (optionally) and measure SNR for")
     aperture_diameter_px : float = xconf.field(help="Diameter of the SNR estimation aperture (~lambda/D) in pixels")
@@ -93,15 +95,7 @@ class EvalKlip(Klip):
 
         dataset_path = self.input
         srcfs = utils.get_fs(dataset_path)
-
-        scale_factors = []
-        with srcfs.open(self.scale_factors_path) as fh:
-            for line in fh:
-                if len(line.strip()) == 0:
-                    continue
-                value = float(line)
-                scale_factors.append(value)
-        scale_factors = np.asarray(scale_factors)[::self.sample_every_n]
+        scale_factors = iofits.load_fits_from_path(self.scale_factors_path)
 
         # process like the klip command
         klip_inputs, obs_method, derotation_angles = self._assemble_klip_inputs(dataset_path)
@@ -120,14 +114,14 @@ class EvalKlip(Klip):
                 derotation_angles,
                 specs,
                 template_hdul[left_extname].data,
-                scale_factors,
+                scale_factors[left_extname].data,
             )
             klip_inputs[1].sci_arr = characterization.inject_signals(
                 klip_inputs[1].sci_arr,
                 derotation_angles,
                 specs,
                 template_hdul[left_extname].data,
-                scale_factors,
+                scale_factors[left_extname].data,
             )
         else:
             if "SCI" not in template_hdul and len(template_hdul[0].data.shape) == 0:
@@ -135,15 +129,16 @@ class EvalKlip(Klip):
                     f"No 'SCI' extension in {self.template_path} and no data in primary extension"
                 )
             if "SCI" in template_hdul:
-                template_psf = template_hdul["SCI"].data
+                ext = "SCI"
             else:
-                template_psf = template_hdul[0].data
+                ext = 0
+            template_psf = template_hdul[ext].data
             klip_inputs[0].sci_arr = characterization.inject_signals(
-                klip_inputs[0].sci_arr, derotation_angles, specs, template_psf, scale_factors
+                klip_inputs[0].sci_arr, derotation_angles, specs, template_psf, scale_factors[ext].data
             )
 
         # compose with klip
-        outcubes = pipelines.klip_multi(klip_inputs, klip_params)
+        outcubes = self._klip(klip_inputs, klip_params, obs_method)
 
         # compute final like klip command
         out_image = self._assemble_out_image(obs_method, outcubes, derotation_angles)
