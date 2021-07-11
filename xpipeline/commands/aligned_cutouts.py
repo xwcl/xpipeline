@@ -94,7 +94,7 @@ class AlignedCutouts(base.MultiInputCommand):
                 center = improc.arr_center(tpl_shape)
                 template_array = improc.gauss2d(tpl_shape, center, (tpl.sigma_px, tpl.sigma_px))
             else:
-                hdul = iofits.load_fits_from_path()
+                hdul = iofits.load_fits_from_path(tpl.path)
                 template_array = hdul[tpl.ext].data
             spec = improc.CutoutTemplateSpec(
                 search_box=search_box,
