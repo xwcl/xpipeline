@@ -13,7 +13,7 @@ from .. import types
 @xconf.config
 class UpdateHeaders(MultiInputCommand):
     """Update FITS headers for file (See https://archive.stsci.edu/fits/fits_standard/node40.html for examples)"""
-    keywords : dict[str,types.FITS_KW_VAL] = xconf.field(default_factory=dict, help="Keywords to set in extension 0")
+    keywords : dict[str,types.FITS_KW_VAL] = xconf.field(default_factory=dict, help="Header keyword values to set in extension 0")
     extensions : dict[typing.Union[str,int],dict[str,types.FITS_KW_VAL]] = xconf.field(default_factory=dict, help="Mapping of extension names to a table of KEYWORD=value pairs to set")
 
     def main(self):

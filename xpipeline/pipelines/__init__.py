@@ -115,6 +115,7 @@ def clio_badpix_linearity(
     log.debug("done assembling clio_badpix_linearity")
     return coll
 
+
 def sky_subtract(
     input_coll: PipelineCollection,
     model_sky: sky_model.SkyModel,
