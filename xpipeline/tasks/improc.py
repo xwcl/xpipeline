@@ -524,7 +524,7 @@ def f_test(npix):
 
 def combine_paired_cubes(cube_1, cube_2, mask_1, mask_2, fill_value=np.nan):
     log.debug(
-        f"combine_paired_cubes({cube_1=}, {cube_2=}, {mask_1=}, {mask_2=}, {fill_value=})"
+        f"combine_paired_cubes({cube_1.shape=}, {cube_2.shape=}, {mask_1.shape=}, {mask_2.shape=}, {fill_value=})"
     )
     xp = core.get_array_module(cube_1)
     if cube_1.shape != cube_2.shape:
@@ -552,7 +552,7 @@ def combine_paired_cubes(cube_1, cube_2, mask_1, mask_2, fill_value=np.nan):
         output = fill_value * xp.ones_like(cube_1)
         output[:, mask_1] = cube_1[:, mask_1]
         output[:, mask_2] = cube_2[:, mask_2]
-    log.debug(f"{output}")
+    log.debug(f"{output.shape=}")
     return output
 
 
@@ -696,11 +696,9 @@ def pad_to_match(arr_a: np.ndarray, arr_b: np.ndarray):
 def aligned_cutout(
     sci_arr: np.ndarray, spec: CutoutTemplateSpec, upsample_factor: int = 100
 ):
-    log.debug(f'aligned_cutout {spec=}')
     # cut out bbox
     log.debug(f'{spec.search_box.slices=}')
     rough_cutout = sci_arr[spec.search_box.slices]
-    log.debug(f'{rough_cutout=}')
     # interp_cutout = regrid_image(rough_cutout, x_prime=xx, y_prime=yy, method="cubic")
     interp_cutout = interpolate_nonfinite(rough_cutout)
     template = spec.template
