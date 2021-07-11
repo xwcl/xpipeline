@@ -55,32 +55,36 @@ def combine_extension_to_new_hdu(
     image_cube = iofits.hdulists_to_dask_cube(inputs_collection.items, plane_shape, ext=ext)
     if operation is CombineOperation.MEAN:
         result = da.nanmean(image_cube, axis=0)
-    return dask.delayed(iofits.DaskHDU.from_array)(result, kind="image")
-
-
-def _compute_one_scale_factor(hdul : iofits.DaskHDUList, template_profiles : dict, saturated_pixel_threshold : float):
-    all_scales = []
-    for extname in template_profiles:
-        radii, values = template_profiles[extname]
-        scale = improc.template_scale_factor_from_image(
-            hdul[extname].data,
-            radii,
-            values,
-            saturated_pixel_threshold=saturated_pixel_threshold
-        )
-        all_scales.append(scale)
-    return np.average(all_scales)
+    if not isinstance(ext, int):
+        hdr = {'EXTNAME': ext}
+    else:
+        hdr = None
+    return dask.delayed(iofits.DaskHDU)(result, header=hdr, kind="image")
 
 
 def compute_scale_factors(
-    inputs_collection : PipelineCollection,
+    inputs_collection_or_hdul : typing.Union[PipelineCollection,iofits.DaskHDUList],
     template_hdul : iofits.DaskHDUList,
-    saturated_pixel_threshold : float
+    saturated_pixel_threshold : float,
 ):
-    template_profiles = {}
+    delayed_hdus = []
     for extname in template_hdul.extnames:
-        template_profiles[extname] = improc.trim_radial_profile(template_hdul[extname].data)
-    return inputs_collection.map(_compute_one_scale_factor, template_profiles, saturated_pixel_threshold)
+        if template_hdul[extname].data is None or len(template_hdul[extname].data.shape) != 2:
+            continue
+        plane_shape = template_hdul[extname].data.shape
+        log.debug(f'{plane_shape=}')
+        if isinstance(inputs_collection_or_hdul, iofits.DaskHDUList):
+            data_cube = da.from_array(inputs_collection_or_hdul[extname].data)
+        else:
+            data_cube = iofits.hdulists_to_dask_cube(inputs_collection.items, plane_shape, ext=extname)
+        d_factors = improc.compute_template_scale_factors(data_cube, template_hdul[extname].data, saturated_pixel_threshold)
+        delayed_hdus.append(dask.delayed(iofits.DaskHDU)(d_factors, name=extname))
+
+    def _to_hdulist(*args):
+        hdus = [iofits.DaskHDU(data=None, kind="primary")]
+        hdus.extend(args)
+        return iofits.DaskHDUList(hdus)
+    return dask.delayed(_to_hdulist)(*delayed_hdus)
 
 
 def clio_split(
@@ -151,7 +155,7 @@ def align_to_templates(
         d_hdus = (input_coll
                   .map(data_quality.get_masked_data, ext=ext, dq_ext=dq_ext)
                   .map(improc.aligned_cutout, cspec, upsample_factor=upsample_factor)
-                  .map(iofits.DaskHDU.from_array, extname=cspec.name)
+                  .map(iofits.DaskHDU, header={'EXTNAME': cspec.name})
                   .items
                   )
         d_hdus_for_cutouts.append(d_hdus)
@@ -261,6 +265,12 @@ def klip_one(klip_input: KlipInput, klip_params: KlipParams):
     cubes = klip_multi([klip_input], klip_params)
     return cubes[0]
 
+
+def klip_vapp_separately(left_input : KlipInput, right_input: KlipInput, klip_params : KlipParams, vapp_symmetry_angle : float):
+    left_cube = klip_multi([left_input], klip_params)
+    right_cube = klip_multi([right_input], klip_params)
+    final_cube = vapp_stitch(left_cube, right_cube, vapp_symmetry_angle)
+    return final_cube
 
 def vapp_stitch(
     left_cube,

@@ -106,8 +106,17 @@ class Klip(InputCommand):
         combination_mask &= estimation_mask
         return estimation_mask, combination_mask
 
-    def main(self):
+    def _klip(self, klip_inputs, klip_params, obs_method: dict):
         from .. import pipelines
+        if "vapp" in obs_method:
+            left_input, right_input = klip_inputs
+            outcube = pipelines.klip_vapp_separately(left_input, right_input, klip_params, self.vapp_mask_angle)
+            outcubes = [outcube]
+        else:
+            outcubes = pipelines.klip_multi(klip_inputs, klip_params)
+        return outcubes
+
+    def main(self):
         from ..tasks import iofits, improc
         output_klip_final = utils.join(self.destination, "klip_final.fits")
         output_exptime_map = utils.join(self.destination, "exptime_map.fits")
@@ -118,11 +127,10 @@ class Klip(InputCommand):
 
         klip_inputs, obs_method, derotation_angles = self._assemble_klip_inputs(self.input)
         klip_params = self._assemble_klip_params(klip_inputs, derotation_angles)
-        outcubes = pipelines.klip_multi(klip_inputs, klip_params)
+        outcubes = self._klip(klip_inputs, klip_params, obs_method)
         out_image = self._assemble_out_image(obs_method, outcubes, derotation_angles)
 
         import time
-
         start = time.perf_counter()
         log.info(f"Computing klip pipeline result...")
         out_image = out_image.compute()
@@ -235,15 +243,8 @@ class Klip(InputCommand):
 
     def _assemble_out_image(self, obs_method, outcubes, derotation_angles):
         from .. import pipelines
-        from ..tasks import iofits, improc
-        if "vapp" in obs_method:
-            left_cube, right_cube = outcubes
-            out_image = pipelines.vapp_stitch(
-                left_cube, right_cube, self.vapp_mask_angle
-            )
-        else:
-            out_image = pipelines.adi(
-                outcubes[0], derotation_angles, operation=self.combine_by
-            )
+        out_image = pipelines.adi(
+            outcubes[0], derotation_angles, operation=self.combine_by
+        )
 
         return out_image
