@@ -718,27 +718,44 @@ def aligned_cutout(
     shift_y_frac = shift_y - shift_y_int
     shift_x_int = math.floor(shift_x)
     shift_x_frac = shift_x - shift_x_int
-
     subarr = sci_arr
-    if shift_y_int < 0:
-        subarr = subarr[-shift_y_int:, :]
-    elif shift_y_int > 0:
-        subarr = np.pad(subarr, [(shift_y_int, 0), (0, 0)])
 
-    if shift_x_int < 0:
-        subarr = subarr[:, -shift_x_int:]
-    elif shift_x_int > 0:
-        subarr = np.pad(subarr, [(0, 0), (shift_x_int, 0)])
+    # to shift the center of subarr in +Y, we start the slice earlier, so *subtract* shift_y_int
+    slice_y_start = spec.search_box.origin.y - shift_y_int
+    slice_y_end = spec.search_box.origin.y + spec.template.shape[0] - shift_y_int
+    pad_y_start, pad_y_end = 0, 0
 
-    pad_y_end, pad_x_end = template.shape[0] - subarr.shape[0], template.shape[1] - subarr.shape[1]
+    if slice_y_start < 0:
+        pad_y_start = abs(slice_y_start)
+        slice_y_start = 0
+    if slice_y_end >= sci_arr.shape[0]:
+        pad_y_end = slice_y_end - sci_arr.shape[0]
+        slice_y_end = sci_arr.shape[0]
+    assert slice_y_start >= 0
+    assert slice_y_end <= sci_arr.shape[0]
+
+
+    # similarly, subtract shift_x_int
+    slice_x_start = spec.search_box.origin.x - shift_x_int
+    slice_x_end = spec.search_box.origin.x + spec.template.shape[1] - shift_x_int
+    pad_x_start, pad_x_end = 0, 0
+
+    if slice_x_start < 0:
+        pad_x_start = abs(slice_x_start)
+        slice_x_start = 0
+    if slice_x_end >= sci_arr.shape[1]:
+        pad_x_end = slice_x_end - sci_arr.shape[1]
+        slice_x_end = sci_arr.shape[1]
+    assert slice_x_start >= 0
+    assert slice_x_end <= sci_arr.shape[1]
+
+    subarr = sci_arr[slice_y_start:slice_y_end,slice_x_start:slice_x_end]
+    subarr = np.pad(subarr, [(pad_y_start, pad_y_end), (pad_x_start, pad_x_end)])
 
     subarr = interpolate_nonfinite(subarr)
     subpix_subarr = ft_shift2(subarr, shift_y_frac, shift_x_frac, flux_tol=2e-14)
-    if pad_y_end > 0:
-        subpix_subarr = np.pad(subpix_subarr, [(0, pad_y_end), (0, 0)], constant_values=np.nan)
-    if pad_x_end > 0:
-        subpix_subarr = np.pad(subpix_subarr, [(0, 0), (0, pad_x_end)], constant_values=np.nan)
-    return subpix_subarr[:spec.template.shape[0],:spec.template.shape[1]]
+    assert subpix_subarr.shape == spec.template.shape
+    return subpix_subarr
 
 
 from scipy import interpolate

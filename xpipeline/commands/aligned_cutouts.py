@@ -26,8 +26,8 @@ class GaussianTemplate:
 
 @xconf.config
 class CutoutConfig:
-    search_box_y : typing.Optional[int]
-    search_box_x : typing.Optional[int]
+    search_box_origin_y : typing.Optional[int]
+    search_box_origin_x : typing.Optional[int]
     search_box_height : typing.Optional[int]
     search_box_width : typing.Optional[int]
     template : typing.Union[FileTemplate, GaussianTemplate] = xconf.field(
@@ -38,7 +38,7 @@ class CutoutConfig:
     """))
 
 
-DEFAULT_CUTOUT = CutoutConfig(search_box_y=None, search_box_x=None, search_box_height=None,
+DEFAULT_CUTOUT = CutoutConfig(search_box_origin_y=None, search_box_origin_x=None, search_box_height=None,
                               search_box_width=None, template=GaussianTemplate())
 
 
@@ -74,7 +74,7 @@ class AlignedCutouts(base.MultiInputCommand):
         default_height, default_width = dimensions
         cutout_specs = []
         for name, cutout_config in self.cutouts.items():
-            yo, xo = cutout_config.search_box_y, cutout_config.search_box_x
+            yo, xo = cutout_config.search_box_origin_y, cutout_config.search_box_origin_x
             if xo is None:
                 xo = 0
             if yo is None:
