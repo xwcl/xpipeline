@@ -123,11 +123,16 @@ class DaskHDU:
     convenient for Dask to serialize and deserialize
     """
 
-    def __init__(self, data, header=None, kind="image"):
+    def __init__(self, data, header=None, kind="image", name=None):
         if header is None:
             header = {}
         self.data = data
         self.header = fits.Header(header)
+        if name is not None:
+            if kind != "primary":
+                self.header['EXTNAME'] = name
+            else:
+                raise ValueError("Can't assign EXTNAME on PrimaryHDU")
         self.kind = kind
 
     def __repr__(self):
@@ -178,19 +183,11 @@ class DaskHDU:
         else:
             raise ValueError(f"Unknown kind: {self.kind}")
 
-    @classmethod
-    def from_array(cls, data, kind="image", extname=None):
-        new_hdu = cls(data, kind=kind)
-        if extname is not None:
-            new_hdu.header["EXTNAME"] = extname
-        return new_hdu
-
-
 register_generic(DaskHDU)
 
 
 def _check_ext(key, hdu, idx):
-    if "EXTNAME" in hdu.header and hdu.header["EXTNAME"] == key:
+    if "EXTNAME" in hdu.header and hdu.header["EXTNAME"].lower() == key.lower():
         return True
     if idx == key:
         return True
@@ -238,9 +235,9 @@ class DaskHDUList:
         return hdul
 
     @classmethod
-    def from_array(cls, arr, kind="image"):
+    def from_array(cls, *args, **kwargs):
         """Convenience method to wrap a DaskHDU from an array in a new DaskHDUList"""
-        return cls([DaskHDU.from_array(arr, kind=kind)])
+        return cls([DaskHDU(*args, **kwargs)])
 
     def copy(self):
         return self.__class__([hdu.copy() for hdu in self.hdus])
