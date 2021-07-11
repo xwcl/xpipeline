@@ -1141,8 +1141,12 @@ def trim_radial_profile(image):
         arr_center(image)
     )
     # exclusive upper bound, this is the r where things went negative
-    max_r = radii[np.min(np.argwhere(profile < 0))]
-    return radii[radii < max_r], profile[radii < max_r]
+    neg_pix = profile < 0
+    if np.any(neg_pix):
+        max_r = radii[np.min(np.argwhere(neg_pix))]
+        return radii[radii < max_r], profile[radii < max_r]
+    else:
+        return radii, profile
 
 def template_scale_factor_from_image(image, template_radii, template_profile_values, saturated_pixel_threshold : Optional[float]=None):
     template_min_r_px, template_max_r_px = np.min(template_radii), np.max(template_radii)
@@ -1155,7 +1159,10 @@ def template_scale_factor_from_image(image, template_radii, template_profile_val
         min_r = radii[np.max(np.argwhere(np.isnan(profile_values)))]
     else:
         min_r = 0
-    max_r = np.min(np.argwhere(profile_values <= 0))
+    if np.any(profile_values <= 0):
+        max_r = radii[np.min(np.argwhere(profile_values <= 0))]
+    else:
+        max_r = np.max(radii)
     max_r = min(max_r, template_max_r_px)
     min_r = max(min_r, template_min_r_px)
     sat_mask = (
@@ -1169,3 +1176,42 @@ def template_scale_factor_from_image(image, template_radii, template_profile_val
 
     scale_factor = np.average(profile_values[sat_mask] / template_profile_values[template_mask])
     return scale_factor
+
+
+def _block_compute_template_scale_factors(cube_chunk, radii, profile, saturated_pixel_threshold):
+    return np.array([
+        template_scale_factor_from_image(x, radii, profile, saturated_pixel_threshold=saturated_pixel_threshold)
+        for x in cube_chunk
+    ])
+
+def compute_template_scale_factors(
+    data_cube : np.ndarray,
+    template_array : np.ndarray,
+    saturated_pixel_threshold : float,
+):
+    radii, profile = trim_radial_profile(template_array)
+    xp = core.get_array_module(data_cube)
+    if xp is da:
+        def _collapsed_blockwise(j_chunks, *args):
+            chunks = []
+            for k_chunk in j_chunks:
+                combined_chunk = np.concatenate(k_chunk, axis=2)
+                chunks.append(combined_chunk)
+            return _block_compute_template_scale_factors(np.concatenate(chunks, axis=1), *args)
+
+        return da.blockwise(
+            _collapsed_blockwise,
+            "i",
+            data_cube,
+            "ijk",
+            radii,
+            None,
+            profile,
+            None,
+            saturated_pixel_threshold,
+            None,
+            dtype=data_cube.dtype
+        )
+    else:
+        return _block_compute_template_scale_factors(data_cube, radii, profile, saturated_pixel_threshold)
+
