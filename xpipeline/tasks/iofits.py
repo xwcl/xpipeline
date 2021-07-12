@@ -213,6 +213,9 @@ class DaskHDUList:
     def __iter__(self):
         return self.hdus.__iter__()
 
+    def __len__(self):
+        return len(self.hdus)
+
     @property
     def extnames(self):
         for idx, hdu in enumerate(self.hdus):

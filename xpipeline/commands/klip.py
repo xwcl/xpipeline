@@ -70,7 +70,7 @@ class Klip(InputCommand):
 
         if self.estimation_mask_path is not None:
             estimation_mask_hdul = iofits.load_fits_from_path(self.estimation_mask_path)
-            if len(estimation_mask_hdul) > 0:
+            if len(estimation_mask_hdul) > 1:
                 estimation_mask = estimation_mask_hdul[extname].data
             else:
                 estimation_mask = estimation_mask_hdul[0].data

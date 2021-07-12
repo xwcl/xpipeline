@@ -267,8 +267,8 @@ def klip_one(klip_input: KlipInput, klip_params: KlipParams):
 
 
 def klip_vapp_separately(left_input : KlipInput, right_input: KlipInput, klip_params : KlipParams, vapp_symmetry_angle : float):
-    left_cube = klip_multi([left_input], klip_params)
-    right_cube = klip_multi([right_input], klip_params)
+    left_cube = klip_multi([left_input], klip_params)[0]
+    right_cube = klip_multi([right_input], klip_params)[0]
     final_cube = vapp_stitch(left_cube, right_cube, vapp_symmetry_angle)
     return final_cube
 
