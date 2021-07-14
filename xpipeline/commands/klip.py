@@ -127,15 +127,15 @@ class Klip(InputCommand):
 
         klip_inputs, obs_method, derotation_angles = self._assemble_klip_inputs(self.input)
         klip_params = self._assemble_klip_params(klip_inputs, derotation_angles)
+        import time
+        start = time.perf_counter()
         outcubes = self._klip(klip_inputs, klip_params, obs_method)
         out_image = self._assemble_out_image(obs_method, outcubes, derotation_angles)
+        elapsed = time.perf_counter() - start
+        log.info(f"Computed in {elapsed} sec")
 
-        # import time
-        # start = time.perf_counter()
         # log.info(f"Computing klip pipeline result...")
         # out_image = out_image.compute()
-        # elapsed = time.perf_counter() - start
-        # log.info(f"Computed in {elapsed} sec")
         output_file = iofits.write_fits(
             iofits.DaskHDUList([iofits.DaskHDU(out_image)]), output_klip_final
         )

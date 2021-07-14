@@ -1,10 +1,12 @@
 import re
+import numpy as np
 import os
 import os.path
 from urllib.parse import urlparse
 import fsspec
 import threading
 import logging
+import numba
 
 log = logging.getLogger(__name__)
 
@@ -93,3 +95,53 @@ def available_cpus() -> int:
         cpus = os.cpu_count()
     log.debug(f'Found {cpus=}')
     return cpus
+
+
+@numba.njit
+def drop_idx_range_rows_cols(arr, min_excluded_idx, max_excluded_idx):
+    '''Note exclusive upper bound: [min_excluded_idx, max_excluded_idx)'''
+    rows, cols = arr.shape
+    assert rows == cols
+    n_drop = max_excluded_idx - min_excluded_idx
+    out_shape = (rows - n_drop, cols - n_drop)
+    out = np.empty(out_shape, dtype=arr.dtype)
+    # UL | | U R
+    # ===   ====
+    # LL | | L R
+
+    # UL
+    out[:min_excluded_idx,:min_excluded_idx] = arr[:min_excluded_idx,:min_excluded_idx]
+    # UR
+    out[:min_excluded_idx,min_excluded_idx:] = arr[:min_excluded_idx,max_excluded_idx:]
+    # LL
+    out[min_excluded_idx:,:min_excluded_idx] = arr[max_excluded_idx:,:min_excluded_idx]
+    # LR
+    out[min_excluded_idx:,min_excluded_idx:] = arr[max_excluded_idx:,max_excluded_idx:]
+    return out
+
+
+@numba.njit
+def drop_idx_range_cols(arr, min_excluded_idx, max_excluded_idx):
+    '''Note exclusive upper bound: [min_excluded_idx, max_excluded_idx)'''
+    return drop_idx_range_rows(arr.T, min_excluded_idx, max_excluded_idx).T
+
+@numba.njit
+def drop_idx_range_rows(arr, min_excluded_idx, max_excluded_idx):
+    '''Note exclusive upper bound: [min_excluded_idx, max_excluded_idx)'''
+    rows, cols = arr.shape
+    if min_excluded_idx < 0:
+        raise ValueError("Negative indexing unsupported")
+    if max_excluded_idx > rows or max_excluded_idx < min_excluded_idx:
+        raise ValueError("Upper limit of excluded indices out of bounds")
+    n_drop = max_excluded_idx - min_excluded_idx
+    out_shape = (rows - n_drop, cols)
+    out = np.empty(out_shape, dtype=arr.dtype)
+    #  U
+    # ===
+    #  L
+
+    # U
+    out[:min_excluded_idx] = arr[:min_excluded_idx]
+    # L
+    out[min_excluded_idx:] = arr[max_excluded_idx:]
+    return out

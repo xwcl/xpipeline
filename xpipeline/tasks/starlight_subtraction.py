@@ -45,9 +45,6 @@ class ExclusionValues:
             self.num_excluded_max = _count_max_excluded(self.values, self.exclude_within_delta)
             log.debug(f'initialized {self.num_excluded_max=} for {self.values=}')
 
-    def get_mask(self, current_value=None):
-        deltas = np.abs(self.values - current_value)
-        return deltas <= self.exclude_within_delta
 
 distributed.protocol.register_generic(ExclusionValues)
 
@@ -72,31 +69,6 @@ import logging
 log = logging.getLogger(__name__)
 
 
-def drop_idx_range_cols(arr, min_excluded_idx, max_excluded_idx):
-    '''Note exclusive upper bound: [min_excluded_idx, max_excluded_idx)'''
-    return drop_idx_range_rows(arr.T, min_excluded_idx, max_excluded_idx).T
-
-def drop_idx_range_rows(arr, min_excluded_idx, max_excluded_idx):
-    '''Note exclusive upper bound: [min_excluded_idx, max_excluded_idx)'''
-    xp = core.get_array_module(arr)
-    rows, cols = arr.shape
-    if min_excluded_idx < 0:
-        raise ValueError("Negative indexing unsupported")
-    if max_excluded_idx > rows or max_excluded_idx < min_excluded_idx:
-        raise ValueError("Upper limit of excluded indices out of bounds")
-    n_drop = max_excluded_idx - min_excluded_idx
-    out_shape = (rows - n_drop, cols)
-    out = xp.empty(out_shape, dtype=arr.dtype)
-    #  U
-    # ===
-    #  L
-
-    # U
-    out[:min_excluded_idx] = arr[:min_excluded_idx]
-    # L
-    out[min_excluded_idx:] = arr[max_excluded_idx:]
-    return out
-
 def mean_subtract_vecs(image_vecs):
     mean_vec = np.average(image_vecs, axis=1)
     image_vecs_meansub = image_vecs - mean_vec[:, np.newaxis]
@@ -117,7 +89,7 @@ class Decomposer:
 
 class SVDDecomposer(Decomposer):
     def eigenimages(self, min_excluded_idx, max_excluded_idx):
-        ref = drop_idx_range_cols(
+        ref = utils.drop_idx_range_cols(
             self.meansub_image_vecs, min_excluded_idx, max_excluded_idx
         )
         u, s, v = learning.generic_svd(ref, n_modes=self.n_modes)
@@ -184,51 +156,13 @@ def klip_to_modes(image_vecs, decomp_class, n_modes, exclude_nearest=0):
 
 
 def klip_mtx(image_vecs, params : KlipParams):
-    xp = core.get_array_module(image_vecs)
     image_vecs_meansub, _ = mean_subtract_vecs(image_vecs)
     if params.strategy in (constants.KlipStrategy.DOWNDATE_SVD, constants.KlipStrategy.SVD):
-        if xp is da:
-            if params.chunks is None:
-                # For the Dask chunked exact SVD:
-                # "The memory constraints here are that if you have an n by m tall
-                # and skinny array (n >> m) cut into k blocks then you need to have
-                # about m**2 * k space."
-                # -- https://blog.dask.org/2020/05/13/large-svds
-                if image_vecs_meansub.shape[0] > image_vecs_meansub.shape[1]:
-                    chunk_request = {0: "auto", 1: -1}
-                else:
-                    chunk_request = {0: -1, 1: "auto"}
-            else:
-                chunk_request = params.chunks
-            image_vecs_meansub = image_vecs_meansub.rechunk(chunk_request)
-            log.debug(f"Rechunked {image_vecs_meansub.shape=} into {image_vecs_meansub.numblocks=}")
         return klip_mtx_svd(image_vecs_meansub, params)
     elif params.strategy is constants.KlipStrategy.COVARIANCE:
         return klip_mtx_covariance(image_vecs_meansub, params)
     else:
         raise ValueError(f"Unknown strategy value in {params=}")
-
-def drop_idx_range_rows_cols(arr, min_excluded_idx, max_excluded_idx):
-    '''Note exclusive upper bound: [min_excluded_idx, max_excluded_idx)'''
-    xp = core.get_array_module(arr)
-    rows, cols = arr.shape
-    assert rows == cols
-    n_drop = max_excluded_idx - min_excluded_idx
-    out_shape = (rows - n_drop, cols - n_drop)
-    out = xp.empty(out_shape, dtype=arr.dtype)
-    # UL | | U R
-    # ===   ====
-    # LL | | L R
-
-    # UL
-    out[:min_excluded_idx,:min_excluded_idx] = arr[:min_excluded_idx,:min_excluded_idx]
-    # UR
-    out[:min_excluded_idx,min_excluded_idx:] = arr[:min_excluded_idx,max_excluded_idx:]
-    # LL
-    out[min_excluded_idx:,:min_excluded_idx] = arr[max_excluded_idx:,:min_excluded_idx]
-    # LR
-    out[min_excluded_idx:,min_excluded_idx:] = arr[max_excluded_idx:,max_excluded_idx:]
-    return out
 
 
 def _eigh_full_decomposition(mtx, k_klip):
@@ -274,7 +208,7 @@ def _klip_mtx_covariance(image_vecs_meansub : np.ndarray, params : KlipParams):
             )
             min_excluded_idx = max(min_excluded_idx, 0)
             max_excluded_idx = min(n_images, max_excluded_idx)
-            mtx_e = drop_idx_range_rows_cols(mtx_e_all, min_excluded_idx, max_excluded_idx)
+            mtx_e = utils.drop_idx_range_rows_cols(mtx_e_all, min_excluded_idx, max_excluded_idx)
             lambda_values, mtx_c = params.decomposer(mtx_e, k_klip)
             ref_subset = np.hstack((image_vecs_meansub[:,:min_excluded_idx], image_vecs_meansub[:,max_excluded_idx:]))
             eigenimages = ref_subset @ (mtx_c * np.power(lambda_values, -1/2))
@@ -296,18 +230,38 @@ def klip_mtx_covariance(image_vecs_meansub, params):
         output = _klip_mtx_covariance(image_vecs_meansub, params)
     return output
 
-def exclusions_to_mask(n_images, current_idx, exclusions):
-    mask = np.zeros(n_images, dtype=bool)
+@njit
+def get_excluded_mask(values, exclude_within_delta, current_value=None):
+    deltas = np.abs(values - current_value)
+    return deltas <= exclude_within_delta
+
+# @njit(numba.boolean[:](
+#     numba.intc, # n_images
+#     numba.intc, # current_idx
+#     numba.float32[:,:], # exclusion_values
+#     numba.float32[:] # exclusion_deltas
+# ))
+@njit
+def exclusions_to_mask(n_images, current_idx, exclusion_values, exclusion_deltas):
+    mask = np.zeros(n_images, dtype=numba.boolean)
     mask[current_idx] = True  # exclude at least the current frame
-    # mask[i] = True
-    for excl in exclusions:
-        individual_mask = excl.get_mask(excl.values[current_idx])
-        # log.debug(f'Masking {np.count_nonzero(individual_mask)} from {excl}')
-        mask |= individual_mask
+    if exclusion_values is not None:
+        for i in range(len(exclusion_values)):
+            excl_values = exclusion_values[i]
+            excl_delta = exclusion_deltas[i]
+            individual_mask = get_excluded_mask(excl_values, excl_delta, excl_values[current_idx])
+            mask |= individual_mask
     return mask
 
-def exclusions_to_range(n_images, current_idx, exclusions):
-    mask = exclusions_to_mask(n_images, current_idx, exclusions)
+# @njit((
+#     numba.intc, # n_images
+#     numba.intc, # current_idx
+#     numba.float32[:,:], # exclusion_values
+#     numba.float32[:] # exclusion_deltas
+# ))
+@njit
+def exclusions_to_range(n_images, current_idx, exclusion_values, exclusion_deltas):
+    mask = exclusions_to_mask(n_images, current_idx, exclusion_values, exclusion_deltas)
     indices = np.argwhere(mask)
     min_excluded_idx = np.min(indices)
     max_excluded_idx = np.max(indices)
@@ -318,26 +272,33 @@ def exclusions_to_range(n_images, current_idx, exclusions):
         raise ValueError("Non-contiguous ranges to exclude detected, but we don't handle that")
     return min_excluded_idx, max_excluded_idx
 
+@njit(numba.float32[:,:](
+    numba.float32[:,:], # image_vecs_meansub
+    numba.intc, # n_images
+    numba.float32[:,:], # mtx_u0
+    numba.float32[:], # diag_s0
+    numba.float32[:,:], # mtx_v0
+    numba.intc, # k_klip
+    numba.boolean, # reuse
+    numba.intc, # strategy
+    numba.optional(numba.float32[:,:]), # exclusion_values
+    numba.optional(numba.float32[:]), # exclusion_deltas
+))
 def klip_chunk_svd(
-    image_vecs_meansub, n_images, params : KlipParams, mtx_u0, diag_s0, mtx_v0
+    image_vecs_meansub, n_images, mtx_u0, diag_s0, mtx_v0, k_klip, reuse, strategy,
+    exclusion_values, exclusion_deltas
 ):
-    k_klip = params.k_klip
-    if image_vecs_meansub.shape == (0, 0):
-        # called by dask to infer dtype
-        return np.zeros_like(image_vecs_meansub)
-    log.debug(f"Klipping a chunk {image_vecs_meansub.shape=}")
     n_frames = image_vecs_meansub.shape[1]
-    frame_idxs = np.arange(n_frames)  # for detecting non-contiguous masked ranges
     output = np.zeros_like(image_vecs_meansub)
     for i in numba.prange(n_frames):
-        if not params.reuse:
+        if not reuse:
             min_excluded_idx, max_excluded_idx = exclusions_to_range(
                 n_images=n_images,
                 current_idx=i,
-                exclusions=params.exclusions,
+                exclusion_values=exclusion_values,
+                exclusion_deltas=exclusion_deltas,
             )
-            log.debug(f'Excluding from {min_excluded_idx} to {max_excluded_idx} + 1')
-            if params.strategy is constants.KlipStrategy.DOWNDATE_SVD:
+            if strategy == constants.KlipStrategy.DOWNDATE_SVD.value:
                 new_u, _, _ = learning.minimal_downdate(
                     mtx_u0,
                     diag_s0,
@@ -347,21 +308,18 @@ def klip_chunk_svd(
                 )
                 eigenimages = new_u[:, :k_klip]
             else:
-                subset_image_vecs = drop_idx_range_cols(image_vecs_meansub, min_excluded_idx, max_excluded_idx)
-                eigenimages, _, _ = learning.generic_svd(subset_image_vecs, k_klip) # TODO use driver
+                subset_image_vecs = utils.drop_idx_range_cols(image_vecs_meansub, min_excluded_idx, max_excluded_idx)
+                eigenimages, _, _ = learning._numba_svd_wrap(subset_image_vecs, k_klip)
         else:
             eigenimages = mtx_u0
         meansub_target = image_vecs_meansub[:, i]
         output[:, i] = meansub_target - eigenimages @ (eigenimages.T @ meansub_target)
-    mem_mb = utils.get_memory_use_mb()
-    log.debug(f"klipped! {mem_mb} MB RAM in use")
     return output
 
 def klip_mtx_svd(image_vecs_meansub, params : KlipParams):
     k_klip = params.k_klip
     output = np.zeros_like(image_vecs_meansub)
     total_n_frames = image_vecs_meansub.shape[1]
-    indices = np.arange(total_n_frames)
     if not params.reuse and params.strategy is constants.KlipStrategy.DOWNDATE_SVD:
         extra_modes = max([1,] + [excl.num_excluded_max for excl in params.exclusions])
         # extra modes:
@@ -385,13 +343,22 @@ def klip_mtx_svd(image_vecs_meansub, params : KlipParams):
     log.debug(
         f"{image_vecs_meansub.shape=}, {mtx_u0.shape=}, {diag_s0.shape=}, {mtx_v0.shape=}"
     )
+    if len(params.exclusions) > 0:
+        exclusion_values = np.stack([excl.values for excl in params.exclusions])
+        exclusion_deltas = np.stack([excl.exclude_within_delta for excl in params.exclusions])
+    else:
+        exclusion_values = exclusion_deltas = None
     output = klip_chunk_svd(
         image_vecs_meansub,
         total_n_frames,
-        params,
         mtx_u0,
         diag_s0,
         mtx_v0,
+        k_klip,
+        params.reuse,
+        params.strategy.value,
+        exclusion_values,
+        exclusion_deltas
     )
     return output
 

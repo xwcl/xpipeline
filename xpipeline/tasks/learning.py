@@ -5,7 +5,7 @@ from .. import core
 
 from scipy.sparse.linalg import aslinearoperator, svds
 
-import dask
+import numba
 
 
 from .. import utils
@@ -27,41 +27,6 @@ def train_test_split(array, test_frac, random_state=0):
     log.info(f"Cross-validation reserved {100 * test_frac:2.1f}% of inputs")
     log.info(f"Split {n_elems} into {train_subarr.shape[0]} and {test_subarr.shape[0]}")
     return train_subarr, test_subarr
-
-
-def drop_idx_range_cols(arr, min_excluded_idx, max_excluded_idx):
-    """Note exclusive upper bound: [min_excluded_idx, max_excluded_idx)"""
-    xp = core.get_array_module(arr)
-    rows, cols = arr.shape
-    n_drop = max_excluded_idx - min_excluded_idx
-    out_shape = (rows, cols - n_drop)
-    out = xp.empty(out_shape, dtype=arr.dtype)
-    # L | |  R
-
-    # L
-    out[:, :min_excluded_idx] = arr[:, :min_excluded_idx]
-    # R
-    out[:, min_excluded_idx:] = arr[:, max_excluded_idx:]
-    return out
-
-
-def drop_idx_range_rows(arr, min_excluded_idx, max_excluded_idx):
-    """Note exclusive upper bound: [min_excluded_idx, max_excluded_idx)"""
-    xp = core.get_array_module(arr)
-    rows, cols = arr.shape
-    n_drop = max_excluded_idx - min_excluded_idx
-    out_shape = (rows - n_drop, cols)
-    out = xp.empty(out_shape, dtype=arr.dtype)
-    #  U
-    # ===
-    #  L
-
-    # U
-    out[:min_excluded_idx] = arr[:min_excluded_idx]
-    # L
-    out[min_excluded_idx:] = arr[max_excluded_idx:]
-    return out
-
 
 def torch_svd(array, full_matrices=False, n_modes=None):
     """Wrap `torch.svd` to handle conversion between NumPy/CuPy arrays
@@ -163,6 +128,13 @@ def cpu_top_k_svd_arpack(array, n_modes=None):
     return mtx_u, diag_s, mtx_vt.T
 
 
+@numba.njit(inline='always')
+def _numba_svd_wrap(mtx_x, n_modes):
+    mtx_u, diag_s, mtx_vt = np.linalg.svd(mtx_x, full_matrices=False)
+    mtx_v = mtx_vt.T
+    return mtx_u[:, :n_modes], diag_s[:n_modes], mtx_v[:, :n_modes]
+
+@numba.njit
 def minimal_downdate(
     mtx_u, diag_s, mtx_v, min_col_to_remove, max_col_to_remove, compute_v=False
 ):
@@ -191,7 +163,6 @@ def minimal_downdate(
         If `compute_v` is True this is the updated V matrix,
         otherwise None.
     """
-    xp = core.get_array_module(mtx_u)
     dim_r = diag_s.shape[0]
     assert mtx_u.shape[1] == dim_r
     assert mtx_v.shape[1] == dim_r
@@ -213,12 +184,12 @@ def minimal_downdate(
     #
     # This is just the first part of the product that would have been
     # formed to make mtx_a:
-    mtx_uta = -(xp.diag(diag_s) @ mtx_v[min_col_to_remove:max_col_to_remove].T)
+    mtx_uta = -(np.diag(diag_s) @ mtx_v[min_col_to_remove:max_col_to_remove].T)
     # and just the rows of V corresponding to removed columns:
     mtx_vtb = mtx_v[min_col_to_remove:max_col_to_remove].T
 
     # Additive modification to inner diagonal matrix
-    mtx_k = xp.diag(diag_s)
+    mtx_k = np.diag(diag_s)
     mtx_k += (
         mtx_uta @ mtx_vtb.T
     )  # U^T A is r x c, (V^T B)^T is c x r, O(r c r) -> r x r
@@ -226,7 +197,7 @@ def minimal_downdate(
     # Smaller (dimension r x r) SVD to re-diagonalize, giving
     # rotations of the left and right singular vectors and
     # updated singular values
-    mtx_uprime, diag_sprime, mtx_vprime = generic_svd(mtx_k, n_modes=dim_r)
+    mtx_uprime, diag_sprime, mtx_vprime = _numba_svd_wrap(mtx_k, n_modes=dim_r)
 
     # Compute new SVD by applying the rotations
     new_mtx_u = mtx_u @ mtx_uprime
@@ -234,7 +205,7 @@ def minimal_downdate(
     if compute_v:
         new_mtx_v = mtx_v @ mtx_vprime
         # columns of X become rows of V, delete the dropped ones
-        new_mtx_v = drop_idx_range_rows(new_mtx_v, min_col_to_remove, max_col_to_remove)
+        new_mtx_v = utils.drop_idx_range_rows(new_mtx_v, min_col_to_remove, max_col_to_remove)
     else:
         new_mtx_v = None
     return new_mtx_u, new_diag_s, new_mtx_v

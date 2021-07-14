@@ -1,6 +1,6 @@
 CONTAINER = xpipeline
 
-all: build run
+all: build
 
 build:
 	docker build . -t xwcl/$(CONTAINER)
