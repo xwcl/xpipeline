@@ -15,10 +15,6 @@ from dataclasses import dataclass
 import distributed.protocol
 from .. import core
 
-cp = core.cupy
-da = core.dask_array
-torch = core.torch
-
 log = logging.getLogger(__name__)
 
 
@@ -123,34 +119,7 @@ def unwrap_cube(ndcube, good_pix_mask):
     good_pix_mask = good_pix_mask == 1
     n_good_pix = np.count_nonzero(good_pix_mask)
 
-    def ndcube_to_rows(cube, good_pix_mask):
-        res = cube[:, good_pix_mask]
-        return res
-
-    if xp is da:
-        # chunk_size = ndcube.shape[0] // ndcube.numblocks[0]
-        # axes_to_drop = tuple(range(2, len(ndcube.shape)))
-        # image_vecs = ndcube.map_blocks(
-        #     ndcube_to_rows,
-        #     good_pix_mask,
-        #     dtype=ndcube.dtype,
-        #     chunks=(chunk_size, n_good_pix,),
-        #     drop_axis=axes_to_drop
-        # )
-        extra_axes = tuple(range(2, 2 + len(ndcube.shape[1:])))
-        image_vecs = da.blockwise(
-            _dask_ndcube_to_rows,
-            (0, 1),
-            ndcube,
-            (0,) + extra_axes,
-            good_pix_mask,
-            None,
-            new_axes={1: n_good_pix},
-            dtype=ndcube.dtype,
-        )
-        image_vecs = image_vecs.T
-    else:
-        image_vecs = ndcube_to_rows(ndcube, good_pix_mask).T
+    image_vecs = ndcube[:, good_pix_mask].T
 
     all_idxs = np.indices(ndcube.shape[1:])
     subset_idxs = all_idxs[:, good_pix_mask]
@@ -214,29 +183,7 @@ def wrap_matrix(matrix, shape, subset_idxs, fill_value=np.nan):
     -------
     cube : array of shape ``shape``
     """
-    xp = core.get_array_module(matrix)
-    if xp is da:
-        plane_shape = shape[1:]
-
-        new_axes_idxs = tuple(range(2, 2 + len(plane_shape)))
-        new_axes = {k: plane_shape[idx] for idx, k in enumerate(new_axes_idxs)}
-        log.debug(f"{new_axes=}")
-        log.debug(f"{matrix.T.shape=}")
-        result = da.blockwise(
-            _dask_wrap_matrix,
-            (0,) + new_axes_idxs,
-            matrix.T,
-            (0, 1),
-            shape,
-            None,
-            subset_idxs,
-            None,
-            fill_value=fill_value,
-            new_axes=new_axes,
-            dtype=matrix.dtype,
-        )
-        return result
-    cube = fill_value * xp.ones(shape)
+    cube = fill_value * np.ones(shape)
     indexer = (slice(None, None),) + tuple(x for x in subset_idxs)
     cube[indexer] = matrix.T
     return cube
@@ -526,42 +473,23 @@ def combine_paired_cubes(cube_1, cube_2, mask_1, mask_2, fill_value=np.nan):
     log.debug(
         f"combine_paired_cubes({cube_1.shape=}, {cube_2.shape=}, {mask_1.shape=}, {mask_2.shape=}, {fill_value=})"
     )
-    xp = core.get_array_module(cube_1)
     if cube_1.shape != cube_2.shape:
         raise ValueError("cube_1 and cube_2 must be the same shape")
     if mask_1.shape != cube_1.shape[1:] or mask_1.shape != mask_2.shape:
         raise ValueError(
             "mask_1 and mask_2 must be the same shape as the last dimensions of cube_1"
         )
-    if xp is da:
-        output = da.blockwise(
-            combine_paired_cubes,
-            "ijk",
-            cube_1,
-            "ijk",
-            cube_2,
-            "ijk",
-            mask_1,
-            "jk",
-            mask_2,
-            "jk",
-            fill_value=fill_value,
-            dtype=cube_1.dtype,
-        )
-    else:
-        output = fill_value * xp.ones_like(cube_1)
-        output[:, mask_1] = cube_1[:, mask_1]
-        output[:, mask_2] = cube_2[:, mask_2]
+
+    output = fill_value * np.ones_like(cube_1)
+    output[:, mask_1] = cube_1[:, mask_1]
+    output[:, mask_2] = cube_2[:, mask_2]
     log.debug(f"{output.shape=}")
     return output
 
 
 def derotate_cube(cube, derotation_angles):
-    xp = core.get_array_module(cube)
     if cube.shape[0] != derotation_angles.shape[0]:
         raise ValueError("Number of cube planes and derotation angles must match")
-    if xp is da:
-        return da.blockwise(derotate_cube, "ijk", cube, "ijk", derotation_angles, "i")
     output = np.zeros_like(cube)
     for idx in range(cube.shape[0]):
         # n.b. skimage rotates CW by default, so we negate

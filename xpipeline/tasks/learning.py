@@ -1,16 +1,7 @@
 import logging
 import random
 import numpy as np
-
-# it looks strange, but this lets us write the fallback logic
-# once in core and use the various array module names here
-# letting them be `None` without it being an ImportError
-# (We'll see if that was a good decision...)
 from .. import core
-
-cp = core.cupy
-da = core.dask_array
-torch = core.torch
 
 from scipy.sparse.linalg import aslinearoperator, svds
 
@@ -110,7 +101,7 @@ def torch_svd(array, full_matrices=False, n_modes=None):
     else:
         return mtx_u, diag_s, mtx_v
 
-def generic_svd(mtx_x, n_modes, n_power_iter=2):
+def generic_svd(mtx_x, n_modes):
     """Computes SVD of mtx_x returning U, s, and V such that
     allclose(mtx_x, U @ diag(s) @ V.T) (with some tolerance).
 
@@ -142,13 +133,8 @@ def generic_svd(mtx_x, n_modes, n_power_iter=2):
     diag_s
     mtx_v
     """
-    xp = core.get_array_module(mtx_x)
-    if xp is da:
-        mtx_u, diag_s, mtx_v = da.linalg.svd(mtx_x)
-    elif xp in (np, cp):
-        log.debug('Doing a regular svd')
-        mtx_u, diag_s, mtx_vt = xp.linalg.svd(mtx_x, full_matrices=False)
-        mtx_v = mtx_vt.T
+    mtx_u, diag_s, mtx_vt = np.linalg.svd(mtx_x, full_matrices=False)
+    mtx_v = mtx_vt.T
     return mtx_u[:, :n_modes], diag_s[:n_modes], mtx_v[:, :n_modes]
 
 

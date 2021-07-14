@@ -8,6 +8,7 @@ import dask.array as da
 import distributed.protocol
 from scipy import linalg
 from numba import njit
+import numba
 from .. import core, utils, constants
 from . import learning, improc
 
@@ -97,9 +98,8 @@ def drop_idx_range_rows(arr, min_excluded_idx, max_excluded_idx):
     return out
 
 def mean_subtract_vecs(image_vecs):
-    xp = core.get_array_module(image_vecs)
-    mean_vec = xp.average(image_vecs, axis=1)
-    image_vecs_meansub = image_vecs - mean_vec[:, core.newaxis]
+    mean_vec = np.average(image_vecs, axis=1)
+    image_vecs_meansub = image_vecs - mean_vec[:, np.newaxis]
     return image_vecs_meansub, mean_vec
 
 
@@ -261,9 +261,11 @@ def _klip_mtx_covariance(image_vecs_meansub : np.ndarray, params : KlipParams):
     mtx_e_all = image_vecs_meansub.T @ image_vecs_meansub
     n_images = image_vecs_meansub.shape[1]
     if params.reuse:
+        core.set_num_threads(1, n_mkl_threads=core.MKL_MAX_THREADS)
         lambda_values, mtx_c = params.decomposer(mtx_e_all, k_klip)
         eigenimages = image_vecs_meansub @ (mtx_c * np.power(lambda_values, -1/2))
-    for i in range(n_images):
+    core.set_num_threads(core.NUMBA_MAX_THREADS, n_mkl_threads=1)
+    for i in numba.prange(n_images):
         if not params.reuse:
             min_excluded_idx, max_excluded_idx = exclusions_to_range(
                 n_images=n_images,
@@ -317,7 +319,7 @@ def exclusions_to_range(n_images, current_idx, exclusions):
     return min_excluded_idx, max_excluded_idx
 
 def klip_chunk_svd(
-    image_vecs_meansub, n_images, chunk_image_indices, params : KlipParams, mtx_u0, diag_s0, mtx_v0
+    image_vecs_meansub, n_images, params : KlipParams, mtx_u0, diag_s0, mtx_v0
 ):
     k_klip = params.k_klip
     if image_vecs_meansub.shape == (0, 0):
@@ -327,7 +329,7 @@ def klip_chunk_svd(
     n_frames = image_vecs_meansub.shape[1]
     frame_idxs = np.arange(n_frames)  # for detecting non-contiguous masked ranges
     output = np.zeros_like(image_vecs_meansub)
-    for i in range(n_frames):
+    for i in numba.prange(n_frames):
         if not params.reuse:
             min_excluded_idx, max_excluded_idx = exclusions_to_range(
                 n_images=n_images,
@@ -357,8 +359,7 @@ def klip_chunk_svd(
 
 def klip_mtx_svd(image_vecs_meansub, params : KlipParams):
     k_klip = params.k_klip
-    xp = core.get_array_module(image_vecs_meansub)
-    output = xp.zeros_like(image_vecs_meansub)
+    output = np.zeros_like(image_vecs_meansub)
     total_n_frames = image_vecs_meansub.shape[1]
     indices = np.arange(total_n_frames)
     if not params.reuse and params.strategy is constants.KlipStrategy.DOWNDATE_SVD:
@@ -375,43 +376,23 @@ def klip_mtx_svd(image_vecs_meansub, params : KlipParams):
     )
     if image_vecs_meansub.shape[0] < initial_k or image_vecs_meansub.shape[1] < initial_k:
         raise ValueError(f"Number of modes requested exceeds dimensions of input")
+    
+    # All hands on deck for initial decomposition
+    core.set_num_threads(1, n_mkl_threads=core.MKL_MAX_THREADS)
     mtx_u0, diag_s0, mtx_v0 = learning.generic_svd(image_vecs_meansub, initial_k)
+    # Maximize number of independent subproblems
+    core.set_num_threads(core.NUMBA_MAX_THREADS, n_mkl_threads=1)
     log.debug(
         f"{image_vecs_meansub.shape=}, {mtx_u0.shape=}, {diag_s0.shape=}, {mtx_v0.shape=}"
     )
-    if xp is da:
-        log.debug('Taking Dask path')
-        if image_vecs_meansub.numblocks[0] != 1:
-            image_vecs_meansub = image_vecs_meansub.rechunk({0: -1, 1: "auto"})
-        output = da.blockwise(
-            klip_chunk_svd,
-            "ij",
-            image_vecs_meansub,
-            "ij",
-            total_n_frames,
-            None,
-            indices,
-            "j",
-            params,
-            None,
-            mtx_u0,
-            None,
-            diag_s0,
-            None,
-            mtx_v0,
-            None,
-        )
-    else:
-        log.debug('Taking pure NumPy path')
-        output = klip_chunk_svd(
-            image_vecs_meansub,
-            total_n_frames,
-            indices,
-            params,
-            mtx_u0,
-            diag_s0,
-            mtx_v0,
-        )
+    output = klip_chunk_svd(
+        image_vecs_meansub,
+        total_n_frames,
+        params,
+        mtx_u0,
+        diag_s0,
+        mtx_v0,
+    )
     return output
 
 

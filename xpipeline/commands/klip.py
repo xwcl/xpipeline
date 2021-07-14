@@ -59,7 +59,7 @@ class Klip(InputCommand):
         return derotation_angles[:: self.sample_every_n]
 
     def _get_sci_arr(self, input_cube_hdul, extname):
-        return input_cube_hdul[extname].data.astype("=f8")[:: self.sample_every_n]
+        return input_cube_hdul[extname].data.astype("=f4")[:: self.sample_every_n]
 
     def _make_masks(self, sci_arr, extname):
         import numpy as np
@@ -130,12 +130,12 @@ class Klip(InputCommand):
         outcubes = self._klip(klip_inputs, klip_params, obs_method)
         out_image = self._assemble_out_image(obs_method, outcubes, derotation_angles)
 
-        import time
-        start = time.perf_counter()
-        log.info(f"Computing klip pipeline result...")
-        out_image = out_image.compute()
-        elapsed = time.perf_counter() - start
-        log.info(f"Computed in {elapsed} sec")
+        # import time
+        # start = time.perf_counter()
+        # log.info(f"Computing klip pipeline result...")
+        # out_image = out_image.compute()
+        # elapsed = time.perf_counter() - start
+        # log.info(f"Computed in {elapsed} sec")
         output_file = iofits.write_fits(
             iofits.DaskHDUList([iofits.DaskHDU(out_image)]), output_klip_final
         )
@@ -183,7 +183,7 @@ class Klip(InputCommand):
         return klip_params
 
     def _assemble_klip_inputs(self, dataset_path):
-        import dask.array as da
+        # import dask.array as da
         from .. import pipelines
         from ..tasks import iofits, improc
         input_cube_hdul = iofits.load_fits_from_path(dataset_path)
@@ -209,16 +209,16 @@ class Klip(InputCommand):
 
             klip_inputs.append(
                 pipelines.KlipInput(
-                    da.from_array(sci_arr_left),
-                    # sci_arr_left,
+                    # da.from_array(sci_arr_left),
+                    sci_arr_left,
                     estimation_mask_left,
                     combination_mask_left,
                 )
             )
             klip_inputs.append(
                 pipelines.KlipInput(
-                    da.from_array(sci_arr_right),
-                    # sci_arr_right,
+                    # da.from_array(sci_arr_right),
+                    sci_arr_right,
                     estimation_mask_right,
                     combination_mask_right,
                 )

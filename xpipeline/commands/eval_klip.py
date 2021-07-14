@@ -79,8 +79,10 @@ class EvalKlip(Klip):
         import dataclasses
         import numpy as np
         import dask
+        import time
         from ..tasks import iofits, characterization
         from .. import pipelines
+        start = time.perf_counter()
         destination = self.destination
         dest_fs = utils.get_fs(destination)
         dest_fs.makedirs(destination, exist_ok=True)
@@ -143,7 +145,8 @@ class EvalKlip(Klip):
         # compute final like klip command
         out_image = self._assemble_out_image(obs_method, outcubes, derotation_angles)
 
-        d_recovered_signals = dask.delayed(characterization.recover_signals)(
+
+        recovered_signals = characterization.recover_signals(
             out_image, specs, aperture_diameter_px, apertures_to_exclude
         )
         if self.search.iwa_px is None:
@@ -151,29 +154,17 @@ class EvalKlip(Klip):
         if self.search.owa_px is None:
             self.search.owa_px = self.mask_owa_px
         self.search.iwa_px, self.search.owa_px = characterization.working_radii_from_aperture_spacing(out_image.shape, self.aperture_diameter_px, apertures_to_exclude, self.search.iwa_px, self.search.owa_px)
-        d_all_candidates = dask.delayed(characterization.locate_snr_peaks)(
+        all_candidates = characterization.locate_snr_peaks(
             out_image, aperture_diameter_px, self.search.iwa_px, self.search.owa_px, apertures_to_exclude, self.search.snr_threshold
         )
 
-        import time
-        _ = dask.visualize(out_image, d_recovered_signals, d_all_candidates, filename='eval_klip.svg')
-        log.info(f"Computing recovered signals")
-        if self.dask.distributed:
-            from dask.distributed import performance_report
-            with performance_report():
-                start = time.perf_counter()
-                out_image, recovered_signals, all_candidates = dask.compute(out_image, d_recovered_signals, d_all_candidates)
-                end = time.perf_counter()
-        else:
-            start = time.perf_counter()
-            out_image, recovered_signals, all_candidates = dask.compute(out_image, d_recovered_signals, d_all_candidates)
-            end = time.perf_counter()
-        time_elapsed_sec = end - start
-        log.info(f"Done in {time_elapsed_sec} sec")
         iofits.write_fits(
             iofits.DaskHDUList([iofits.DaskHDU(out_image)]), output_klip_final
         )
 
+        end = time.perf_counter()
+        time_elapsed_sec = end - start
+        log.info(f"Done in {time_elapsed_sec} sec")
         payload = xconf.asdict(self)
         payload['recovered_signals'] = [dataclasses.asdict(x) for x in recovered_signals]
         payload['candidates'] = [dataclasses.asdict(x) for x in all_candidates]

@@ -11,7 +11,6 @@ from scipy.signal import fftconvolve
 from . import improc
 from .. import core
 
-da = core.dask_array
 log = logging.getLogger()
 
 @dataclass
@@ -60,10 +59,6 @@ def inject_signals(
     xp = core.get_array_module(cube)
     if scale_factors is None:
         scale_factors = xp.ones(cube.shape[0])
-    if xp is da:
-        return da.blockwise(
-            inject_signals, "ijk", cube, "ijk", angles, "i", specs, None, template, None, scale_factors, "i"
-        )
     frame_shape = cube.shape[1:]
     outcube = cube.copy()
 

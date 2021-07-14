@@ -1,7 +1,10 @@
+import os
+import psutil
 import numpy
-import dask
+import numba
+import logging
 
-from dask.distributed import WorkerPlugin
+log = logging.getLogger(__name__)
 
 class YellingProxy:
     def __init__(self, package):
@@ -12,27 +15,47 @@ class YellingProxy:
             f"Package {self.package} is not installed (or failed to import)"
         )
 
-
 try:
-    import torch
-
-    HAVE_TORCH = True
+    import mkl
+    HAVE_MKL = True
+    mkl_set_num_threads = mkl.set_num_threads
 except ImportError:
-    torch = YellingProxy("PyTorch")
-    HAVE_TORCH = False
-try:
-    import cupy
+    HAVE_MKL = False
+    mkl = YellingProxy('mkl-service')
+    def mkl_set_num_threads(n):
+        log.debug('Ignoring call to mkl_set_num_threads')
 
-    HAVE_CUPY = True
-except ImportError:
-    cupy = YellingProxy("CuPy")
-    HAVE_CUPY = False
 
-import dask.array as dask_array
-from dask.array import core as dask_array_core
 
-newaxis = numpy.newaxis
+def determine_max_threads():
+    count = os.cpu_count()
+    if 'OMP_NUM_THREADS' in os.environ:
+        count = min(count, int(os.environ['OMP_NUM_THREADS']))    
+    numba_count, mkl_count = count, count
+    if 'NUMBA_NUM_THREADS' in os.environ:
+        numba_count = min(numba_count, int(os.environ['NUMBA_NUM_THREADS']))
+    if 'MKL_NUM_THREADS' in os.environ:
+        mkl_count = min(mkl_count, int(os.environ['MKL_NUM_THREADS']))
+    return numba_count, mkl_count
 
+NUMBA_MAX_THREADS, MKL_MAX_THREADS = determine_max_threads()
+
+def set_num_threads(n_threads, n_mkl_threads=None):
+    if HAVE_MKL:
+        if n_mkl_threads > MKL_MAX_THREADS:
+            log.debug(f'{n_mkl_threads=} was > {MKL_MAX_THREADS=}')
+            n_mkl_threads = MKL_MAX_THREADS
+        log.debug(f'Setting {n_mkl_threads=}')
+        mkl_set_num_threads(n_mkl_threads)
+    else:
+        if n_mkl_threads is not None:
+            log.debug(f'No MKL service, adding {n_mkl_threads=} to total')
+            n_threads = n_threads + n_mkl_threads
+    if n_threads > NUMBA_MAX_THREADS:
+        log.debug(f'{n_threads=} was > {NUMBA_MAX_THREADS=}')
+        n_threads = NUMBA_MAX_THREADS
+    numba.set_num_threads(n_threads)
+    log.debug(f'Setting {n_threads=}')
 
 def get_array_module(arr):
     """Returns `dask.array` if `arr` is a `dask.array.core.Array`, or
@@ -43,11 +66,7 @@ def get_array_module(arr):
         xp = get_array_module(input_array)
         xp.sum(input_array)
     """
-    if isinstance(arr, dask_array_core.Array):
-        return dask_array
-    elif HAVE_CUPY and isinstance(arr, cupy.ndarray):
-        return cupy
-    elif isinstance(arr, numpy.ndarray):
+    if isinstance(arr, numpy.ndarray):
         return numpy
     else:
         raise ValueError("Unrecognized type passed to get_array_module")
@@ -211,10 +230,3 @@ def reduce_bitwise_or(arr):
         return dask_array.blockwise(_dask_reduce_bitwise_or, 'jk', arr, 'ijk')
     else:
         return numpy.bitwise_or.reduce(arr, axis=0)
-
-
-class DaskWorkerPreloadPlugin(WorkerPlugin):
-    """Ensure xpipeline is preloaded in workers to avoid
-    confusing startup time with task time"""
-    def setup(self, worker: dask.distributed.Worker):
-        import xpipeline.pipelines
