@@ -9,6 +9,7 @@ import distributed.protocol
 from scipy import linalg
 from numba import njit
 import numba
+import time
 from .. import core, utils, constants
 from . import learning, improc
 
@@ -199,7 +200,7 @@ def _klip_mtx_covariance(image_vecs_meansub : np.ndarray, params : KlipParams):
         lambda_values, mtx_c = params.decomposer(mtx_e_all, k_klip)
         eigenimages = image_vecs_meansub @ (mtx_c * np.power(lambda_values, -1/2))
     core.set_num_threads(core.NUMBA_MAX_THREADS, n_mkl_threads=1)
-    for i in numba.prange(n_images):
+    for i in range(n_images):
         if not params.reuse:
             min_excluded_idx, max_excluded_idx = exclusions_to_range(
                 n_images=n_images,
@@ -328,17 +329,18 @@ def klip_mtx_svd(image_vecs_meansub, params : KlipParams):
     
     # All hands on deck for initial decomposition
     core.set_num_threads(1, n_mkl_threads=core.MKL_MAX_THREADS)
+    log.info(f'Computing initial decomposition')
     mtx_u0, diag_s0, mtx_v0 = learning.generic_svd(image_vecs_meansub, initial_k)
     # Maximize number of independent subproblems
     core.set_num_threads(core.NUMBA_MAX_THREADS, n_mkl_threads=1)
-    log.debug(
-        f"{image_vecs_meansub.shape=}, {mtx_u0.shape=}, {diag_s0.shape=}, {mtx_v0.shape=}"
-    )
+    log.info(f"Done computing initial decomposition")
     if len(params.exclusions) > 0:
         exclusion_values = np.stack([excl.values for excl in params.exclusions])
         exclusion_deltas = np.stack([excl.exclude_within_delta for excl in params.exclusions])
     else:
         exclusion_values = exclusion_deltas = None
+    log.info(f'Computing KLIPed vectors')
+    start = time.perf_counter()
     output = klip_chunk_svd(
         image_vecs_meansub,
         total_n_frames,
@@ -351,6 +353,8 @@ def klip_mtx_svd(image_vecs_meansub, params : KlipParams):
         exclusion_values,
         exclusion_deltas
     )
+    end = time.perf_counter()
+    log.info(f"Finished KLIPing in {end - start}")
     return output
 
 
