@@ -272,18 +272,7 @@ def exclusions_to_range(n_images, current_idx, exclusion_values, exclusion_delta
         raise ValueError("Non-contiguous ranges to exclude detected, but we don't handle that")
     return min_excluded_idx, max_excluded_idx
 
-@njit(numba.float32[:,:](
-    numba.float32[:,:], # image_vecs_meansub
-    numba.intc, # n_images
-    numba.float32[:,:], # mtx_u0
-    numba.float32[:], # diag_s0
-    numba.float32[:,:], # mtx_v0
-    numba.intc, # k_klip
-    numba.boolean, # reuse
-    numba.intc, # strategy
-    numba.optional(numba.float32[:,:]), # exclusion_values
-    numba.optional(numba.float32[:]), # exclusion_deltas
-))
+@njit(parallel=True)
 def klip_chunk_svd(
     image_vecs_meansub, n_images, mtx_u0, diag_s0, mtx_v0, k_klip, reuse, strategy,
     exclusion_values, exclusion_deltas
@@ -291,6 +280,7 @@ def klip_chunk_svd(
     n_frames = image_vecs_meansub.shape[1]
     output = np.zeros_like(image_vecs_meansub)
     for i in numba.prange(n_frames):
+        print(i+1, "of", n_frames)
         if not reuse:
             min_excluded_idx, max_excluded_idx = exclusions_to_range(
                 n_images=n_images,
@@ -315,6 +305,7 @@ def klip_chunk_svd(
         meansub_target = image_vecs_meansub[:, i]
         output[:, i] = meansub_target - eigenimages @ (eigenimages.T @ meansub_target)
     return output
+
 
 def klip_mtx_svd(image_vecs_meansub, params : KlipParams):
     k_klip = params.k_klip
