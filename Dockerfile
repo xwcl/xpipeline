@@ -36,7 +36,9 @@ RUN conda install --quiet --yes -c conda-forge \
     memory_profiler \
     sphinx \
     pytest \
-    mkl-service && conda clean --all -f -y
+    mkl-service \
+    tbb \
+    && conda clean --all -f -y
 # RUN conda install pytorch cudatoolkit=11.1 -c pytorch -c nvidia && conda clean --all -f -y
 RUN pip install git+https://github.com/xwcl/irods_fsspec.git#egg=irods_fsspec
 RUN pip install git+https://github.com/xwcl/xconf.git#egg=xconf
