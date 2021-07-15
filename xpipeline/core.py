@@ -51,9 +51,10 @@ def set_num_threads(n_threads, n_mkl_threads=None):
         if n_mkl_threads is not None:
             log.debug(f'No MKL service, adding {n_mkl_threads=} to total')
             n_threads = n_threads + n_mkl_threads
-    if n_threads > NUMBA_MAX_THREADS:
-        log.debug(f'{n_threads=} was > {NUMBA_MAX_THREADS=}')
-        n_threads = NUMBA_MAX_THREADS
+        n_mkl_threads = 0
+    if n_threads + n_threads * n_mkl_threads > NUMBA_MAX_THREADS:
+        log.debug(f'{n_threads + n_threads * n_mkl_threads=} was > {NUMBA_MAX_THREADS=}')
+        n_threads = NUMBA_MAX_THREADS // (n_mkl_threads + 1)
     numba.set_num_threads(n_threads)
     log.debug(f'Setting {n_threads=}')
 
