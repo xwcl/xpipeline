@@ -122,10 +122,6 @@ def test_end_to_end(strategy, reuse, snr_threshold, decomposer):
 
     # can we get the same SNR from the image?
     iwa_px, owa_px = 7, 47
-    import matplotlib.pyplot as plt
-    plt.ion()
-    plt.figure()
-    plt.imshow(output_image)
     detections = characterization.locate_snr_peaks(output_image, fwhm_naco, iwa_px, owa_px, exclude_nearest=1, snr_threshold=8)
     log.info(f'{detections=}')
     peak = detections[0]
@@ -150,8 +146,9 @@ def test_end_to_end(strategy, reuse, snr_threshold, decomposer):
         specs,
         template_psf,
         klip_params,
-        aperture_diameter_px=data["fwhm"],
+        aperture_diameter_px=fwhm_naco,
         apertures_to_exclude=1,
+        adi_combine_by=constants.CombineOperation.SUM
     )
     assert recovered_signals[0].snr == snr
 

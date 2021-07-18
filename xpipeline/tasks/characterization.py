@@ -56,9 +56,8 @@ def inject_signals(
     template: np.ndarray,
     scale_factors: Optional[np.ndarray] = None,
 ):
-    xp = core.get_array_module(cube)
     if scale_factors is None:
-        scale_factors = xp.ones(cube.shape[0])
+        scale_factors = np.ones(cube.shape[0])
     frame_shape = cube.shape[1:]
     outcube = cube.copy()
 

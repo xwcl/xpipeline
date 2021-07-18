@@ -330,10 +330,7 @@ def evaluate_starlight_subtraction(
     klip_params: KlipParams,
     aperture_diameter_px: float,
     apertures_to_exclude: int,
-    # snr_threshold : float,
-    # search_iwa_px : float,
-    # search_owa_px : float,
-    # TODO blind search
+    adi_combine_by : CombineOperation,
 ):
     injected_sci_arr = characterization.inject_signals(
         klip_input.sci_arr, derotation_angles, specs, template_psf
@@ -344,7 +341,7 @@ def evaluate_starlight_subtraction(
         ),
         klip_params,
     )
-    out_image = adi(outcube, derotation_angles)
+    out_image = adi(outcube, derotation_angles, adi_combine_by)
 
     recovered_signals = characterization.recover_signals(
         out_image, specs, aperture_diameter_px, apertures_to_exclude
