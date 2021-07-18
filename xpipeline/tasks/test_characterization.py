@@ -110,7 +110,7 @@ def test_end_to_end(strategy, reuse, snr_threshold, decomposer):
     r_px, pa_deg = 18.4, -42.8
     fwhm_naco = data["fwhm"]
 
-    _, results = reduce_apertures(
+    _, results = characterization.reduce_apertures(
         output_image,
         r_px,
         pa_deg,
@@ -118,7 +118,7 @@ def test_end_to_end(strategy, reuse, snr_threshold, decomposer):
         np.sum,
         exclude_nearest=1,
     )
-    snr = calc_snr_mawet(results[0], results[1:])
+    snr = characterization.calc_snr_mawet(results[0], results[1:])
     assert snr > snr_threshold
 
     # can we get the same SNR from the image?
@@ -197,3 +197,21 @@ def test_r_pa_conversions():
     x, y = characterization.r_pa_to_x_y(10, 270, xc, yc)
     assert np.isclose(x, 10 + xc)
     assert np.isclose(y, yc)
+
+def test_calc_snr_image_nan():
+    npix = 128
+    peak = (32, 32)
+    rho, _ = improc.polar_coords(center=peak, data_shape=(npix, npix))
+    aperture_diameter_px = 10
+    image = (rho <= aperture_diameter_px / 2).astype(float)
+    image += 0.1 * np.random.randn(*image.shape)
+    snr_image = characterization.calc_snr_image(image, aperture_diameter_px, iwa_px=13, owa_px=55, exclude_nearest=1)
+    recovered_peak = np.unravel_index(np.argmax(snr_image), snr_image.shape)
+    for i in (0, 1):
+        assert np.abs(recovered_peak[i] - peak[i]) <= 2, "peak more than 2 px off"
+
+    # now try with a NaN
+    image[0, 0] = np.nan
+    snr_image = characterization.calc_snr_image(image, aperture_diameter_px, iwa_px=13, owa_px=55, exclude_nearest=1)
+    recovered_peak2 = np.unravel_index(np.argmax(snr_image), snr_image.shape)
+    assert recovered_peak == recovered_peak2

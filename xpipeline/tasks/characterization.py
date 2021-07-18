@@ -354,6 +354,8 @@ def calc_snr_image(image, aperture_diameter_px, iwa_px, owa_px, exclude_nearest)
     kernel = np.zeros((kernel_npix, kernel_npix))
     kernel_rho, _ = improc.polar_coords(improc.arr_center(kernel), kernel.shape)
     kernel[kernel_rho <= aperture_r] = 1
+    image = image.copy()
+    image[np.isnan(image)] = 0
     convolved_image = fftconvolve(image, kernel, mode='same')
     snr_image = np.zeros_like(convolved_image)
     _calc_snr_image(convolved_image, rho, theta, mask, aperture_diameter_px, exclude_nearest, snr_image)
