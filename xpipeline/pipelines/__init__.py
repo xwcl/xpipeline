@@ -286,7 +286,6 @@ def vapp_stitch(
     return final_cube
 
 def combine_cube(cube : np.ndarray, operation: CombineOperation):
-    print(f'{cube.shape=}')
     if operation is CombineOperation.MEAN:
         out_image = np.nanmean(cube, axis=0)
     elif operation is CombineOperation.SUM:
