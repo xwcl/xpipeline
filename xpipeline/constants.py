@@ -17,5 +17,8 @@ class ValueFilter(Enum):
     DIFFERENCE_FROM_CURRENT = 'difference_from_current'
     ABSOLUTE = 'absolute'
 
+class CombineOperation(Enum):
+    MEAN = 'mean'
+    SUM = 'sum'
 
 # distributed.protocol.register_generic(KlipStrategy)

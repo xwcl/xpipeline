@@ -58,7 +58,6 @@ class KlipParams:
     initial_decomposer : Optional[Callable] = None
     missing_data_value: float = np.nan
     strategy : constants.KlipStrategy = constants.KlipStrategy.DOWNDATE_SVD
-    chunks : Optional[Union[tuple, int, dict]] = None
 
     def __post_init__(self):
         if self.initial_decomposer is None:
@@ -180,7 +179,7 @@ def _eigh_top_k(mtx, k_klip):
     mtx_c = np.flip(mtx_c_out, axis=1)[:,:k_klip]
     return lambda_values, mtx_c
 
-def _klip_mtx_covariance(image_vecs_meansub : np.ndarray, params : KlipParams):
+def klip_mtx_covariance(image_vecs_meansub : np.ndarray, params : KlipParams):
     '''Apply KLIP to mean-subtracted image column vectors
 
     Parameters
@@ -195,6 +194,7 @@ def _klip_mtx_covariance(image_vecs_meansub : np.ndarray, params : KlipParams):
     output = np.zeros_like(image_vecs_meansub)
     mtx_e_all = image_vecs_meansub.T @ image_vecs_meansub
     n_images = image_vecs_meansub.shape[1]
+    exclusion_values, exclusion_deltas = _exclusions_to_arrays(params)
     if params.reuse:
         core.set_num_threads(1, n_mkl_threads=core.MKL_MAX_THREADS)
         lambda_values, mtx_c = params.decomposer(mtx_e_all, k_klip)
@@ -205,7 +205,8 @@ def _klip_mtx_covariance(image_vecs_meansub : np.ndarray, params : KlipParams):
             min_excluded_idx, max_excluded_idx = exclusions_to_range(
                 n_images=n_images,
                 current_idx=i,
-                exclusions=params.exclusions,
+                exclusion_values=exclusion_values,
+                exclusion_deltas=exclusion_deltas
             )
             min_excluded_idx = max(min_excluded_idx, 0)
             max_excluded_idx = min(n_images, max_excluded_idx)
@@ -216,19 +217,6 @@ def _klip_mtx_covariance(image_vecs_meansub : np.ndarray, params : KlipParams):
 
         meansub_target = image_vecs_meansub[:,i]
         output[:,i] = meansub_target - eigenimages @ (eigenimages.T @ meansub_target)
-    return output
-
-def klip_mtx_covariance(image_vecs_meansub, params):
-    xp = core.get_array_module(image_vecs_meansub)
-    if xp is da:
-        d_output = dask.delayed(_klip_mtx_covariance)(image_vecs_meansub, params)
-        output = da.from_delayed(
-            d_output,
-            shape=image_vecs_meansub.shape,
-            dtype=image_vecs_meansub.dtype
-        )
-    else:
-        output = _klip_mtx_covariance(image_vecs_meansub, params)
     return output
 
 @njit
@@ -257,8 +245,8 @@ def exclusions_to_mask(n_images, current_idx, exclusion_values, exclusion_deltas
 # @njit((
 #     numba.intc, # n_images
 #     numba.intc, # current_idx
-#     numba.float32[:,:], # exclusion_values
-#     numba.float32[:] # exclusion_deltas
+#     numba.optional(numba.float32[:,:]), # exclusion_values
+#     numba.optional(numba.float32[:]), # exclusion_deltas
 # ))
 @njit
 def exclusions_to_range(n_images, current_idx, exclusion_values, exclusion_deltas):
@@ -307,6 +295,13 @@ def klip_chunk_svd(
         output[:, i] = meansub_target - eigenimages @ (eigenimages.T @ meansub_target)
     return output
 
+def _exclusions_to_arrays(params):
+    if not params.reuse and len(params.exclusions) > 0:
+        exclusion_values = np.stack([excl.values for excl in params.exclusions])
+        exclusion_deltas = np.stack([excl.exclude_within_delta for excl in params.exclusions])
+    else:
+        exclusion_values = exclusion_deltas = None
+    return exclusion_values, exclusion_deltas
 
 def klip_mtx_svd(image_vecs_meansub, params : KlipParams):
     k_klip = params.k_klip
@@ -334,11 +329,7 @@ def klip_mtx_svd(image_vecs_meansub, params : KlipParams):
     # Maximize number of independent subproblems
     core.set_num_threads(core.NUMBA_MAX_THREADS, n_mkl_threads=1)
     log.info(f"Done computing initial decomposition")
-    if len(params.exclusions) > 0:
-        exclusion_values = np.stack([excl.values for excl in params.exclusions])
-        exclusion_deltas = np.stack([excl.exclude_within_delta for excl in params.exclusions])
-    else:
-        exclusion_values = exclusion_deltas = None
+    exclusion_values, exclusion_deltas = _exclusions_to_arrays(params)
     log.info(f'Computing KLIPed vectors')
     start = time.perf_counter()
     output = klip_chunk_svd(

@@ -7,12 +7,14 @@ import xconf
 
 from .base import MultiInputCommand
 
+from ..constants import CombineOperation
+
 log = logging.getLogger(__name__)
 
 @xconf.config
 class CombineImages(MultiInputCommand):
     """Combine a sequence of images into a single image"""
-    operation : str = xconf.field(default='mean', help="Operation with which to combine images (so far only mean)")
+    operation : CombineOperation = xconf.field(default=CombineOperation.MEAN, help="Operation with which to combine images")
 
     def main(self):
         import numpy as np
@@ -30,7 +32,6 @@ class CombineImages(MultiInputCommand):
         self.quit_if_outputs_exist([outname])
 
         all_inputs = self.get_all_inputs()
-        op = pipelines.CombineOperation[self.operation.upper()]
         hdul = iofits.load_fits_from_path(all_inputs[0])
         if len(all_inputs) > 1:
             # infer planes per cube

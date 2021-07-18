@@ -1,4 +1,5 @@
 import pytest
+import logging
 from importlib import resources
 import numpy as np
 import dask
@@ -13,8 +14,7 @@ from . import improc
 from .. import core, pipelines, constants
 from xpipeline.tasks import characterization, starlight_subtraction
 
-da = core.dask_array
-
+log = logging.getLogger(__name__)
 
 def test_simple_aperture_locations():
     r_px = 5
@@ -53,7 +53,7 @@ def test_inject_signals():
     from skimage.transform import rotate
 
     # n.b. skimage rotate() uses theta in the opposite sense from
-    # improc.quick_derotate, but that's actually what we want here
+    # improc.derotate_cube, but that's actually what we want here
     # since we're faking data that will then be derotated
     cube = np.asarray([rotate(f_frame, theta) for theta in angles])
     r_px = 40
@@ -62,24 +62,12 @@ def test_inject_signals():
     specs = [CompanionSpec(scale=scale_val, r_px=r_px, pa_deg=theta_deg)]
 
     out_pix_val = base_pix_val * scale_val
-
-    # NumPy only
     outcube = inject_signals(cube, angles, specs, template)
     assert np.isclose(outcube[0][128 // 2, 128 // 2 - r_px], out_pix_val)
     assert np.isclose(outcube[1][128 // 2 + r_px, 128 // 2], out_pix_val)
     assert np.isclose(outcube[2][128 // 2, 128 // 2 + r_px], out_pix_val)
     assert np.isclose(outcube[3][128 // 2 - r_px, 128 // 2], out_pix_val)
 
-    # With Dask
-    d_cube = da.from_array(cube).rechunk((n_frames, -1, -1))
-    d_angles = da.from_array(angles).rechunk((25,))  # provoke mismatch in dimensions
-    outcube = inject_signals(d_cube, d_angles, specs, template)
-    outcube = outcube.compute()
-    angles = d_angles.compute()
-    assert np.isclose(outcube[0][128 // 2, 128 // 2 - r_px], out_pix_val)
-    assert np.isclose(outcube[1][128 // 2 + r_px, 128 // 2], out_pix_val)
-    assert np.isclose(outcube[2][128 // 2, 128 // 2 + r_px], out_pix_val)
-    assert np.isclose(outcube[3][128 // 2 - r_px, 128 // 2], out_pix_val)
 
 
 @pytest.mark.parametrize('strategy,reuse,snr_threshold,decomposer', [
@@ -89,7 +77,7 @@ def test_inject_signals():
     (constants.KlipStrategy.COVARIANCE, True, 21.2, starlight_subtraction._eigh_top_k),
     (constants.KlipStrategy.DOWNDATE_SVD, False, 21.2, None),
 ])
-def test_end_to_end_dask(strategy, reuse, snr_threshold, decomposer):
+def test_end_to_end(strategy, reuse, snr_threshold, decomposer):
     res_handle = resources.open_binary(
         "xpipeline.ref", "naco_betapic_preproc_absil2013_gonzalez2017.npz"
     )
@@ -97,29 +85,27 @@ def test_end_to_end_dask(strategy, reuse, snr_threshold, decomposer):
     n_modes = 9
     threshold = 2200  # fake, just to test masking
     good_pix_mask = np.average(data["cube"], axis=0) < threshold
-    sci_arr = da.asarray(data["cube"])
-    rot_arr = da.asarray(data["angles"])
+    sci_arr = data["cube"]
+    rot_arr = data["angles"]
 
     pristine_input = starlight_subtraction.KlipInput(sci_arr, good_pix_mask, good_pix_mask)
     exclusions = []
-    # indices = np.arange(rot_arr.shape[0])
+    indices = np.arange(rot_arr.shape[0])
+    # exclude_nearest_n_frames = 3
     # exc = starlight_subtraction.ExclusionValues(
-    #     exclude_within_delta=exclude.nearest_n_frames,
-    #     values=indices,
-    #     num_excluded_max=2 * exclude.nearest_n_frames + 1
+    #     exclude_within_delta=exclude_nearest_n_frames,
+    #     values=indices
     # )
     # exclusions.append(exc)
     klip_params = starlight_subtraction.KlipParams(
         n_modes,
         exclusions,
         decomposer=decomposer,
-        strategy=strategy,
-        chunks={0: 500, 1: -1}
+        strategy=strategy
     )
 
-    d_outcube = pipelines.klip_one(pristine_input, klip_params)
-    d_output_image = pipelines.adi(d_outcube, rot_arr)
-    output_image = dask.compute(d_output_image)[0]
+    outcube = pipelines.klip_one(pristine_input, klip_params)
+    output_image = pipelines.adi(outcube, rot_arr, operation=constants.CombineOperation.MEAN)
     r_px, pa_deg = 18.4, -42.8
     fwhm_naco = data["fwhm"]
 
@@ -136,7 +122,12 @@ def test_end_to_end_dask(strategy, reuse, snr_threshold, decomposer):
 
     # can we get the same SNR from the image?
     iwa_px, owa_px = 7, 47
+    import matplotlib.pyplot as plt
+    plt.ion()
+    plt.figure()
+    plt.imshow(output_image)
     detections = characterization.locate_snr_peaks(output_image, fwhm_naco, iwa_px, owa_px, exclude_nearest=1, snr_threshold=8)
+    log.info(f'{detections=}')
     peak = detections[0]
     # n.b. not the same as the VIP tutorial quotes, but this is here to make sure
     # we don't change locate_snr_peaks outputs by accident
@@ -153,7 +144,7 @@ def test_end_to_end_dask(strategy, reuse, snr_threshold, decomposer):
         CompanionSpec(r_px=18.4, pa_deg=-42.8, scale=0),
     ]
 
-    d_recovered_signals = pipelines.evaluate_starlight_subtraction(
+    recovered_signals = pipelines.evaluate_starlight_subtraction(
         pristine_input,
         rot_arr,
         specs,
@@ -162,12 +153,11 @@ def test_end_to_end_dask(strategy, reuse, snr_threshold, decomposer):
         aperture_diameter_px=data["fwhm"],
         apertures_to_exclude=1,
     )
-    recovered_signals = dask.compute(d_recovered_signals)[0]
     assert recovered_signals[0].snr == snr
 
     # try with an injected signal now
     specs = [CompanionSpec(r_px=30, pa_deg=90, scale=0.001)]
-    d_recovered_signals = pipelines.evaluate_starlight_subtraction(
+    recovered_signals = pipelines.evaluate_starlight_subtraction(
         pristine_input,
         rot_arr,
         specs,
@@ -176,7 +166,6 @@ def test_end_to_end_dask(strategy, reuse, snr_threshold, decomposer):
         aperture_diameter_px=data["fwhm"],
         apertures_to_exclude=1,
     )
-    recovered_signals = dask.compute(d_recovered_signals)[0]
     assert recovered_signals[0].snr > 12.0
 
 def test_calc_snr_mawet():

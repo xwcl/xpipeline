@@ -36,7 +36,7 @@ class Klip(InputCommand):
     exclude : ExclusionConfig = xconf.field(default=ExclusionConfig(), help="How to exclude frames from reference sample")
     strategy : constants.KlipStrategy = xconf.field(default=constants.KlipStrategy.DOWNDATE_SVD, help="Implementation of KLIP to use")
     reuse_eigenimages : bool = xconf.field(default=False, help="Apply KLIP without adjusting the eigenimages at each step (much faster, less powerful)")
-    combine_by : str = xconf.field(default="sum", help="Operation used to combine final derotated frames into a single output frame")
+    combine_by : constants.CombineOperation = xconf.field(default=constants.CombineOperation.MEAN, help="Operation used to combine final derotated frames into a single output frame")
     saturation_threshold : Optional[float] = xconf.field(default=None, help="Value in counts above which pixels should be considered saturated and ignored")
     mask_iwa_px : int = xconf.field(default=None, help="Apply radial mask excluding pixels < iwa_px from center")
     mask_owa_px : int = xconf.field(default=None, help="Apply radial mask excluding pixels > owa_px from center")

@@ -1,9 +1,5 @@
 from enum import Enum
-from dataclasses import dataclass
-import argparse
-import glob
 from multiprocessing import Pipe
-import os.path
 import logging
 from pprint import pformat
 from re import template
@@ -17,7 +13,7 @@ from typing import List, Union
 
 from .. import constants as const
 from .. import core
-from ..core import PipelineCollection, reduce_bitwise_or
+from ..core import PipelineCollection
 
 from ..tasks import (
     obs_table,
@@ -32,7 +28,7 @@ from ..tasks import (
     vapp,
 )
 from ..tasks.starlight_subtraction import KlipInput, KlipParams
-from ..constants import KlipStrategy
+from ..constants import KlipStrategy, CombineOperation
 from ..ref import clio
 
 log = logging.getLogger(__name__)
@@ -42,8 +38,6 @@ log = logging.getLogger(__name__)
 # They should return delayeds (for composition)
 
 
-class CombineOperation(Enum):
-    MEAN = 'mean'
 
 
 def combine_extension_to_new_hdu(
@@ -76,7 +70,7 @@ def compute_scale_factors(
         if isinstance(inputs_collection_or_hdul, iofits.DaskHDUList):
             data_cube = da.from_array(inputs_collection_or_hdul[extname].data)
         else:
-            data_cube = iofits.hdulists_to_dask_cube(inputs_collection.items, plane_shape, ext=extname)
+            data_cube = iofits.hdulists_to_dask_cube(inputs_collection_or_hdul.items, plane_shape, ext=extname)
         d_factors = improc.compute_template_scale_factors(data_cube, template_hdul[extname].data, saturated_pixel_threshold)
         delayed_hdus.append(dask.delayed(iofits.DaskHDU)(d_factors, name=extname))
 
@@ -187,7 +181,7 @@ def compute_sky_model(
     log.debug("Assembling compute_sky_model pipeline...")
     sky_cube = iofits.hdulists_to_dask_cube(inputs_collection.items, plane_shape, ext=ext)
     dq_cube = iofits.hdulists_to_dask_cube(inputs_collection.items, plane_shape, ext=dq_ext, dtype=int)
-    badpix_arr = reduce_bitwise_or(dq_cube)
+    badpix_arr = np.bitwise_or.reduce(dq_cube, axis=0)
     sky_cube_train, sky_cube_test = learning.train_test_split(
         sky_cube, test_fraction, random_state=random_state
     )
@@ -291,15 +285,19 @@ def vapp_stitch(
     log.debug("done assembling vapp_stitch")
     return final_cube
 
-
-def adi(cube: da.core.Array, derotation_angles: da.core.Array, operation="sum"):
-    derotated_cube = improc.derotate_cube(cube, derotation_angles)
-    if operation == "average":
-        out_image = da.nanmean(derotated_cube, axis=0)
-    elif operation == "sum":
-        out_image = da.nansum(derotated_cube, axis=0)
+def combine_cube(cube : np.ndarray, operation: CombineOperation):
+    print(f'{cube.shape=}')
+    if operation is CombineOperation.MEAN:
+        out_image = np.nanmean(cube, axis=0)
+    elif operation is CombineOperation.SUM:
+        out_image = np.nansum(cube, axis=0)
     else:
         raise ValueError("Supported operations: average, sum")
+    return out_image
+
+def adi(cube: np.ndarray, derotation_angles: np.ndarray, operation : CombineOperation):
+    derot_cube = improc.derotate_cube(cube, derotation_angles)
+    out_image = combine_cube(derot_cube, operation)
     return out_image
 
 
@@ -348,7 +346,7 @@ def evaluate_starlight_subtraction(
     )
     out_image = adi(outcube, derotation_angles)
 
-    recovered_signals = dask.delayed(characterization.recover_signals)(
+    recovered_signals = characterization.recover_signals(
         out_image, specs, aperture_diameter_px, apertures_to_exclude
     )
     return recovered_signals

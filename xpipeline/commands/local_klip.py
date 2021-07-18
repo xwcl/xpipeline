@@ -74,7 +74,7 @@ class LocalKLIP(KLIP):
             mtx_x, self.args.k_klip, self.args.exclude_nearest_n_frames
         )
         outcube = improc.wrap_matrix(subtracted_mtx, sci_arr.shape, subset_indices)
-        out_image = improc.quick_derotate(outcube, derotation_angles)
+        out_image = improc.derotate_cube(outcube, derotation_angles)
         elapsed = time.perf_counter() - start
         log.info(f"Computed in {elapsed} sec")
         fits.PrimaryHDU(out_image).writeto(output_klip_final, overwrite=True)

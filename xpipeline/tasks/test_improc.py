@@ -35,58 +35,43 @@ def test_rough_peak():
     assert loc_y == peak_y
 
 
-@pytest.mark.parametrize("xp", [np, da])
-def test_wrap_2d(xp):
-    image = xp.arange(9).reshape(3, 3)
+
+def test_wrap_2d():
+    image = np.arange(9).reshape(3, 3)
     mask = np.ones(image.shape, dtype=bool)
     vec, subset_idxs = unwrap_image(image, mask)
     wrap_result = wrap_vector(vec, image.shape, subset_idxs)
-    if xp is da:
-        image = image.compute()
-        wrap_result = wrap_result.compute()
     assert np.all(image == wrap_result)
 
 
-@pytest.mark.parametrize("xp", [np, da])
-def test_wrap_3d(xp):
-    imcube = xp.arange(27).reshape(3, 3, 3)
+def test_wrap_3d():
+    imcube = np.arange(27).reshape(3, 3, 3)
     mask = np.ones(imcube.shape, dtype=bool)
     vec, subset_idxs = unwrap_image(imcube, mask)
     wrap_result = wrap_vector(vec, imcube.shape, subset_idxs)
-    if xp is da:
-        imcube = imcube.compute()
-        wrap_result = wrap_result.compute()
     assert np.all(imcube == wrap_result)
 
-    imcube = xp.arange(27).reshape(3, 3, 3)
-    imcube = xp.repeat(imcube[core.newaxis, :, :, :], 3, axis=0)
+    imcube = np.arange(27).reshape(3, 3, 3)
+    imcube = np.repeat(imcube[np.newaxis, :, :, :], 3, axis=0)
     mtx, subset_idxs = unwrap_cube(imcube, mask)
     wrap_result = wrap_matrix(mtx, imcube.shape, subset_idxs)
-    if xp is da:
-        imcube = imcube.compute()
-        wrap_result = wrap_result.compute()
     assert np.all(imcube == wrap_result)
 
 
-@pytest.mark.parametrize("xp", [np, da])
-def test_unwrap_2d(xp):
+
+def test_unwrap_2d():
     image = np.arange(9, dtype=float).reshape((3, 3))
     mask = np.ones((3, 3), dtype=bool)
     image[1, 1] = np.infty  # make a bogus value to change the max
-    if xp is da:
-        image = da.from_array(image)
     mask[1, 1] = False  # mask it out so it doesn't change the max
     mtx, subset_idxs = unwrap_image(image, mask)
-    if xp is da:
-        mtx = mtx.compute()
     assert np.max(mtx) == 8
     assert mtx.shape[0] == 8
     assert subset_idxs[1].shape[0] == 8, "Not the right number of X indices"
     assert subset_idxs[0].shape[0] == 8, "Not the right number of Y indices"
 
 
-@pytest.mark.parametrize("xp", [np, da])
-def test_unwrap_one_3d(xp):
+def test_unwrap_one_3d():
     imcube = np.zeros((3, 3, 3))
     mask = np.ones(imcube.shape, dtype=bool)
 
@@ -94,8 +79,6 @@ def test_unwrap_one_3d(xp):
     # masking worked when it's not present in the output
     imcube[1, 1, 1] = 1
     mask[1, 1, 1] = False
-    if xp is da:
-        imcube = da.from_array(imcube)
     mtx, subset_idxs = unwrap_image(imcube, mask)
     nonzero_pix = 3 * 3 * 3 - 1
     assert mtx.shape[0] == nonzero_pix
@@ -105,8 +88,7 @@ def test_unwrap_one_3d(xp):
     assert np.max(mtx) == 0
 
 
-@pytest.mark.parametrize("xp", [np, da])
-def test_unwrap_many_3d(xp):
+def test_unwrap_many_3d():
     imcube = np.zeros((3, 3, 3))
     mask = np.ones(imcube.shape, dtype=bool)
 
@@ -114,9 +96,7 @@ def test_unwrap_many_3d(xp):
     # masking worked when it's not present in the output
     imcube[1, 1, 1] = 1
     mask[1, 1, 1] = False
-    if xp is da:
-        imcube = da.from_array(imcube)
-    imcube = xp.repeat(imcube[core.newaxis, :, :, :], 3, axis=0)
+    imcube = np.repeat(imcube[np.newaxis, :, :, :], 3, axis=0)
     mtx, subset_idxs = unwrap_cube(imcube, mask)
     nonzero_pix = 3 * 3 * 3 - 1
     assert mtx.shape[0] == nonzero_pix
@@ -165,10 +145,10 @@ def test_shift2():
 
 @pytest.mark.parametrize("xp", [np, da])
 def test_combine_paired_cubes(xp):
-    cube_1 = xp.arange(9).reshape(3, 3)[core.newaxis, :, :]
-    cube_1 = xp.repeat(cube_1, 10, axis=0)
-    cube_2 = xp.arange(9).reshape(3, 3).T[core.newaxis, :, :]
-    cube_2 = xp.repeat(cube_2, 10, axis=0)
+    cube_1 = np.arange(9).reshape(3, 3)[np.newaxis, :, :]
+    cube_1 = np.repeat(cube_1, 10, axis=0)
+    cube_2 = np.arange(9).reshape(3, 3).T[np.newaxis, :, :]
+    cube_2 = np.repeat(cube_2, 10, axis=0)
     mask_upper = np.asarray(
         [
             [False, True, True],
@@ -178,8 +158,6 @@ def test_combine_paired_cubes(xp):
     )
     mask_lower = mask_upper.T
     out_cube = improc.combine_paired_cubes(cube_1, cube_2, mask_upper, mask_lower)
-    if xp is da:
-        out_cube = out_cube.compute()
     ref = np.array([[[np.nan, 1.0, 2.0], [1.0, np.nan, 5.0], [2.0, 5.0, np.nan]]])
     # can't compare nan == nan, so...
     assert np.all(np.nan_to_num(ref) == np.nan_to_num(out_cube))
@@ -188,8 +166,6 @@ def test_combine_paired_cubes(xp):
     out_cube = improc.combine_paired_cubes(
         cube_1, cube_2, mask_upper, mask_lower, fill_value=0
     )
-    if xp is da:
-        out_cube = out_cube.compute()
     ref = np.array([[[0, 1.0, 2.0], [1.0, 0, 5.0], [2.0, 5.0, 0]]])
     assert np.all(ref == out_cube)
 
@@ -200,15 +176,9 @@ def test_derotate_cube(xp):
     data[0, 1, 0] = 1
     data[1, 2, 1] = 1
     data[2, 1, 2] = 1
-    data = xp.asarray(data)
-    if xp is da:
-        data = da.repeat(data, 10, axis=0)
-    angles = xp.asarray([-90, 0, 90])
-    if xp is da:
-        angles = da.repeat(angles, 10, axis=0)
+    data = np.asarray(data)
+    angles = np.asarray([-90, 0, 90])
     out_cube = improc.derotate_cube(data, angles)
-    if xp is da:
-        out_cube = out_cube.compute()
     assert np.all(out_cube[:, 2, 1] > 0.99)
 
 

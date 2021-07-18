@@ -146,7 +146,7 @@ def unwrap_image(image, good_pix_mask):
         to each entry in the vectorized image
     """
     xp = core.get_array_module(image)
-    indexer = (core.newaxis,) + tuple(slice(None, None) for _ in image.shape)
+    indexer = (np.newaxis,) + tuple(slice(None, None) for _ in image.shape)
     cube, subset_idxs = unwrap_cube(image[indexer], good_pix_mask)
     return cube[:, 0], subset_idxs
 
@@ -209,34 +209,10 @@ def wrap_vector(image_vec, shape, subset_idxs, fill_value=np.nan):
     image : array of shape ``shape``
     """
     xp = core.get_array_module(image_vec)
-    matrix = image_vec[:, core.newaxis]
+    matrix = image_vec[:, np.newaxis]
     cube = wrap_matrix(matrix, (1,) + shape, subset_idxs, fill_value=fill_value)
     return cube[0]
 
-
-def quick_derotate(cube, angles):
-    """Rotate each plane of `cube` by the corresponding entry
-    in `angles`, interpreted as deg E of N when N +Y and E +X
-    (CCW when 0, 0 at lower left)
-
-    Parameters
-    ----------
-    cube : array (planes, xpix, ypix)
-    angles : array (planes,)
-
-    Returns
-    -------
-    outimg : array (xpix, ypix)
-    """
-    outimg = np.zeros(cube.shape[1:])
-    for i in range(cube.shape[0]):
-        image = cube[i]
-        if core.get_array_module(image) is da:
-            image = image.compute()
-        # n.b. skimage rotates CW by default, so we negate
-        outimg += skimage.transform.rotate(image, -angles[i])
-
-    return outimg
 
 
 def mask_arc(
@@ -488,6 +464,19 @@ def combine_paired_cubes(cube_1, cube_2, mask_1, mask_2, fill_value=np.nan):
 
 
 def derotate_cube(cube, derotation_angles):
+    """Rotate each plane of `cube` by the corresponding entry
+    in `derotation_angles`, interpreted as deg E of N when N +Y and
+    E +X (CCW when 0, 0 at lower left)
+
+    Parameters
+    ----------
+    cube : array (planes, xpix, ypix)
+    derotation_angles : array (planes,)
+
+    Returns
+    -------
+    output : array (xpix, ypix)
+    """
     if cube.shape[0] != derotation_angles.shape[0]:
         raise ValueError("Number of cube planes and derotation angles must match")
     output = np.zeros_like(cube)
@@ -1118,28 +1107,6 @@ def compute_template_scale_factors(
     saturated_pixel_threshold : float,
 ):
     radii, profile = trim_radial_profile(template_array)
-    xp = core.get_array_module(data_cube)
-    if xp is da:
-        def _collapsed_blockwise(j_chunks, *args):
-            chunks = []
-            for k_chunk in j_chunks:
-                combined_chunk = np.concatenate(k_chunk, axis=2)
-                chunks.append(combined_chunk)
-            return _block_compute_template_scale_factors(np.concatenate(chunks, axis=1), *args)
 
-        return da.blockwise(
-            _collapsed_blockwise,
-            "i",
-            data_cube,
-            "ijk",
-            radii,
-            None,
-            profile,
-            None,
-            saturated_pixel_threshold,
-            None,
-            dtype=data_cube.dtype
-        )
-    else:
-        return _block_compute_template_scale_factors(data_cube, radii, profile, saturated_pixel_threshold)
+    return _block_compute_template_scale_factors(data_cube, radii, profile, saturated_pixel_threshold)
 

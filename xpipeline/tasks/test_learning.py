@@ -1,5 +1,6 @@
 import numpy as np
-from .learning import train_test_split, minimal_downdate, drop_idx_range_cols
+from .learning import train_test_split, minimal_downdate
+from ..utils import drop_idx_range_cols
 
 
 def test_train_test_split():

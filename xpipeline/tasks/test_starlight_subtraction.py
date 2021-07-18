@@ -6,10 +6,6 @@ import pytest
 from .. import pipelines
 from .. import core
 
-cp = core.cupy
-da = core.dask_array
-torch = core.torch
-
 from . import starlight_subtraction, improc, characterization, learning
 
 ABSIL_GOOD_SNR_THRESHOLD = 8.36
@@ -35,16 +31,14 @@ def test_end_to_end(xp, decomposer, snr_threshold):
     good_pix_mask = xp.asarray(np.average(data["cube"], axis=0) < threshold)
     cube = xp.asarray(data["cube"])
     image_vecs, subset_idxs = improc.unwrap_cube(cube, good_pix_mask)
-    # image_vecs_meansub, mean_vec = starbgone.mean_subtract_vecs(image_vecs)
     starlight_subtracted = starlight_subtraction.klip_to_modes(
         image_vecs,
         decomposer,
         n_modes,
-        # solver=solver
     )
 
     outcube = improc.wrap_matrix(starlight_subtracted, cube.shape, subset_idxs)
-    final_image = improc.quick_derotate(outcube, data["angles"])
+    final_image = improc.derotate_cube(outcube, data["angles"])
 
     r_px, pa_deg = 18.4, -42.8
     fwhm_naco = 4
