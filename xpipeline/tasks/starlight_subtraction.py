@@ -6,7 +6,6 @@ from collections.abc import Callable
 import numpy as np
 import dask.array as da
 import distributed.protocol
-from scipy import linalg
 from numba import njit
 import numba
 import time
@@ -172,12 +171,7 @@ def _eigh_full_decomposition(mtx, k_klip):
     mtx_c = np.flip(mtx_c_out, axis=1)[:,:k_klip]
     return lambda_values, mtx_c
 
-def _eigh_top_k(mtx, k_klip):
-    n = mtx.shape[0]
-    lambda_values_out, mtx_c_out = linalg.eigh(mtx, subset_by_index=[n - k_klip, n - 1])
-    lambda_values = np.flip(lambda_values_out)[:k_klip]
-    mtx_c = np.flip(mtx_c_out, axis=1)[:,:k_klip]
-    return lambda_values, mtx_c
+
 
 def klip_mtx_covariance(image_vecs_meansub : np.ndarray, params : KlipParams):
     '''Apply KLIP to mean-subtracted image column vectors
@@ -210,9 +204,9 @@ def klip_mtx_covariance(image_vecs_meansub : np.ndarray, params : KlipParams):
             )
             min_excluded_idx = max(min_excluded_idx, 0)
             max_excluded_idx = min(n_images, max_excluded_idx)
-            mtx_e = utils.drop_idx_range_rows_cols(mtx_e_all, min_excluded_idx, max_excluded_idx)
+            mtx_e = utils.drop_idx_range_rows_cols(mtx_e_all, min_excluded_idx, max_excluded_idx + 1)
             lambda_values, mtx_c = params.decomposer(mtx_e, k_klip)
-            ref_subset = np.hstack((image_vecs_meansub[:,:min_excluded_idx], image_vecs_meansub[:,max_excluded_idx:]))
+            ref_subset = np.hstack((image_vecs_meansub[:,:min_excluded_idx], image_vecs_meansub[:,max_excluded_idx+1:]))
             eigenimages = ref_subset @ (mtx_c * np.power(lambda_values, -1/2))
 
         meansub_target = image_vecs_meansub[:,i]
@@ -287,7 +281,7 @@ def klip_chunk_svd(
                 )
                 eigenimages = new_u[:, :k_klip]
             else:
-                subset_image_vecs = utils.drop_idx_range_cols(image_vecs_meansub, min_excluded_idx, max_excluded_idx)
+                subset_image_vecs = utils.drop_idx_range_cols(image_vecs_meansub, min_excluded_idx, max_excluded_idx + 1)
                 eigenimages, _, _ = learning._numba_svd_wrap(subset_image_vecs, k_klip)
         else:
             eigenimages = mtx_u0
@@ -374,5 +368,5 @@ def make_good_pix_mask(
 DEFAULT_DECOMPOSERS = {
     constants.KlipStrategy.DOWNDATE_SVD: learning.generic_svd,
     constants.KlipStrategy.SVD: learning.generic_svd,
-    constants.KlipStrategy.COVARIANCE: _eigh_top_k,
+    constants.KlipStrategy.COVARIANCE: learning.eigh_top_k,
 }

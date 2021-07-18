@@ -2,6 +2,7 @@ import logging
 import random
 import numpy as np
 from .. import core
+from scipy import linalg
 
 from scipy.sparse.linalg import aslinearoperator, svds
 
@@ -102,6 +103,12 @@ def generic_svd(mtx_x, n_modes):
     mtx_v = mtx_vt.T
     return mtx_u[:, :n_modes], diag_s[:n_modes], mtx_v[:, :n_modes]
 
+def eigh_top_k(mtx, k_klip):
+    n = mtx.shape[0]
+    lambda_values_out, mtx_c_out = linalg.eigh(mtx, subset_by_index=[n - k_klip, n - 1])
+    lambda_values = np.flip(lambda_values_out)[:k_klip]
+    mtx_c = np.flip(mtx_c_out, axis=1)[:,:k_klip]
+    return lambda_values, mtx_c
 
 def cpu_top_k_svd_arpack(array, n_modes=None):
     """Calls scipy.sparse.linalg.svds to compute top `n_modes`

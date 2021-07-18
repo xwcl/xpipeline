@@ -71,18 +71,20 @@ def test_inject_signals():
 
 
 @pytest.mark.parametrize('strategy,reuse,snr_threshold,decomposer', [
-    (constants.KlipStrategy.COVARIANCE, False, 21.2, starlight_subtraction._eigh_full_decomposition),
-    (constants.KlipStrategy.COVARIANCE, True, 21.2, starlight_subtraction._eigh_full_decomposition),
-    (constants.KlipStrategy.COVARIANCE, False, 21.2, starlight_subtraction._eigh_top_k),
-    (constants.KlipStrategy.COVARIANCE, True, 21.2, starlight_subtraction._eigh_top_k),
-    (constants.KlipStrategy.DOWNDATE_SVD, False, 21.2, None),
+    (constants.KlipStrategy.COVARIANCE, False, 8.37, starlight_subtraction._eigh_full_decomposition),
+    (constants.KlipStrategy.COVARIANCE, True, 8.37, starlight_subtraction._eigh_full_decomposition),
+    (constants.KlipStrategy.COVARIANCE, False, 8.37, starlight_subtraction._eigh_top_k),
+    (constants.KlipStrategy.COVARIANCE, True, 8.37, starlight_subtraction._eigh_top_k),
+    (constants.KlipStrategy.SVD, False, 8.37, None),
+    (constants.KlipStrategy.SVD, True, 4.41, None),
+    (constants.KlipStrategy.DOWNDATE_SVD, False, 8.41, None),
 ])
 def test_end_to_end(strategy, reuse, snr_threshold, decomposer):
     res_handle = resources.open_binary(
         "xpipeline.ref", "naco_betapic_preproc_absil2013_gonzalez2017.npz"
     )
     data = np.load(res_handle)
-    n_modes = 9
+    n_modes = 50
     threshold = 2200  # fake, just to test masking
     good_pix_mask = np.average(data["cube"], axis=0) < threshold
     sci_arr = data["cube"]
