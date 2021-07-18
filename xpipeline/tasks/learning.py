@@ -110,6 +110,13 @@ def eigh_top_k(mtx, k_klip):
     mtx_c = np.flip(mtx_c_out, axis=1)[:,:k_klip]
     return lambda_values, mtx_c
 
+def eigh_full_decomposition(mtx, k_klip):
+    lambda_values_out, mtx_c_out = linalg.eigh(mtx, np.eye(mtx.shape[0]), driver="gvd")
+    # flip so evals are descending, truncate to k_klip
+    lambda_values = np.flip(lambda_values_out)[:k_klip]
+    mtx_c = np.flip(mtx_c_out, axis=1)[:,:k_klip]
+    return lambda_values, mtx_c
+
 def cpu_top_k_svd_arpack(array, n_modes=None):
     """Calls scipy.sparse.linalg.svds to compute top `n_modes`
     singular vectors.  Returns U s V such that

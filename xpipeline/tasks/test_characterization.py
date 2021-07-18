@@ -10,9 +10,8 @@ from .characterization import (
     reduce_apertures,
     calc_snr_mawet,
 )
-from . import improc
+from . import improc, learning, characterization, starlight_subtraction
 from .. import core, pipelines, constants
-from xpipeline.tasks import characterization, starlight_subtraction
 
 log = logging.getLogger(__name__)
 
@@ -71,10 +70,10 @@ def test_inject_signals():
 
 
 @pytest.mark.parametrize('strategy,reuse,snr_threshold,decomposer', [
-    (constants.KlipStrategy.COVARIANCE, False, 8.37, starlight_subtraction._eigh_full_decomposition),
-    (constants.KlipStrategy.COVARIANCE, True, 8.37, starlight_subtraction._eigh_full_decomposition),
-    (constants.KlipStrategy.COVARIANCE, False, 8.37, starlight_subtraction._eigh_top_k),
-    (constants.KlipStrategy.COVARIANCE, True, 8.37, starlight_subtraction._eigh_top_k),
+    (constants.KlipStrategy.COVARIANCE, False, 8.37, learning.eigh_full_decomposition),
+    (constants.KlipStrategy.COVARIANCE, True, 8.37, learning.eigh_full_decomposition),
+    (constants.KlipStrategy.COVARIANCE, False, 8.37, learning.eigh_top_k),
+    (constants.KlipStrategy.COVARIANCE, True, 8.37, learning.eigh_top_k),
     (constants.KlipStrategy.SVD, False, 8.37, None),
     (constants.KlipStrategy.SVD, True, 4.41, None),
     (constants.KlipStrategy.DOWNDATE_SVD, False, 8.41, None),
@@ -124,7 +123,7 @@ def test_end_to_end(strategy, reuse, snr_threshold, decomposer):
 
     # can we get the same SNR from the image?
     iwa_px, owa_px = 7, 47
-    detections = characterization.locate_snr_peaks(output_image, fwhm_naco, iwa_px, owa_px, exclude_nearest=1, snr_threshold=8)
+    detections = characterization.locate_snr_peaks(output_image, fwhm_naco, iwa_px, owa_px, exclude_nearest=1, snr_threshold=snr_threshold)
     log.info(f'{detections=}')
     peak = detections[0]
     # n.b. not the same as the VIP tutorial quotes, but this is here to make sure

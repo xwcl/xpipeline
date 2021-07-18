@@ -54,7 +54,8 @@ def test_end_to_end(xp, decomposer, snr_threshold):
     "strategy, decomposer",
     [(constants.KlipStrategy.DOWNDATE_SVD, learning.generic_svd),
     (constants.KlipStrategy.SVD, learning.generic_svd),
-    (constants.KlipStrategy.COVARIANCE, learning.eigh_top_k)])
+    (constants.KlipStrategy.COVARIANCE, learning.eigh_top_k),
+    (constants.KlipStrategy.COVARIANCE, learning.eigh_full_decomposition)])
 def test_klip_mtx(strategy, decomposer):
     res_handle = resources.open_binary(
         "xpipeline.ref", "naco_betapic_preproc_absil2013_gonzalez2017.npz"
