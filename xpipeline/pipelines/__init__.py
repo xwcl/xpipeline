@@ -355,7 +355,7 @@ def evaluate_starlight_subtraction(
     injected_sci_arr = characterization.inject_signals(
         klip_input.sci_arr, derotation_angles, specs, template_psf
     )
-    outcube = klip_one(
+    outcube, mean_image = klip_one(
         KlipInput(
             injected_sci_arr, klip_input.estimation_mask, klip_input.combination_mask
         ),

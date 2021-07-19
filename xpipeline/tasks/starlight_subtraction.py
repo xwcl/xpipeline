@@ -262,7 +262,7 @@ def exclusions_to_range(n_images, current_idx, exclusion_values, exclusion_delta
     #     numba.optional(numba.float32[:,:]),
     #     numba.optional(numba.float32[:,:])
     # ),
-    parallel=True, nogil=True, cache=True
+    parallel=True, cache=True
 )
 def klip_chunk_svd(
     image_vecs_meansub, n_images, mtx_u0, diag_s0, mtx_v0, k_klip, reuse, strategy,

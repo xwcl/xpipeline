@@ -97,7 +97,7 @@ def available_cpus() -> int:
     return cpus
 
 
-@numba.njit((numba.float32[:,:], numba.intp, numba.intp), cache=True)
+@numba.njit([(the_float[:,:], numba.intp, numba.intp) for the_float in (numba.float32, numba.float64)], cache=True)
 def drop_idx_range_rows_cols(arr, min_excluded_idx, max_excluded_idx):
     '''Note exclusive upper bound: [min_excluded_idx, max_excluded_idx)'''
     rows, cols = arr.shape
@@ -119,7 +119,7 @@ def drop_idx_range_rows_cols(arr, min_excluded_idx, max_excluded_idx):
     out[min_excluded_idx:,min_excluded_idx:] = arr[max_excluded_idx:,max_excluded_idx:]
     return out
 
-@numba.njit((numba.float32[:,:], numba.intp, numba.intp), cache=True)
+@numba.njit([(the_float[:,:], numba.intp, numba.intp) for the_float in (numba.float32, numba.float64)], cache=True)
 def drop_idx_range_rows(arr, min_excluded_idx, max_excluded_idx):
     '''Note exclusive upper bound: [min_excluded_idx, max_excluded_idx)'''
     rows, cols = arr.shape
@@ -140,7 +140,7 @@ def drop_idx_range_rows(arr, min_excluded_idx, max_excluded_idx):
     out[min_excluded_idx:] = arr[max_excluded_idx:]
     return out
 
-@numba.njit((numba.float32[:,:], numba.intp, numba.intp), cache=True)
+@numba.njit([(the_float[:,:], numba.intp, numba.intp) for the_float in (numba.float32, numba.float64)], cache=True)
 def drop_idx_range_cols(arr, min_excluded_idx, max_excluded_idx):
     '''Note exclusive upper bound: [min_excluded_idx, max_excluded_idx)'''
     return drop_idx_range_rows(arr.T, min_excluded_idx, max_excluded_idx).T

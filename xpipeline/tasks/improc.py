@@ -184,7 +184,6 @@ def wrap_matrix(matrix, shape, subset_idxs, fill_value=np.nan):
     cube : array of shape ``shape``
     """
     cube = fill_value * np.ones(shape)
-    log.debug(f'{matrix.shape=}, {shape=}, {subset_idxs.shape=}')
     indexer = (slice(None, None),) + tuple(x for x in subset_idxs)
     cube[indexer] = matrix.T
     return cube
