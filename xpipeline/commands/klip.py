@@ -42,7 +42,7 @@ class Klip(InputCommand):
     mask_owa_px : int = xconf.field(default=None, help="Apply radial mask excluding pixels > owa_px from center")
     estimation_mask_path : str = xconf.field(default=None, help="Path to file shaped like single plane of input with 1s where pixels should be included in starlight estimation (intersected with saturation and annular mask)")
     combination_mask_path : str = xconf.field(default=None, help="Path to file shaped like single plane of input with 1s where pixels should be included in final combination (intersected with other masks)")
-    vapp_mask_angle : float = xconf.field(default=0, help="Angle in degrees E of N (+Y) of axis of symmetry for paired gvAPP-180 data")
+    vapp_mask_angle_deg : float = xconf.field(default=0, help="Angle in degrees E of N (+Y) of axis of symmetry for paired gvAPP-180 data")
     sample_every_n : int = xconf.field(default=1, help="Take every Nth file from inputs (for speed of debugging)")
     scale_factors_path : Optional[str] = xconf.field(help=utils.unwrap(
         """Path to FITS file with extensions for each data extension
@@ -51,6 +51,8 @@ class Klip(InputCommand):
         extension A element N is 2.0, and extension B element N is 4.0,
         then frame N from extension B will be scaled by 1/2."""
     ))
+    output_mean_image : bool = xconf.field(default=True, help="Whether to output the mean un-KLIPped image")
+    output_coverage_map : bool = xconf.field(default=True, help="Whether to output a coverage map image showing how many input images contributed to each pixel")
 
     def _get_derotation_angles(self, input_cube_hdul, obs_method):
         derotation_angles_where = obs_method["adi"]["derotation_angles"]
@@ -117,36 +119,50 @@ class Klip(InputCommand):
         from .. import pipelines
         if "vapp" in obs_method:
             left_input, right_input = klip_inputs
-            outcube = pipelines.klip_vapp_separately(left_input, right_input, klip_params, self.vapp_mask_angle)
-            outcubes = [outcube]
+            outcube, mean = pipelines.klip_vapp_separately(left_input, right_input, klip_params, self.vapp_mask_angle_deg)
+            outcubes, means = [outcube], [mean]
         else:
-            outcubes = pipelines.klip_multi(klip_inputs, klip_params)
-        return outcubes
+            outcubes, means = pipelines.klip_multi(klip_inputs, klip_params)
+        return outcubes, means
 
     def main(self):
-        from ..tasks import iofits, improc
-        output_klip_final = utils.join(self.destination, "klip_final.fits")
-        output_exptime_map = utils.join(self.destination, "exptime_map.fits")
+        from ..tasks import iofits
+        output_klip_final_fn = utils.join(self.destination, "klip_final.fits")
+        output_mean_image_fn = utils.join(self.destination, "mean_image.fits")
+        output_coverage_map_fn = utils.join(self.destination, "coverage_map.fits")
         destination = self.destination
         dest_fs = utils.get_fs(destination)
         dest_fs.makedirs(destination, exist_ok=True)
-        self.quit_if_outputs_exist([output_klip_final, output_exptime_map])
+        outputs = [output_klip_final_fn]
+        if self.output_mean_image:
+            outputs.append(output_mean_image_fn)
+        if self.output_coverage_map:
+            outputs.append(output_coverage_map_fn)
+        self.quit_if_outputs_exist(outputs)
 
         klip_inputs, obs_method, derotation_angles = self._assemble_klip_inputs(self.input)
         klip_params = self._assemble_klip_params(klip_inputs, derotation_angles)
         import time
         start = time.perf_counter()
-        outcubes = self._klip(klip_inputs, klip_params, obs_method)
-        out_image = self._assemble_out_image(obs_method, outcubes, derotation_angles)
+        outcubes, outmeans = self._klip(klip_inputs, klip_params, obs_method)
+        out_image, mean_image, coverage_image = self._assemble_out_images(klip_inputs, obs_method, outcubes, outmeans, derotation_angles)
         elapsed = time.perf_counter() - start
         log.info(f"Computed in {elapsed} sec")
 
         # log.info(f"Computing klip pipeline result...")
         # out_image = out_image.compute()
-        output_file = iofits.write_fits(
-            iofits.DaskHDUList([iofits.DaskHDU(out_image)]), output_klip_final
+        iofits.write_fits(
+            iofits.DaskHDUList([iofits.DaskHDU(out_image)]), output_klip_final_fn
         )
-        return output_file
+        if self.output_mean_image:
+            iofits.write_fits(
+                iofits.DaskHDUList([iofits.DaskHDU(mean_image)]), output_mean_image_fn
+            )
+        if self.output_coverage_map:
+            iofits.write_fits(
+                iofits.DaskHDUList([iofits.DaskHDU(coverage_image)]), output_coverage_map_fn
+            )
+
 
     def _make_exclusions(self, exclude : ExclusionConfig, derotation_angles):
         import numpy as np
@@ -258,10 +274,30 @@ class Klip(InputCommand):
             )
         return klip_inputs, obs_method, derotation_angles
 
-    def _assemble_out_image(self, obs_method, outcubes, derotation_angles):
+    def _assemble_out_images(self, klip_inputs, obs_method, outcubes, outmeans, derotation_angles):
+        import numpy as np
         from .. import pipelines
         out_image = pipelines.adi(
             outcubes[0], derotation_angles, operation=self.combine_by
         )
+        out_mean_image = outmeans[0]
+        if "vapp" in obs_method:
+            left_coverage = pipelines.adi_coverage(
+                klip_inputs[0].combination_mask,
+                derotation_angles
+            )
+            right_coverage = pipelines.adi_coverage(
+                klip_inputs[1].combination_mask,
+                derotation_angles
+            )
+            out_coverage_image = pipelines.vapp_stitch(left_coverage[np.newaxis, :, :], right_coverage[np.newaxis, :, :], self.vapp_mask_angle_deg)
+        else:
+            out_coverage_image = np.zeros_like(out_image)
+            for klip_in in klip_inputs:
+                if klip_in.combination_mask is not None:
+                    out_coverage_image += pipelines.adi_coverage(
+                        klip_in.combination_mask,
+                        derotation_angles
+                    )
 
-        return out_image
+        return out_image, out_mean_image, out_coverage_image

@@ -49,6 +49,7 @@ class EvalKlip(Klip):
         words, a value of 1 excludes two apertures total,
         one on each side)"""))
     search : SearchConfig = xconf.field(help="Configure blind search", default=SearchConfig())
+    output_klip_final : bool = xconf.field(default=True, help="Whether to save the final KLIPped image for inspection")
 
     def __post_init__(self):
         if self.companions is None:
@@ -86,9 +87,18 @@ class EvalKlip(Klip):
         destination = self.destination
         dest_fs = utils.get_fs(destination)
         dest_fs.makedirs(destination, exist_ok=True)
-        output_result = utils.join(self.destination, "result.json")
-        output_klip_final = utils.join(self.destination, "eval_klip.fits")
-        self.quit_if_outputs_exist([output_result, output_klip_final])
+        output_result_fn = utils.join(self.destination, "result.json")
+        output_klip_final_fn = utils.join(self.destination, "klip_final.fits")
+        output_mean_image_fn = utils.join(self.destination, "mean_image.fits")
+        output_coverage_map_fn = utils.join(self.destination, "coverage_map.fits")
+        outputs = [output_result_fn]
+        if self.output_klip_final:
+            outputs.append(output_klip_final_fn)
+        if self.output_mean_image:
+            outputs.append(output_mean_image_fn)
+        if self.output_coverage_map:
+            outputs.append(output_coverage_map_fn)
+        self.quit_if_outputs_exist(outputs)
 
         specs = self._load_companions()
         aperture_diameter_px = self.aperture_diameter_px
@@ -96,7 +106,6 @@ class EvalKlip(Klip):
         template_hdul = iofits.load_fits_from_path(self.template_path)
 
         dataset_path = self.input
-        srcfs = utils.get_fs(dataset_path)
         template_scale_factors = iofits.load_fits_from_path(self.template_scale_factors_path)
 
         # process like the klip command
@@ -139,11 +148,12 @@ class EvalKlip(Klip):
                 klip_inputs[0].sci_arr, derotation_angles, specs, template_psf, template_scale_factors[ext].data
             )
 
-        # compose with klip
-        outcubes = self._klip(klip_inputs, klip_params, obs_method)
-
-        # compute final like klip command
-        out_image = self._assemble_out_image(obs_method, outcubes, derotation_angles)
+        import time
+        start = time.perf_counter()
+        outcubes, outmeans = self._klip(klip_inputs, klip_params, obs_method)
+        out_image, mean_image, coverage_image = self._assemble_out_images(klip_inputs, obs_method, outcubes, outmeans, derotation_angles)
+        elapsed = time.perf_counter() - start
+        log.info(f"Computed in {elapsed} sec")
 
 
         recovered_signals = characterization.recover_signals(
@@ -158,9 +168,18 @@ class EvalKlip(Klip):
             out_image, aperture_diameter_px, self.search.iwa_px, self.search.owa_px, apertures_to_exclude, self.search.snr_threshold
         )
 
-        iofits.write_fits(
-            iofits.DaskHDUList([iofits.DaskHDU(out_image)]), output_klip_final
-        )
+        if self.output_klip_final:
+            iofits.write_fits(
+                iofits.DaskHDUList([iofits.DaskHDU(out_image)]), output_klip_final_fn
+            )
+        if self.output_mean_image:
+            iofits.write_fits(
+                iofits.DaskHDUList([iofits.DaskHDU(mean_image)]), output_mean_image_fn
+            )
+        if self.output_coverage_map:
+            iofits.write_fits(
+                iofits.DaskHDUList([iofits.DaskHDU(coverage_image)]), output_coverage_map_fn
+            )
 
         end = time.perf_counter()
         time_elapsed_sec = end - start
@@ -172,11 +191,11 @@ class EvalKlip(Klip):
         log.info(f"Result of KLIP + ADI signal injection and recovery:")
         log.info(pformat(payload))
 
-        with fsspec.open(output_result, "wb") as fh:
+        with fsspec.open(output_result_fn, "wb") as fh:
             payload_str = orjson.dumps(
                 payload, option=orjson.OPT_SERIALIZE_NUMPY | orjson.OPT_INDENT_2
             )
             fh.write(payload_str)
             fh.write(b"\n")
 
-        return output_result
+        return output_result_fn
