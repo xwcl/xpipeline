@@ -44,6 +44,13 @@ class Klip(InputCommand):
     combination_mask_path : str = xconf.field(default=None, help="Path to file shaped like single plane of input with 1s where pixels should be included in final combination (intersected with other masks)")
     vapp_mask_angle : float = xconf.field(default=0, help="Angle in degrees E of N (+Y) of axis of symmetry for paired gvAPP-180 data")
     sample_every_n : int = xconf.field(default=1, help="Take every Nth file from inputs (for speed of debugging)")
+    scale_factors_path : Optional[str] = xconf.field(help=utils.unwrap(
+        """Path to FITS file with extensions for each data extension
+        containing 1D arrays of scale factors whose ratios will match
+        relative amplitude between extensions (e.g. vAPP PSFs). If
+        extension A element N is 2.0, and extension B element N is 4.0,
+        then frame N from extension B will be scaled by 1/2."""
+    ))
 
     def _get_derotation_angles(self, input_cube_hdul, obs_method):
         derotation_angles_where = obs_method["adi"]["derotation_angles"]
@@ -183,10 +190,12 @@ class Klip(InputCommand):
         return klip_params
 
     def _assemble_klip_inputs(self, dataset_path):
-        # import dask.array as da
+        import numpy as np
         from .. import pipelines
         from ..tasks import iofits, improc
         input_cube_hdul = iofits.load_fits_from_path(dataset_path)
+        if self.scale_factors_path is not None:
+            scale_factors_hdul = iofits.load_fits_from_path(self.scale_factors_path)
 
         obs_method = utils.parse_obs_method(input_cube_hdul[0].header["OBSMETHD"])
         derotation_angles = self._get_derotation_angles(input_cube_hdul, obs_method)
@@ -199,6 +208,14 @@ class Klip(InputCommand):
 
             sci_arr_left = self._get_sci_arr(input_cube_hdul, left_extname)
             sci_arr_right = self._get_sci_arr(input_cube_hdul, right_extname)
+            if self.scale_factors_path is not None:
+                scale_left = self._get_sci_arr(scale_factors_hdul, left_extname)
+                scale_right = self._get_sci_arr(scale_factors_hdul, right_extname)
+            else:
+                log.info("Using ratio of per-frame median values as proxy for inter-PSF scaling")
+                scale_left = np.nanmedian(sci_arr_left, axis=(1,2))
+                scale_right = np.nanmedian(sci_arr_right, axis=(1,2))
+            sci_arr_right = sci_arr_right * (scale_left / scale_right)
 
             estimation_mask_left, combination_mask_left = self._make_masks(
                 sci_arr_left, left_extname

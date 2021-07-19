@@ -36,7 +36,7 @@ class EvalKlip(Klip):
         multiplying by the contrast gives an appropriately
         scaled planet PSF"""
     ))
-    scale_factors_path : str = xconf.field(help=utils.unwrap(
+    template_scale_factors_path : str = xconf.field(help=utils.unwrap(
         """Path to FITS file with extensions for each data extension
         containing 1D arrays of scale factors that match template PSF
         intensity to real PSF intensity per-frame"""
@@ -97,7 +97,7 @@ class EvalKlip(Klip):
 
         dataset_path = self.input
         srcfs = utils.get_fs(dataset_path)
-        scale_factors = iofits.load_fits_from_path(self.scale_factors_path)
+        template_scale_factors = iofits.load_fits_from_path(self.template_scale_factors_path)
 
         # process like the klip command
         klip_inputs, obs_method, derotation_angles = self._assemble_klip_inputs(dataset_path)
@@ -116,14 +116,14 @@ class EvalKlip(Klip):
                 derotation_angles,
                 specs,
                 template_hdul[left_extname].data,
-                scale_factors[left_extname].data,
+                template_scale_factors[left_extname].data,
             )
             klip_inputs[1].sci_arr = characterization.inject_signals(
                 klip_inputs[1].sci_arr,
                 derotation_angles,
                 specs,
                 template_hdul[left_extname].data,
-                scale_factors[left_extname].data,
+                template_scale_factors[left_extname].data,
             )
         else:
             if "SCI" not in template_hdul and len(template_hdul[0].data.shape) == 0:
@@ -136,7 +136,7 @@ class EvalKlip(Klip):
                 ext = 0
             template_psf = template_hdul[ext].data
             klip_inputs[0].sci_arr = characterization.inject_signals(
-                klip_inputs[0].sci_arr, derotation_angles, specs, template_psf, scale_factors[ext].data
+                klip_inputs[0].sci_arr, derotation_angles, specs, template_psf, template_scale_factors[ext].data
             )
 
         # compose with klip

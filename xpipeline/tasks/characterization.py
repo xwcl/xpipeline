@@ -54,10 +54,10 @@ def inject_signals(
     angles: np.ndarray,
     specs: List[CompanionSpec],
     template: np.ndarray,
-    scale_factors: Optional[np.ndarray] = None,
+    template_scale_factors: Optional[np.ndarray] = None,
 ):
-    if scale_factors is None:
-        scale_factors = np.ones(cube.shape[0])
+    if template_scale_factors is None:
+        template_scale_factors = np.ones(cube.shape[0])
     frame_shape = cube.shape[1:]
     outcube = cube.copy()
 
@@ -67,7 +67,7 @@ def inject_signals(
                 continue
             theta = np.deg2rad(90 + spec.pa_deg - angles[frame_idx])
             dx, dy = spec.r_px * np.cos(theta), spec.r_px * np.sin(theta)
-            addition = spec.scale * scale_factors[frame_idx] * improc.ft_shift2(template, dy, dx, output_shape=frame_shape, flux_tol=None)
+            addition = spec.scale * template_scale_factors[frame_idx] * improc.ft_shift2(template, dy, dx, output_shape=frame_shape, flux_tol=None)
             outcube[frame_idx] += addition
     return outcube
 
