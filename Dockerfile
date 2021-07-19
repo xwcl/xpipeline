@@ -45,6 +45,8 @@ RUN pip install git+https://github.com/xwcl/xconf.git#egg=xconf
 RUN mkdir -p /opt/xpipeline
 ADD . /opt/xpipeline/
 RUN pip install -e /opt/xpipeline
+WORKDIR /opt/xpipeline
+RUN pytest
 RUN mkdir -p /srv
 # not used when run in Singularity
 WORKDIR /srv

@@ -29,44 +29,6 @@ def train_test_split(array, test_frac, random_state=0):
     log.info(f"Split {n_elems} into {train_subarr.shape[0]} and {test_subarr.shape[0]}")
     return train_subarr, test_subarr
 
-def torch_svd(array, full_matrices=False, n_modes=None):
-    """Wrap `torch.svd` to handle conversion between NumPy/CuPy arrays
-    and Torch tensors. Returns U s V such that
-    allclose(U @ diag(s) @ V.T, array) (with some tolerance).
-
-    Parameters
-    ----------
-    array : (m, n) array
-    full_matrices : bool (default False)
-        Whether to return full m x m U and full n x n V,
-        otherwise U is m x r and V is n x r
-        where r = min(m,n,n_modes)
-    n_modes : int or None
-        Whether to truncate the decomposition, keeping the top
-        `n_modes` greatest singular values and corresponding vectors
-
-    Returns
-    -------
-    mtx_u
-    diag_s
-    mtx_v
-    """
-    xp = core.get_array_module(array)
-    torch_array = torch.as_tensor(array)
-    # Note: use of the `out=` argument for torch.svd and preallocated
-    # output tensors proved not to save any runtime, so for simplicity
-    # they're not retained.
-    torch_mtx_u, torch_diag_s, torch_mtx_v = torch.svd(
-        torch_array, some=not full_matrices
-    )
-    mtx_u = xp.asarray(torch_mtx_u)
-    diag_s = xp.asarray(torch_diag_s)
-    mtx_v = xp.asarray(torch_mtx_v)
-    if n_modes is not None:
-        return mtx_u[:, :n_modes], diag_s[:n_modes], mtx_v[:, :n_modes]
-    else:
-        return mtx_u, diag_s, mtx_v
-
 def generic_svd(mtx_x, n_modes):
     """Computes SVD of mtx_x returning U, s, and V such that
     allclose(mtx_x, U @ diag(s) @ V.T) (with some tolerance).
@@ -101,7 +63,7 @@ def generic_svd(mtx_x, n_modes):
     """
     mtx_u, diag_s, mtx_vt = np.linalg.svd(mtx_x, full_matrices=False)
     mtx_v = mtx_vt.T
-    return mtx_u[:, :n_modes], diag_s[:n_modes], mtx_v[:, :n_modes]
+    return np.ascontiguousarray(mtx_u[:, :n_modes]), np.ascontiguousarray(diag_s[:n_modes]), np.ascontiguousarray(mtx_v[:, :n_modes])
 
 def eigh_top_k(mtx, k_klip):
     n = mtx.shape[0]
@@ -146,9 +108,9 @@ def cpu_top_k_svd_arpack(array, n_modes=None):
 def _numba_svd_wrap(mtx_x, n_modes):
     mtx_u, diag_s, mtx_vt = np.linalg.svd(mtx_x, full_matrices=False)
     mtx_v = mtx_vt.T
-    return mtx_u[:, :n_modes], diag_s[:n_modes], mtx_v[:, :n_modes]
+    return np.ascontiguousarray(mtx_u[:, :n_modes]), np.ascontiguousarray(diag_s[:n_modes]), np.ascontiguousarray(mtx_v[:, :n_modes])
 
-@numba.njit
+@numba.njit(cache=True)
 def minimal_downdate(
     mtx_u, diag_s, mtx_v, min_col_to_remove, max_col_to_remove, compute_v=False
 ):
@@ -198,9 +160,10 @@ def minimal_downdate(
     #
     # This is just the first part of the product that would have been
     # formed to make mtx_a:
-    mtx_uta = -(np.diag(diag_s) @ mtx_v[min_col_to_remove:max_col_to_remove].T)
+    mtx_v_subset = np.ascontiguousarray(mtx_v[min_col_to_remove:max_col_to_remove].T) # make contiguous so Numba's happy
+    mtx_uta = -(np.diag(diag_s) @ mtx_v_subset)
     # and just the rows of V corresponding to removed columns:
-    mtx_vtb = mtx_v[min_col_to_remove:max_col_to_remove].T
+    mtx_vtb = mtx_v_subset
 
     # Additive modification to inner diagonal matrix
     mtx_k = np.diag(diag_s)
@@ -214,7 +177,7 @@ def minimal_downdate(
     mtx_uprime, diag_sprime, mtx_vprime = _numba_svd_wrap(mtx_k, n_modes=dim_r)
 
     # Compute new SVD by applying the rotations
-    new_mtx_u = mtx_u @ mtx_uprime
+    new_mtx_u = mtx_u @ mtx_uprime  # make contiguous so Numba's happy
     new_diag_s = diag_sprime
     if compute_v:
         new_mtx_v = mtx_v @ mtx_vprime

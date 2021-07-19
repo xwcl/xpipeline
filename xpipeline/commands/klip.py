@@ -231,7 +231,7 @@ class Klip(InputCommand):
                 log.info("Using ratio of per-frame median values as proxy for inter-PSF scaling")
                 scale_left = np.nanmedian(sci_arr_left, axis=(1,2))
                 scale_right = np.nanmedian(sci_arr_right, axis=(1,2))
-            sci_arr_right = sci_arr_right * (scale_left / scale_right)
+            sci_arr_right = (scale_left / scale_right)[:,np.newaxis,np.newaxis] * sci_arr_right
 
             estimation_mask_left, combination_mask_left = self._make_masks(
                 sci_arr_left, left_extname

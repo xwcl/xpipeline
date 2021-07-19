@@ -120,7 +120,7 @@ def simple_aperture_locations_r_theta(
     return np.repeat(r_px, n_apertures), start_theta + idxs * delta_theta
 
 
-@njit
+@njit(cache=True)
 def _simple_aperture_locations(r_px, pa_deg, resolution_element_px, xcenter=0, ycenter=0):
     circumference = 2 * r_px * np.pi
     aperture_pixel_diameter = resolution_element_px
@@ -217,7 +217,7 @@ def show_simple_aperture_locations(
     return im
 
 
-@njit(numba.float64(numba.float64, numba.float64[:]))
+@njit(numba.float64(numba.float64, numba.float64[:]), cache=True)
 def _calc_snr_mawet(signal, noises):
     noise_total = 0
     num_noises = 0

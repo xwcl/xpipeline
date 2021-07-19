@@ -12,7 +12,7 @@ import time
 from .. import core, utils, constants
 from . import learning, improc
 
-@njit
+@njit(cache=True)
 def _count_max_excluded(values, delta_excluded):
     max_excluded = 0
     n_values = values.shape[0]
@@ -68,7 +68,7 @@ import logging
 log = logging.getLogger(__name__)
 
 
-def mean_subtract_vecs(image_vecs):
+def mean_subtract_vecs(image_vecs: np.ndarray):
     mean_vec = np.average(image_vecs, axis=1)
     image_vecs_meansub = image_vecs - mean_vec[:, np.newaxis]
     return image_vecs_meansub, mean_vec
@@ -142,7 +142,6 @@ def klip_to_modes(image_vecs, decomp_class, n_modes, exclude_nearest=0):
     _, n_frames = image_vecs.shape
 
     output = xp.zeros_like(image_vecs)
-    idxs = xp.arange(image_vecs.shape[1])
     decomposer = decomp_class(image_vecs, n_modes)
     for i in range(image_vecs.shape[1]):
         output[:, i] = klip_frame(
@@ -155,11 +154,14 @@ def klip_to_modes(image_vecs, decomp_class, n_modes, exclude_nearest=0):
 
 
 def klip_mtx(image_vecs, params : KlipParams):
-    image_vecs_meansub, _ = mean_subtract_vecs(image_vecs)
+    image_vecs_meansub, mean_vec = mean_subtract_vecs(image_vecs)
+    # since the klip implementation is going column-wise
+    # this will make each column contiguous
+    image_vecs_meansub = np.asfortranarray(image_vecs_meansub)
     if params.strategy in (constants.KlipStrategy.DOWNDATE_SVD, constants.KlipStrategy.SVD):
-        return klip_mtx_svd(image_vecs_meansub, params)
+        return klip_mtx_svd(image_vecs_meansub, params), mean_vec
     elif params.strategy is constants.KlipStrategy.COVARIANCE:
-        return klip_mtx_covariance(image_vecs_meansub, params)
+        return klip_mtx_covariance(image_vecs_meansub, params), mean_vec
     else:
         raise ValueError(f"Unknown strategy value in {params=}")
 
@@ -204,7 +206,7 @@ def klip_mtx_covariance(image_vecs_meansub : np.ndarray, params : KlipParams):
         output[:,i] = meansub_target - eigenimages @ (eigenimages.T @ meansub_target)
     return output
 
-@njit
+@njit(cache=True)
 def get_excluded_mask(values, exclude_within_delta, current_value=None):
     deltas = np.abs(values - current_value)
     return deltas <= exclude_within_delta
@@ -215,7 +217,7 @@ def get_excluded_mask(values, exclude_within_delta, current_value=None):
 #     numba.float32[:,:], # exclusion_values
 #     numba.float32[:] # exclusion_deltas
 # ))
-@njit
+@njit(cache=True)
 def exclusions_to_mask(n_images, current_idx, exclusion_values, exclusion_deltas):
     mask = np.zeros(n_images, dtype=numba.boolean)
     mask[current_idx] = True  # exclude at least the current frame
@@ -233,7 +235,7 @@ def exclusions_to_mask(n_images, current_idx, exclusion_values, exclusion_deltas
 #     numba.optional(numba.float32[:,:]), # exclusion_values
 #     numba.optional(numba.float32[:]), # exclusion_deltas
 # ))
-@njit
+@njit(cache=True)
 def exclusions_to_range(n_images, current_idx, exclusion_values, exclusion_deltas):
     mask = exclusions_to_mask(n_images, current_idx, exclusion_values, exclusion_deltas)
     indices = np.argwhere(mask)
@@ -246,7 +248,22 @@ def exclusions_to_range(n_images, current_idx, exclusion_values, exclusion_delta
         raise ValueError("Non-contiguous ranges to exclude detected, but we don't handle that")
     return min_excluded_idx, max_excluded_idx
 
-@njit(parallel=True)
+@njit(
+    # TODO figure out the right signature to compile this at import time
+    # (
+    #     numba.float32[:,:],
+    #     numba.intp,
+    #     numba.float32[:,:],
+    #     numba.float32[:],
+    #     numba.float32[:,:],
+    #     numba.intc,
+    #     numba.boolean,
+    #     numba.typeof(constants.KlipStrategy.SVD),
+    #     numba.optional(numba.float32[:,:]),
+    #     numba.optional(numba.float32[:,:])
+    # ),
+    parallel=True, nogil=True, cache=True
+)
 def klip_chunk_svd(
     image_vecs_meansub, n_images, mtx_u0, diag_s0, mtx_v0, k_klip, reuse, strategy,
     exclusion_values, exclusion_deltas
@@ -262,7 +279,7 @@ def klip_chunk_svd(
                 exclusion_values=exclusion_values,
                 exclusion_deltas=exclusion_deltas,
             )
-            if strategy == constants.KlipStrategy.DOWNDATE_SVD.value:
+            if strategy == constants.KlipStrategy.DOWNDATE_SVD:
                 new_u, _, _ = learning.minimal_downdate(
                     mtx_u0,
                     diag_s0,
@@ -277,6 +294,9 @@ def klip_chunk_svd(
         else:
             eigenimages = mtx_u0
         meansub_target = image_vecs_meansub[:, i]
+        # Since we may have truncated by columns above, this re-contiguou-fies
+        # and silences the NumbaPerformanceWarning
+        eigenimages = np.ascontiguousarray(eigenimages)
         output[:, i] = meansub_target - eigenimages @ (eigenimages.T @ meansub_target)
     return output
 
@@ -302,7 +322,7 @@ def klip_mtx_svd(image_vecs_meansub, params : KlipParams):
     else:
         initial_k = k_klip
     log.debug(
-        f"{image_vecs_meansub.shape=}, {k_klip=}, {initial_k=}"
+        f"{image_vecs_meansub.shape=}, {k_klip=}, {initial_k=}, {image_vecs_meansub.flags=}"
     )
     if image_vecs_meansub.shape[0] < initial_k or image_vecs_meansub.shape[1] < initial_k:
         raise ValueError(f"Number of modes requested exceeds dimensions of input")
@@ -325,7 +345,7 @@ def klip_mtx_svd(image_vecs_meansub, params : KlipParams):
         mtx_v0,
         k_klip,
         params.reuse,
-        params.strategy.value,
+        params.strategy,
         exclusion_values,
         exclusion_deltas
     )
