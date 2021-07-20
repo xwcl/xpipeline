@@ -77,7 +77,7 @@ def separate_varying_header_keywords(all_headers):
     return non_varying_kw, varying_kw, varying_dtypes
 
 
-def construct_headers_table(all_headers : list[fits.Header], mask_values_keyword : str = constants.HEADER_KW_INTERPOLATED):
+def construct_headers_table(all_headers : list[fits.Header]):
     """Given an iterable of astropy.io.fits.Header objects, identify
     repeated and varying keywords, extracting the former to a
     "static header" and the latter to a structured array

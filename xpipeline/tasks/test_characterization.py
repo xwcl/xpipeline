@@ -67,6 +67,8 @@ def test_inject_signals():
     assert np.isclose(outcube[2][128 // 2, 128 // 2 + r_px], out_pix_val)
     assert np.isclose(outcube[3][128 // 2 - r_px, 128 // 2], out_pix_val)
 
+    # TODO test for clipping in saturated case
+
 
 
 @pytest.mark.parametrize('strategy,reuse,snr_threshold,decomposer', [

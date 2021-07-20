@@ -34,45 +34,40 @@ class CombineImages(MultiInputCommand):
         all_inputs = self.get_all_inputs()
         hdul = iofits.load_fits_from_path(all_inputs[0])
         if len(all_inputs) > 1:
-            # infer planes per cube
-            exts = {}
-            log.debug('before loop')
-            for idx, extension in enumerate(hdul):
-                log.debug(f'{extension.header}')
-                if len(extension.data.shape) != 2:
-                    continue
-                if extension.header['XTENSION'] != 'IMAGE':
-                    continue
-                if 'EXTNAME' in extension.header:
-                    key = extension.header['EXTNAME']
-                else:
-                    key = idx
-                exts[key] = extension.data.shape
-            log.debug('after loop')
-            if len(exts) == 0:
-                raise RuntimeError(f"Examining {all_inputs[0]} found no suitable image extensions to combine")
-            log.debug(f'Got exts/shapes {exts}')
-
+            expected_dim = 2
+        else:
+            expected_dim = 3
+        # infer planes per cube
+        exts = {}
+        log.debug('before loop')
+        for idx, extension in enumerate(hdul):
+            log.debug(f'{extension.header}')
+            if len(extension.data.shape) != expected_dim:
+                continue
+            if extension.header['XTENSION'] != 'IMAGE':
+                continue
+            if 'EXTNAME' in extension.header:
+                key = extension.header['EXTNAME']
+            else:
+                key = idx
+            exts[key] = extension.data.shape
+        log.debug('after loop')
+        if len(exts) == 0:
+            raise RuntimeError(f"Examining {all_inputs[0]} found no suitable image extensions to combine")
+        log.debug(f'Got exts/shapes {exts}')
+        outhdus = []
+        if len(all_inputs) > 1:
             coll = LazyPipelineCollection(all_inputs).map(iofits.load_fits_from_path)
-            outhdus = []
             for extkey, extshape in exts.items():
-                output_hdu = pipelines.combine_extension_to_new_hdu(coll, op, extkey, extshape)
+                output_hdu = pipelines.combine_extension_to_new_hdu(coll, self.operation, extkey, extshape)
                 outhdus.append(output_hdu)
             outhdus = dask.compute(outhdus)[0]
-            outhdus.insert(0, iofits.DaskHDU(data=None, kind="primary"))
-            outhdus[0].header.add_history(f"Combined images from {len(all_inputs)} inputs")
-            return iofits.write_fits(iofits.DaskHDUList(outhdus), outname, overwrite=True)
         else:
-            new_data_for_exts = {}
-            for extname in hdul.extnames:
+            for extname in exts:
                 if hdul[extname].kind != 'image' or len(hdul[extname].data.shape) == 0:
                     continue
-                # import IPython
-                # IPython.embed()
-                if op is pipelines.CombineOperation.MEAN:
-                    new_data_for_exts[extname] = np.nanmean(hdul[extname].data, axis=0)
-                else:
-                    raise ValueError("Unknown operation")
-
-            new_hdul = hdul.updated_copy(new_data_for_exts=new_data_for_exts, history=f"Combined cube using {op}")
-            return iofits.write_fits(new_hdul, outname, overwrite=True)
+                new_data = pipelines.combine_cube(hdul[extname].data, operation=self.operation)
+                outhdus.append(hdul[extname].updated_copy(new_data, history=f"Combined cube using {self.operation}"))
+        outhdus.insert(0, iofits.DaskHDU(data=None, kind="primary"))
+        outhdus[0].header.add_history(f"Combined images from {len(all_inputs)} inputs")
+        return iofits.write_fits(iofits.DaskHDUList(outhdus), outname, overwrite=True)

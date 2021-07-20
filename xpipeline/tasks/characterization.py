@@ -55,6 +55,7 @@ def inject_signals(
     specs: List[CompanionSpec],
     template: np.ndarray,
     template_scale_factors: Optional[np.ndarray] = None,
+    saturation_threshold: Optional[float] = None,
 ):
     if template_scale_factors is None:
         template_scale_factors = np.ones(cube.shape[0])
@@ -68,7 +69,10 @@ def inject_signals(
             theta = np.deg2rad(90 + spec.pa_deg - angles[frame_idx])
             dx, dy = spec.r_px * np.cos(theta), spec.r_px * np.sin(theta)
             addition = spec.scale * template_scale_factors[frame_idx] * improc.ft_shift2(template, dy, dx, output_shape=frame_shape, flux_tol=None)
-            outcube[frame_idx] += addition
+            result = outcube[frame_idx] + addition  # multiple companions get accumulated in outcube copy
+            if saturation_threshold is not None:
+                result = np.clip(result, a_min=None, a_max=saturation_threshold)
+            outcube[frame_idx] = result
     return outcube
 
 

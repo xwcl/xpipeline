@@ -9,7 +9,7 @@ from astropy.io import fits
 import dask
 import dask.array as da
 import pandas as pd
-from typing import List, Union
+from typing import List, Union, Optional
 
 from .. import constants as const
 from .. import core
@@ -71,8 +71,15 @@ def compute_scale_factors(
             data_cube = da.from_array(inputs_collection_or_hdul[extname].data)
         else:
             data_cube = iofits.hdulists_to_dask_cube(inputs_collection_or_hdul.items, plane_shape, ext=extname)
-        d_factors = improc.compute_template_scale_factors(data_cube, template_hdul[extname].data, saturated_pixel_threshold)
-        delayed_hdus.append(dask.delayed(iofits.DaskHDU)(d_factors, name=extname))
+        template_array = template_hdul[extname].data
+        radii, profile = improc.trim_radial_profile(template_array)
+        d_factors = dask.delayed(np.asarray)([
+            dask.delayed(improc.template_scale_factor_from_image)(x, radii, profile, saturated_pixel_threshold=saturated_pixel_threshold)
+            for x in data_cube
+        ])
+        def _to_hdu(*args, name=None):
+            return iofits.DaskHDU(np.asarray(args), name=name)
+        delayed_hdus.append(dask.delayed(_to_hdu)(d_factors, name=extname if not isinstance(extname, int) else None))
 
     def _to_hdulist(*args):
         hdus = [iofits.DaskHDU(data=None, kind="primary")]
@@ -351,9 +358,13 @@ def evaluate_starlight_subtraction(
     aperture_diameter_px: float,
     apertures_to_exclude: int,
     adi_combine_by : CombineOperation,
+    template_scale_factors: Optional[np.ndarray] = None,
+    saturation_threshold: Optional[float] = None
 ):
     injected_sci_arr = characterization.inject_signals(
-        klip_input.sci_arr, derotation_angles, specs, template_psf
+        klip_input.sci_arr, derotation_angles, specs, template_psf,
+        template_scale_factors=template_scale_factors,
+        saturation_threshold=saturation_threshold
     )
     outcube, mean_image = klip_one(
         KlipInput(
