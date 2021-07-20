@@ -46,6 +46,8 @@ RUN mkdir -p /opt/xpipeline
 ADD . /opt/xpipeline/
 RUN pip install -e /opt/xpipeline
 WORKDIR /opt/xpipeline
+# Not only does this ensure we don't build a broken image,
+# but it also compiles those Numba functions we can ahead of time
 RUN pytest
 RUN mkdir -p /srv
 # not used when run in Singularity

@@ -21,7 +21,7 @@ ABSIL_GOOD_SNR_THRESHOLD = 8.36
         )
     ],
 )
-def test_end_to_end(xp, decomposer, snr_threshold):
+def test_downdate_end_to_end(xp, decomposer, snr_threshold):
     res_handle = resources.open_binary(
         "xpipeline.ref", "naco_betapic_preproc_absil2013_gonzalez2017.npz"
     )

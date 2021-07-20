@@ -41,7 +41,7 @@ def determine_max_threads():
 
 NUMBA_MAX_THREADS, MKL_MAX_THREADS = determine_max_threads()
 
-def set_num_threads(n_threads, n_mkl_threads=None):
+def set_num_mkl_threads(n_mkl_threads):
     if HAVE_MKL:
         if n_mkl_threads > MKL_MAX_THREADS:
             log.debug(f'{n_mkl_threads=} was > {MKL_MAX_THREADS=}')
@@ -50,14 +50,7 @@ def set_num_threads(n_threads, n_mkl_threads=None):
         mkl_set_num_threads(n_mkl_threads)
     else:
         if n_mkl_threads is not None:
-            log.debug(f'No MKL service, adding {n_mkl_threads=} to total')
-            n_threads = n_threads + n_mkl_threads
-        n_mkl_threads = 0
-    if n_threads + n_threads * n_mkl_threads > NUMBA_MAX_THREADS:
-        log.debug(f'{n_threads + n_threads * n_mkl_threads=} was > {NUMBA_MAX_THREADS=}')
-        n_threads = max(NUMBA_MAX_THREADS // (n_mkl_threads + 1), 1)
-    log.debug(f'Setting {n_threads=}')
-    numba.set_num_threads(n_threads)
+            log.debug(f'No MKL service, {n_mkl_threads=} will have no effect (install mkl-service?)')
 
 def get_array_module(arr):
     """Returns `dask.array` if `arr` is a `dask.array.core.Array`, or
