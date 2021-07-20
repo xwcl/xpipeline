@@ -39,6 +39,21 @@ RUN conda install --quiet --yes -c conda-forge \
     mkl-service \
     tbb \
     && conda clean --all -f -y
+# inspired by Open Science Grid Dockerfiles
+RUN for MNTPOINT in \
+        /cvmfs \
+        /ceph \
+        /hadoop \
+        /hdfs \
+        /lizard \
+        /mnt/hadoop \
+        /mnt/hdfs \
+        /xenon \
+        /spt \
+        /stash2 \
+    ; do \
+        mkdir -p $MNTPOINT ; \
+    done
 # RUN conda install pytorch cudatoolkit=11.1 -c pytorch -c nvidia && conda clean --all -f -y
 RUN pip install git+https://github.com/xwcl/irods_fsspec.git#egg=irods_fsspec
 RUN pip install git+https://github.com/xwcl/xconf.git#egg=xconf

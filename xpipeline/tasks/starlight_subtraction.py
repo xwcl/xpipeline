@@ -280,6 +280,7 @@ def klip_chunk_svd(
                 exclusion_values=exclusion_values,
                 exclusion_deltas=exclusion_deltas,
             )
+            print('processing', i, 'excluded from frame', min_excluded_idx, 'to', max_excluded_idx)
             if strategy == constants.KlipStrategy.DOWNDATE_SVD:
                 new_u, _, _ = learning.minimal_downdate(
                     mtx_u0,
