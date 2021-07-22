@@ -229,3 +229,11 @@ def test_max_radius():
     npix = 128
     ctr = (npix - 1) / 2
     assert improc.max_radius((ctr, ctr), (npix, npix)) == 63.5
+
+def test_encircled_energy_radial_profile():
+    test_data = np.ones((64, 64))
+    ee_r, ee, profile_r, profile = improc.encircled_energy_and_profile(test_data, improc.arr_center(test_data))
+    assert np.abs(np.pi * ee_r[-1]**2 - ee[-1]) < 1, "Encircled energy disagrees with area formula"
+    profile_values = np.unique(profile)
+    assert len(profile_values) == 1, "Profile should be identically 1 at all radii"
+    assert profile_values[0] == 1, "Profile should be identically 1 at all radii"

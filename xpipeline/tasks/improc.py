@@ -843,7 +843,6 @@ def encircled_energy_and_profile(
                 profile_value_at_rho.append(np.nan)
             else:
                 profile_value = np.nansum(data[ring_mask]) / profile_npix
-                profile_value /= profile_npix
                 profile_value_at_rho.append(profile_value)
 
     (
@@ -1109,4 +1108,3 @@ def compute_template_scale_factors(
     radii, profile = trim_radial_profile(template_array)
 
     return _block_compute_template_scale_factors(data_cube, radii, profile, saturated_pixel_threshold)
-
