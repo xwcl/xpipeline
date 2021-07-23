@@ -263,7 +263,7 @@ def exclusions_to_range(n_images, current_idx, exclusion_values, exclusion_delta
     #     numba.optional(numba.float32[:,:]),
     #     numba.optional(numba.float32[:,:])
     # ),
-    parallel=True, cache=True
+    parallel=True
 )
 def klip_chunk_svd(
     image_vecs_meansub, n_images, mtx_u0, diag_s0, mtx_v0, k_klip, reuse, strategy,
@@ -280,12 +280,16 @@ def klip_chunk_svd(
                 exclusion_values=exclusion_values,
                 exclusion_deltas=exclusion_deltas,
             )
-            print('processing', i, 'excluded from frame', min_excluded_idx, 'to', max_excluded_idx)
+            n_excluded = max_excluded_idx - min_excluded_idx + 1
+            print('processing frame', i, ', excluding', n_excluded, ' frames (from frame', min_excluded_idx, 'to', max_excluded_idx, ")")
             if strategy == constants.KlipStrategy.DOWNDATE_SVD:
+                subset_mtx_u0 = np.ascontiguousarray(mtx_u0[:,:k_klip + n_excluded])
+                subset_diag_s = diag_s0[:k_klip + n_excluded]
+                subset_mtx_v0 = np.ascontiguousarray(mtx_v0[:,:k_klip + n_excluded])
                 new_u, _, _ = learning.minimal_downdate(
-                    mtx_u0,
-                    diag_s0,
-                    mtx_v0,
+                    subset_mtx_u0,
+                    subset_diag_s,
+                    subset_mtx_v0,
                     min_col_to_remove=min_excluded_idx,
                     max_col_to_remove=max_excluded_idx + 1,
                 )

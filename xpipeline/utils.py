@@ -1,4 +1,5 @@
 import re
+import hashlib
 import numpy as np
 import os
 import os.path
@@ -145,3 +146,6 @@ def drop_idx_range_cols(arr, min_excluded_idx, max_excluded_idx):
     '''Note exclusive upper bound: [min_excluded_idx, max_excluded_idx)'''
     return drop_idx_range_rows(arr.T, min_excluded_idx, max_excluded_idx).T
 
+def str_to_sha1sum(string):
+    hasher = hashlib.sha1(string.encode('utf8'))
+    return hasher.hexdigest()

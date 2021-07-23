@@ -49,6 +49,11 @@ class Detection(Location):
     snr: float
 
 
+@dataclass
+class RecoveredSignal(CompanionSpec, Detection):
+    contrast_estimate_5sigma: float
+
+
 def inject_signals(
     cube: np.ndarray,
     angles: np.ndarray,
@@ -93,7 +98,14 @@ def recover_signals(
             exclude_nearest=apertures_to_exclude,
         )
         snr = calc_snr_mawet(vals[0], vals[1:])
-        signals.append(Detection(r_px=spec.r_px, pa_deg=spec.pa_deg, snr=snr))
+        contrast_estimate_5sigma = 5 * (spec.scale / snr)
+        signals.append(RecoveredSignal(
+            scale=spec.scale,
+            r_px=spec.r_px,
+            pa_deg=spec.pa_deg,
+            snr=snr,
+            contrast_estimate_5sigma=contrast_estimate_5sigma
+        ))
     return signals
 
 
@@ -121,7 +133,7 @@ def simple_aperture_locations_r_theta(
                 idxs,
             )
         )
-    return np.repeat(r_px, n_apertures), start_theta + idxs * delta_theta
+    return np.stack((np.repeat(r_px, n_apertures), start_theta + idxs * delta_theta), axis=-1)
 
 
 @njit(cache=True)
@@ -187,6 +199,7 @@ def show_simple_aperture_locations(
     exclude_nearest=0,
     exclude_planet=False,
     ax=None,
+    colorbar=True,
 ):
     """Plot `image` and overplot the circular apertures of diameter
     `resolution_element_px` in a ring at radius `r_px`
@@ -198,7 +211,8 @@ def show_simple_aperture_locations(
         ax = plt.gca()
     ctr = (image.shape[0] - 1) / 2
     im = ax.imshow(image)
-    plt.colorbar(im)
+    if colorbar:
+        plt.colorbar(im)
     ax.axhline(ctr, color="w", linestyle=":")
     ax.axvline(ctr, color="w", linestyle=":")
     planet_dx, planet_dy = r_pa_to_x_y(r_px, pa_deg, xcenter=0, ycenter=0)
@@ -323,8 +337,10 @@ def _calc_snr_image(convolved_image, rho, theta, mask, aperture_diameter_px, exc
             snr_image_out[y, x] = calculated_snr
     return snr_image_out
 
-def working_radii_from_aperture_spacing(image_shape, aperture_diameter_px, exclude_nearest, iwa_px=None, owa_px=None):
+def working_radii_from_aperture_spacing(image_shape, aperture_diameter_px, exclude_nearest, data_min_r_px=None, data_max_r_px=None):
     aperture_r = aperture_diameter_px / 2
+    iwa_px = data_min_r_px + aperture_diameter_px / 2 if data_min_r_px is not None else None
+    owa_px = data_max_r_px - aperture_diameter_px / 2 if data_max_r_px is not None else None
 
     # How close in can we really go?
     num_excluded = exclude_nearest * 2 + 1  # some on either side, plus signal aperture itself
@@ -346,14 +362,13 @@ def working_radii_from_aperture_spacing(image_shape, aperture_diameter_px, exclu
         max_r = owa_px
     return min_r, max_r
 
-def calc_snr_image(image, aperture_diameter_px, iwa_px, owa_px, exclude_nearest):
+def calc_snr_image(image, aperture_diameter_px, data_min_r_px, data_max_r_px, exclude_nearest):
     """Compute simple aperture photometry SNR at each pixel and return an image
     with the SNR map"""
     aperture_r = aperture_diameter_px / 2
-    min_r, max_r = working_radii_from_aperture_spacing(image.shape, aperture_diameter_px, exclude_nearest, iwa_px=iwa_px, owa_px=owa_px)
-
+    iwa_px, owa_px = working_radii_from_aperture_spacing(image.shape, aperture_diameter_px, exclude_nearest, data_min_r_px=data_min_r_px, data_max_r_px=data_max_r_px)
     rho, theta = improc.polar_coords(improc.arr_center(image), image.shape)
-    mask = (rho >= min_r) & (rho <= max_r)
+    mask = (rho >= iwa_px) & (rho <= owa_px)
     kernel_npix = math.ceil(aperture_diameter_px) + 2  # one pixel border both sides for no reason
     kernel = np.zeros((kernel_npix, kernel_npix))
     kernel_rho, _ = improc.polar_coords(improc.arr_center(kernel), kernel.shape)
@@ -363,16 +378,15 @@ def calc_snr_image(image, aperture_diameter_px, iwa_px, owa_px, exclude_nearest)
     convolved_image = fftconvolve(image, kernel, mode='same')
     snr_image = np.zeros_like(convolved_image)
     _calc_snr_image(convolved_image, rho, theta, mask, aperture_diameter_px, exclude_nearest, snr_image)
-    return snr_image
+    return snr_image, (iwa_px, owa_px)
 
 
-def locate_snr_peaks(image, aperture_diameter_px, iwa_px, owa_px, exclude_nearest, snr_threshold):
+def locate_snr_peaks(image, aperture_diameter_px, data_min_r_px, data_max_r_px, exclude_nearest, snr_threshold):
     """Compute SNR from `aperture_diameter_px` simple apertures"""
-    snr_image = calc_snr_image(image, aperture_diameter_px, iwa_px, owa_px, exclude_nearest)
+    snr_image, (iwa_px, owa_px) = calc_snr_image(image, aperture_diameter_px, data_min_r_px, data_max_r_px, exclude_nearest)
     im_ctr = improc.arr_center(snr_image)
     rho, _ = improc.polar_coords(im_ctr, snr_image.shape)
-    min_r, max_r = working_radii_from_aperture_spacing(image.shape, aperture_diameter_px, exclude_nearest, iwa_px=iwa_px, owa_px=owa_px)
-    mask = (rho >= min_r) & (rho <= max_r) & (snr_image > snr_threshold)
+    mask = (rho >= iwa_px) & (rho <= owa_px) & (snr_image > snr_threshold)
     peaks_mask = local_maxima(snr_image)
     mask &= peaks_mask
     maxima_locs = np.argwhere(mask)
@@ -387,7 +401,7 @@ def locate_snr_peaks(image, aperture_diameter_px, iwa_px, owa_px, exclude_neares
             Detection(r_px=r_px, pa_deg=pa_deg, snr=snr)
         ))
     maxima.sort()
-    return [x[1] for x in maxima[::-1]]
+    return [x[1] for x in maxima[::-1]], (iwa_px, owa_px)
 
 @numba.stencil(neighborhood=((-2, 2), (-2, 2)))
 def local_maxima(image) -> np.ndarray:

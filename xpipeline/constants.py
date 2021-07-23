@@ -9,9 +9,9 @@ DQ_BG_ESTIMATE_PIX = 0b00010000
 HEADER_KW_INTERPOLATED = "INTRPLTD"
 
 class KlipStrategy(Enum):
-    SVD = 1
-    DOWNDATE_SVD = 2
-    COVARIANCE = 3
+    SVD = "svd"
+    DOWNDATE_SVD = "downdate_svd"
+    COVARIANCE = "covariance"
 
 class ValueFilter(Enum):
     DIFFERENCE_FROM_CURRENT = 'difference_from_current'

@@ -124,8 +124,8 @@ def test_end_to_end(strategy, reuse, snr_threshold, decomposer):
     assert snr > snr_threshold
 
     # can we get the same SNR from the image?
-    iwa_px, owa_px = 7, 47
-    detections = characterization.locate_snr_peaks(output_image, fwhm_naco, iwa_px, owa_px, exclude_nearest=1, snr_threshold=snr_threshold)
+    data_min_r_px, data_max_r_px = 7, 47
+    detections, (iwa_px, owa_px) = characterization.locate_snr_peaks(output_image, fwhm_naco, data_min_r_px, data_max_r_px, exclude_nearest=1, snr_threshold=snr_threshold)
     log.info(f'{detections=}')
     peak = detections[0]
     # n.b. not the same as the VIP tutorial quotes, but this is here to make sure
@@ -213,13 +213,13 @@ def test_calc_snr_image_nan():
     aperture_diameter_px = 10
     image = (rho <= aperture_diameter_px / 2).astype(float)
     image += 0.1 * np.random.randn(*image.shape)
-    snr_image = characterization.calc_snr_image(image, aperture_diameter_px, iwa_px=13, owa_px=55, exclude_nearest=1)
+    snr_image, _ = characterization.calc_snr_image(image, aperture_diameter_px, data_min_r_px=13, data_max_r_px=55, exclude_nearest=1)
     recovered_peak = np.unravel_index(np.argmax(snr_image), snr_image.shape)
     for i in (0, 1):
         assert np.abs(recovered_peak[i] - peak[i]) <= 2, "peak more than 2 px off"
 
     # now try with a NaN
     image[0, 0] = np.nan
-    snr_image = characterization.calc_snr_image(image, aperture_diameter_px, iwa_px=13, owa_px=55, exclude_nearest=1)
+    snr_image, _ = characterization.calc_snr_image(image, aperture_diameter_px, data_min_r_px=13, data_max_r_px=55, exclude_nearest=1)
     recovered_peak2 = np.unravel_index(np.argmax(snr_image), snr_image.shape)
     assert recovered_peak == recovered_peak2

@@ -54,6 +54,7 @@ RUN for MNTPOINT in \
     ; do \
         mkdir -p $MNTPOINT ; \
     done
+RUN pip install stashcp
 # RUN conda install pytorch cudatoolkit=11.1 -c pytorch -c nvidia && conda clean --all -f -y
 RUN pip install git+https://github.com/xwcl/irods_fsspec.git#egg=irods_fsspec
 RUN pip install git+https://github.com/xwcl/xconf.git#egg=xconf

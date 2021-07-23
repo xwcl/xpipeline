@@ -14,8 +14,8 @@ log = logging.getLogger(__name__)
 
 @xconf.config
 class SearchConfig:
-    iwa_px : float = xconf.field(default=None, help="Limit blind search to pixels more than this radius from center")
-    owa_px : float = xconf.field(default=None, help="Limit blind search to pixels less than this radius from center")
+    min_r_px : float = xconf.field(default=None, help="Limit blind search to pixels more than this radius from center")
+    max_r_px : float = xconf.field(default=None, help="Limit blind search to pixels less than this radius from center")
     snr_threshold : float = xconf.field(default=5.0, help="Threshold above which peaks of interest should be reported")
 
 
@@ -186,9 +186,8 @@ class EvalKlip(Klip):
             self.search.iwa_px = self.mask_iwa_px
         if self.search.owa_px is None:
             self.search.owa_px = self.mask_owa_px
-        self.search.iwa_px, self.search.owa_px = characterization.working_radii_from_aperture_spacing(out_image.shape, self.aperture_diameter_px, apertures_to_exclude, self.search.iwa_px, self.search.owa_px)
-        all_candidates = characterization.locate_snr_peaks(
-            out_image, aperture_diameter_px, self.search.iwa_px, self.search.owa_px, apertures_to_exclude, self.search.snr_threshold
+        all_candidates, (iwa_px, owa_px) = characterization.locate_snr_peaks(
+            out_image, aperture_diameter_px, self.search.min_r_px, self.search.max_r_px, apertures_to_exclude, self.search.snr_threshold
         )
 
         if self.output_klip_final:
