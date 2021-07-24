@@ -2,7 +2,7 @@ from multiprocessing import Value
 import xconf
 import sys
 import logging
-from typing import Optional
+from typing import Optional, Union
 from enum import Enum
 from .. import utils, constants
 
@@ -15,18 +15,17 @@ class RotationUnit(Enum):
     DEG = 'deg'
 
 @xconf.config
-class AngleExclusionConfig:
-    unit : RotationUnit = xconf.field(default=RotationUnit.DEG, help="Interpret limits as either px or deg")
-    delta : float = xconf.field(default=0, help="Minimum absolute difference between target frame value and nearest included reference")
-    r_px : float = xconf.field(default=None, help="Radius at which to calculate motion in pixels, ignored when unit == 'deg'")
+class PixelRotationExclusionConfig:
+    delta_px : float = xconf.field(default=0, help="Minimum absolute difference between target frame value and nearest included reference")
+    r_px : float = xconf.field(default=None, help="Radius at which to calculate motion in pixels")
 
-    def __post_init__(self):
-        if self.r_px is None and self.unit is RotationUnit.PX:
-            raise ValueError("Cannot apply angular exclusion with units of pixels without r_px set")
+@xconf.config
+class AngleExclusionConfig:
+    delta_deg : float = xconf.field(default=0, help="Minimum absolute difference between target frame value and nearest included reference")
 
 @xconf.config
 class ExclusionConfig:
-    angle : AngleExclusionConfig = xconf.field(default=AngleExclusionConfig(), help="Apply exclusion to derotation angles")
+    angle : Union[AngleExclusionConfig,PixelRotationExclusionConfig] = xconf.field(default=AngleExclusionConfig(), help="Apply exclusion to derotation angles")
     nearest_n_frames : int = xconf.field(default=0, help="Number of additional temporally-adjacent frames (besides the target frame) to exclude from the sequence when computing the KLIP eigenimages")
 
 @xconf.config
@@ -176,20 +175,20 @@ class Klip(InputCommand):
                 num_excluded_max=2 * exclude.nearest_n_frames + 1
             )
             exclusions.append(exc)
-        if exclude.angle.delta > 0:
-            if exclude.angle.unit is RotationUnit.DEG:
-                exc = starlight_subtraction.ExclusionValues(
-                    exclude_within_delta=exclude.angle.delta,
-                    values=derotation_angles
-                )
-            elif exclude.angle.unit is RotationUnit.PX:
-                exc = starlight_subtraction.ExclusionValues(
-                    exclude_within_delta=exclude.angle.delta,
-                    values=exclude.angle.r_px * np.unwrap(np.deg2rad(derotation_angles))
-                )
-            else:
-                raise ValueError("Invalid exclude.angle.unit shouldn't happen")
+        if isinstance(exclude.angle, PixelRotationExclusionConfig) and exclude.angle.delta_px > 0:
+            exc = starlight_subtraction.ExclusionValues(
+                exclude_within_delta=exclude.angle.delta_px,
+                values=exclude.angle.r_px * np.unwrap(np.deg2rad(derotation_angles))
+            )
             exclusions.append(exc)
+        elif isinstance(exclude.angle, AngleExclusionConfig) and exclude.angle.delta_deg > 0:
+            exc = starlight_subtraction.ExclusionValues(
+                exclude_within_delta=exclude.angle.delta_deg,
+                values=derotation_angles
+            )
+            exclusions.append(exc)
+        else:
+            pass  # not an error to have delta of zero, just don't exclude based on rotation
         return exclusions
 
     def _assemble_klip_params(self, klip_inputs, derotation_angles):
