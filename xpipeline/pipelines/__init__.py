@@ -77,8 +77,8 @@ def compute_scale_factors(
             dask.delayed(improc.template_scale_factor_from_image)(x, radii, profile, saturated_pixel_threshold=saturated_pixel_threshold)
             for x in data_cube
         ])
-        def _to_hdu(*args, name=None):
-            return iofits.DaskHDU(np.asarray(args), name=name)
+        def _to_hdu(data, name=None):
+            return iofits.DaskHDU(data, name=name)
         delayed_hdus.append(dask.delayed(_to_hdu)(d_factors, name=extname if not isinstance(extname, int) else None))
 
     def _to_hdulist(*args):

@@ -21,7 +21,6 @@ from .commands import (
     scale_templates,
     klip,
     eval_klip,
-    config_grid,
 )
 
 log = logging.getLogger(__name__)
@@ -43,7 +42,6 @@ COMMANDS = {
     scale_templates.ScaleTemplates,
     klip.Klip,
     eval_klip.EvalKlip,
-    config_grid.ConfigGrid,
 }
 
 class Dispatcher(xconf.Dispatcher):
