@@ -182,10 +182,10 @@ class EvalKlip(Klip):
         recovered_signals = characterization.recover_signals(
             out_image, specs, aperture_diameter_px, apertures_to_exclude
         )
-        if self.search.iwa_px is None:
-            self.search.iwa_px = self.mask_iwa_px
-        if self.search.owa_px is None:
-            self.search.owa_px = self.mask_owa_px
+        if self.search.min_r_px is None:
+            self.search.min_r_px = self.mask_min_r_px
+        if self.search.max_r_px is None:
+            self.search.max_r_px = self.mask_max_r_px
         all_candidates, (iwa_px, owa_px) = characterization.locate_snr_peaks(
             out_image, aperture_diameter_px, self.search.min_r_px, self.search.max_r_px, apertures_to_exclude, self.search.snr_threshold
         )
@@ -210,6 +210,7 @@ class EvalKlip(Klip):
         payload['recovered_signals'] = [dataclasses.asdict(x) for x in recovered_signals]
         payload['candidates'] = [dataclasses.asdict(x) for x in all_candidates]
         payload['time_elapsed_sec'] = time_elapsed_sec
+        payload['effective_working_angles'] = {'iwa_px': iwa_px, 'owa_px': owa_px}
         log.info(f"Result of KLIP + ADI signal injection and recovery:")
         log.info(pformat(payload))
 

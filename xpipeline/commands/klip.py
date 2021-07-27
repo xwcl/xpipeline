@@ -37,8 +37,8 @@ class Klip(InputCommand):
     reuse_eigenimages : bool = xconf.field(default=False, help="Apply KLIP without adjusting the eigenimages at each step (much faster, less powerful)")
     combine_by : constants.CombineOperation = xconf.field(default=constants.CombineOperation.MEAN, help="Operation used to combine final derotated frames into a single output frame")
     saturation_threshold : Optional[float] = xconf.field(default=None, help="Value in counts above which pixels should be considered saturated and ignored")
-    mask_iwa_px : int = xconf.field(default=None, help="Apply radial mask excluding pixels < iwa_px from center")
-    mask_owa_px : int = xconf.field(default=None, help="Apply radial mask excluding pixels > owa_px from center")
+    mask_min_r_px : int = xconf.field(default=None, help="Apply radial mask excluding pixels < mask_min_r_px from center")
+    mask_max_r_px : int = xconf.field(default=None, help="Apply radial mask excluding pixels > mask_max_r_px from center")
     estimation_mask_path : str = xconf.field(default=None, help="Path to file shaped like single plane of input with 1s where pixels should be included in starlight estimation (intersected with saturation and annular mask)")
     combination_mask_path : str = xconf.field(default=None, help="Path to file shaped like single plane of input with 1s where pixels should be included in final combination (intersected with other masks)")
     vapp_mask_angle_deg : float = xconf.field(default=0, help="Angle in degrees E of N (+Y) of axis of symmetry for paired gvAPP-180 data")
@@ -91,11 +91,11 @@ class Klip(InputCommand):
         rho, _ = improc.polar_coords(
             improc.arr_center(sci_arr.shape[1:]), sci_arr.shape[1:]
         )
-        if self.mask_iwa_px is not None:
-            iwa_mask = rho >= self.mask_iwa_px
+        if self.mask_min_r_px is not None:
+            iwa_mask = rho >= self.mask_min_r_px
             estimation_mask &= iwa_mask
-        if self.mask_owa_px is not None:
-            owa_mask = rho <= self.mask_owa_px
+        if self.mask_max_r_px is not None:
+            owa_mask = rho <= self.mask_max_r_px
             estimation_mask &= owa_mask
 
         # load combination mask + intersect with others
