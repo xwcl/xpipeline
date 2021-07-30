@@ -67,7 +67,18 @@ def test_inject_signals():
     assert np.isclose(outcube[2][128 // 2, 128 // 2 + r_px], out_pix_val)
     assert np.isclose(outcube[3][128 // 2 - r_px, 128 // 2], out_pix_val)
 
-    # TODO test for clipping in saturated case
+    saturate_at = 2.5
+    outcube, _ = inject_signals(cube, angles, specs, template, saturation_threshold=saturate_at)
+    assert np.isclose(outcube[0][128 // 2, 128 // 2 - r_px], saturate_at)
+    assert np.isclose(outcube[1][128 // 2 + r_px, 128 // 2], saturate_at)
+    assert np.isclose(outcube[2][128 // 2, 128 // 2 + r_px], saturate_at)
+    assert np.isclose(outcube[3][128 // 2 - r_px, 128 // 2], saturate_at)
+
+    _, signal_only = inject_signals(cube, angles, specs, template, saturation_threshold=saturate_at, return_signal_only_cube=True)
+    assert np.isclose(signal_only[0][128 // 2, 128 // 2 - r_px], saturate_at)
+    assert np.isclose(signal_only[1][128 // 2 + r_px, 128 // 2], saturate_at)
+    assert np.isclose(signal_only[2][128 // 2, 128 // 2 + r_px], saturate_at)
+    assert np.isclose(signal_only[3][128 // 2 - r_px, 128 // 2], saturate_at)
 
 
 
