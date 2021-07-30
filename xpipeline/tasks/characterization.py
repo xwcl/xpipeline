@@ -362,17 +362,20 @@ def working_radii_from_aperture_spacing(image_shape, aperture_diameter_px, exclu
         max_r = owa_px
     return min_r, max_r
 
-def calc_snr_image(image, aperture_diameter_px, data_min_r_px, data_max_r_px, exclude_nearest):
-    """Compute simple aperture photometry SNR at each pixel and return an image
-    with the SNR map"""
-    aperture_r = aperture_diameter_px / 2
-    iwa_px, owa_px = working_radii_from_aperture_spacing(image.shape, aperture_diameter_px, exclude_nearest, data_min_r_px=data_min_r_px, data_max_r_px=data_max_r_px)
-    rho, theta = improc.polar_coords(improc.arr_center(image), image.shape)
-    mask = (rho >= iwa_px) & (rho <= owa_px)
+def tophat_kernel(aperture_diameter_px):
     kernel_npix = math.ceil(aperture_diameter_px) + 2  # one pixel border both sides for no reason
     kernel = np.zeros((kernel_npix, kernel_npix))
     kernel_rho, _ = improc.polar_coords(improc.arr_center(kernel), kernel.shape)
-    kernel[kernel_rho <= aperture_r] = 1
+    kernel[kernel_rho <= aperture_diameter_px/2] = 1
+    return kernel
+
+def calc_snr_image(image, aperture_diameter_px, data_min_r_px, data_max_r_px, exclude_nearest):
+    """Compute simple aperture photometry SNR at each pixel and return an image
+    with the SNR map"""
+    iwa_px, owa_px = working_radii_from_aperture_spacing(image.shape, aperture_diameter_px, exclude_nearest, data_min_r_px=data_min_r_px, data_max_r_px=data_max_r_px)
+    rho, theta = improc.polar_coords(improc.arr_center(image), image.shape)
+    mask = (rho >= iwa_px) & (rho <= owa_px)
+    kernel = tophat_kernel(aperture_diameter_px)
     image = image.copy()
     image[np.isnan(image)] = 0
     convolved_image = fftconvolve(image, kernel, mode='same')

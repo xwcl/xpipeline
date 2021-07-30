@@ -38,8 +38,6 @@ log = logging.getLogger(__name__)
 # They should return delayeds (for composition)
 
 
-
-
 def combine_extension_to_new_hdu(
     inputs_collection : PipelineCollection,
     operation : CombineOperation,
