@@ -131,7 +131,7 @@ class EvalKlip(Klip):
                     f"Couldn't find matching template PSFs for extensions named {left_extname} and {right_extname}"
                 )
             log.debug(f"vAPP {left_extname=} {right_extname=}")
-            klip_inputs[0].sci_arr = characterization.inject_signals(
+            klip_inputs[0].sci_arr, _ = characterization.inject_signals(
                 klip_inputs[0].sci_arr,
                 derotation_angles,
                 specs,
@@ -140,7 +140,7 @@ class EvalKlip(Klip):
                 saturation_threshold=self.saturation_threshold
             )
             log.debug("Injected left")
-            klip_inputs[1].sci_arr = characterization.inject_signals(
+            klip_inputs[1].sci_arr, _ = characterization.inject_signals(
                 klip_inputs[1].sci_arr,
                 derotation_angles,
                 specs,
@@ -166,7 +166,7 @@ class EvalKlip(Klip):
             else:
                 ext = 0
             template_psf = template_hdul[ext].data
-            klip_inputs[0].sci_arr = characterization.inject_signals(
+            klip_inputs[0].sci_arr, _ = characterization.inject_signals(
                 klip_inputs[0].sci_arr, derotation_angles, specs, template_psf, template_scale_factors[ext].data,
                 saturation_threshold=self.saturation_threshold
             )

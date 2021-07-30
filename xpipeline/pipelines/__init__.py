@@ -359,7 +359,7 @@ def evaluate_starlight_subtraction(
     template_scale_factors: Optional[np.ndarray] = None,
     saturation_threshold: Optional[float] = None
 ):
-    injected_sci_arr = characterization.inject_signals(
+    injected_sci_arr, _ = characterization.inject_signals(
         klip_input.sci_arr, derotation_angles, specs, template_psf,
         template_scale_factors=template_scale_factors,
         saturation_threshold=saturation_threshold

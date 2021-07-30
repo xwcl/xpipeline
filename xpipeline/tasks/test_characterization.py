@@ -61,7 +61,7 @@ def test_inject_signals():
     specs = [CompanionSpec(scale=scale_val, r_px=r_px, pa_deg=theta_deg)]
 
     out_pix_val = base_pix_val * scale_val
-    outcube = inject_signals(cube, angles, specs, template)
+    outcube, _ = inject_signals(cube, angles, specs, template)
     assert np.isclose(outcube[0][128 // 2, 128 // 2 - r_px], out_pix_val)
     assert np.isclose(outcube[1][128 // 2 + r_px, 128 // 2], out_pix_val)
     assert np.isclose(outcube[2][128 // 2, 128 // 2 + r_px], out_pix_val)

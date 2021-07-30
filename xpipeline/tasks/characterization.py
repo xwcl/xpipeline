@@ -61,11 +61,13 @@ def inject_signals(
     template: np.ndarray,
     template_scale_factors: Optional[np.ndarray] = None,
     saturation_threshold: Optional[float] = None,
+    return_signal_only_cube: bool = False,
 ):
     if template_scale_factors is None:
         template_scale_factors = np.ones(cube.shape[0])
     frame_shape = cube.shape[1:]
     outcube = cube.copy()
+    signal_only_cube = np.zeros_like(cube) if return_signal_only_cube else None
 
     for frame_idx in range(cube.shape[0]):
         for spec in specs:
@@ -75,10 +77,19 @@ def inject_signals(
             dx, dy = spec.r_px * np.cos(theta), spec.r_px * np.sin(theta)
             addition = spec.scale * template_scale_factors[frame_idx] * improc.ft_shift2(template, dy, dx, output_shape=frame_shape, flux_tol=None)
             result = outcube[frame_idx] + addition  # multiple companions get accumulated in outcube copy
+            if return_signal_only_cube:
+                signal_only_result = signal_only_cube[frame_idx] + addition
+
+            # clip saturated pixels to max
             if saturation_threshold is not None:
                 result = np.clip(result, a_min=None, a_max=saturation_threshold)
+                if return_signal_only_cube:
+                    signal_only_result = np.clip(signal_only_result, a_min=None, a_max=saturation_threshold)
+
             outcube[frame_idx] = result
-    return outcube
+            if return_signal_only_cube:
+                signal_only_cube[frame_idx] = signal_only_result
+    return outcube, signal_only_cube
 
 
 def recover_signals(
