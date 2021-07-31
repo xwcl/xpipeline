@@ -169,9 +169,7 @@ def test_combine_paired_cubes(xp):
     ref = np.array([[[0, 1.0, 2.0], [1.0, 0, 5.0], [2.0, 5.0, 0]]])
     assert np.all(ref == out_cube)
 
-
-@pytest.mark.parametrize("xp", [np, da])
-def test_derotate_cube(xp):
+def test_derotate_cube():
     data = np.zeros((3, 3, 3))
     data[0, 1, 0] = 1
     data[1, 2, 1] = 1

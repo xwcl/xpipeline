@@ -440,27 +440,7 @@ def combine_paired_cubes(cube_1, cube_2, mask_1, mask_2, fill_value=np.nan):
     return output
 
 
-def derotate_cube(cube, derotation_angles):
-    """Rotate each plane of `cube` by the corresponding entry
-    in `derotation_angles`, interpreted as deg E of N when N +Y and
-    E +X (CCW when 0, 0 at lower left)
 
-    Parameters
-    ----------
-    cube : array (planes, xpix, ypix)
-    derotation_angles : array (planes,)
-
-    Returns
-    -------
-    output : array (xpix, ypix)
-    """
-    if cube.shape[0] != derotation_angles.shape[0]:
-        raise ValueError("Number of cube planes and derotation angles must match")
-    output = np.zeros_like(cube)
-    for idx in range(cube.shape[0]):
-        # n.b. skimage rotates CW by default, so we negate
-        output[idx] = skimage.transform.rotate(cube[idx], -derotation_angles[idx])
-    return output
 
 # @distributed.protocol.register_generic
 @dataclass
@@ -900,6 +880,7 @@ def rotation_matrix(theta):
     xform[2,2] = 1
     return xform
 
+@njit
 def make_rotation_about_center(image_shape, rotation_deg):
     '''Construct transformation matrix that maps
     (u, v) final image coordinates to (x, y) source
@@ -1194,4 +1175,27 @@ def shift2(image, dx, dy, output_shape=None, fill_value=0.0):
     xform = translation_matrix(-(dx + base_dx), -(dy + base_dy))
     output = np.zeros_like(image) if output_shape is None else np.zeros(output_shape, dtype=image.dtype)
     matrix_transform_image(image, xform, output, fill_value)
+    return output
+
+@njit(parallel=True)
+def derotate_cube(cube, derotation_angles):
+    """Rotate each plane of `cube` by the corresponding entry
+    in `derotation_angles`, interpreted as deg E of N when N +Y and
+    E +X (CCW when 0, 0 at lower left)
+
+    Parameters
+    ----------
+    cube : array (planes, xpix, ypix)
+    derotation_angles : array (planes,)
+
+    Returns
+    -------
+    output : array (xpix, ypix)
+    """
+    if cube.shape[0] != derotation_angles.shape[0]:
+        raise ValueError("Number of cube planes and derotation angles must match")
+    output = np.zeros_like(cube)
+    for idx in numba.prange(cube.shape[0]):
+        transform_mtx = make_rotation_about_center(cube[idx].shape, derotation_angles[idx])
+        matrix_transform_image(cube[idx], transform_mtx, output[idx], fill_value=0.0)
     return output
