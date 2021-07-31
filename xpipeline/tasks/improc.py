@@ -378,30 +378,6 @@ def ft_shift2(image: np.ndarray, dy: float, dx: float, flux_tol: Union[None, flo
     return new_image
 
 
-def shift2(image, dx, dy, how="bicubic", output_shape=None):
-    """Wraps scikit-image for 2D shifts with bicubic or bilinear interpolation
-
-    Direction convention: feature at (0, 0) moves to (dx, dy)
-    """
-    if output_shape is not None:
-        # compute center-to-center displacement such that
-        # supplying dx == dy == 0.0 will be a no-op (aside
-        # from changing shape)
-        orig_ctr_x, orig_ctr_y = (image.shape[1] - 1) / 2, (image.shape[0] - 1) / 2
-        new_ctr_x, new_ctr_y = (output_shape[1] - 1) / 2, (output_shape[0] - 1) / 2
-        base_dx, base_dy = new_ctr_x - orig_ctr_x, new_ctr_y - orig_ctr_y
-    else:
-        base_dx = base_dy = 0
-    order = {"bicubic": 3, "bilinear": 1}
-    tform = skimage.transform.AffineTransform(
-        translation=(-(dx + base_dx), -(dy + base_dy))
-    )
-    output = skimage.transform.warp(
-        image, tform, order=order[how], output_shape=output_shape
-    )
-    return output
-
-
 def mask_box(shape, center, size, rotation=0):
     try:
         width, height = size
@@ -899,14 +875,14 @@ def translation_matrix(dx, dy):
         [1, 0, dx],
         [0, 1, dy],
         [0, 0, 1]
-    ])
+    ], dtype=float)
 
 def rotation_matrix(theta):
     return np.array([
         [np.cos(theta), -np.sin(theta), 0],
         [np.sin(theta), np.cos(theta), 0],
         [0, 0, 1]
-    ])
+    ], dtype=float)
 
 def make_rotation_about_center(image_shape, rotation_deg):
     '''Construct transformation matrix that maps
@@ -1021,7 +997,6 @@ def matrix_transform_image(source_image, transform_mtx, dest_image, fill_value):
                     src_y, src_x = y_int + (i - 1), x_int + (j - 1)
                     cutout[i, j] = get_or_fill(source_image, src_y, src_x, fill_value)
             dest_image[dest_y, dest_x] = cpu_bicubic(x_frac, y_frac, cutout)
-
     return dest_image
 
 @njit(parallel=True, cache=True)
@@ -1164,3 +1139,21 @@ def coadd_ranges(data_cube, derotation_angles, range_spec):
     outcube = np.zeros_like(data_cube)
     values, delta = range_spec.to_values_and_delta(derotation_angles)
     return _coadd_ranges(data_cube, values, delta, outcube)
+
+def shift2(image, dx, dy, output_shape=None, fill_value=0.0):
+    """Shift image by dx, dy with bicubic interpolation
+    Direction convention: feature at (0, 0) moves to (dx, dy)
+    """
+    if output_shape is not None:
+        # compute center-to-center displacement such that
+        # supplying dx == dy == 0.0 will be a no-op (aside
+        # from changing shape)
+        orig_ctr_x, orig_ctr_y = (image.shape[1] - 1) / 2, (image.shape[0] - 1) / 2
+        new_ctr_x, new_ctr_y = (output_shape[1] - 1) / 2, (output_shape[0] - 1) / 2
+        base_dx, base_dy = new_ctr_x - orig_ctr_x, new_ctr_y - orig_ctr_y
+    else:
+        base_dx = base_dy = 0
+    xform = translation_matrix(-(dx + base_dx), -(dy + base_dy))
+    output = np.zeros_like(image) if output_shape is None else np.zeros(output_shape)
+    matrix_transform_image(image, xform, output, fill_value)
+    return output
