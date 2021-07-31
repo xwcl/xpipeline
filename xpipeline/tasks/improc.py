@@ -1061,13 +1061,6 @@ def template_scale_factor_from_image(image, template_radii, template_profile_val
     scale_factor = np.average(profile_values[sat_mask] / template_profile_values[template_mask])
     return scale_factor
 
-
-def _block_compute_template_scale_factors(cube_chunk, radii, profile, saturated_pixel_threshold):
-    return np.array([
-        template_scale_factor_from_image(x, radii, profile, saturated_pixel_threshold=saturated_pixel_threshold)
-        for x in cube_chunk
-    ])
-
 def compute_template_scale_factors(
     data_cube : np.ndarray,
     template_array : np.ndarray,
@@ -1075,7 +1068,10 @@ def compute_template_scale_factors(
 ):
     radii, profile = trim_radial_profile(template_array)
 
-    return _block_compute_template_scale_factors(data_cube, radii, profile, saturated_pixel_threshold)
+    return np.array([
+        template_scale_factor_from_image(x, radii, profile, saturated_pixel_threshold=saturated_pixel_threshold)
+        for x in data_cube
+    ])
 
 def _make_monotonic_angles_deg(angles_deg):
     angles_deg = angles_deg - np.min(angles_deg)  # shift -180 to 180 into 0 to 360
@@ -1103,7 +1099,6 @@ class AngleRangeSpec:
 class FrameIndexRangeSpec:
     nearest_n_frames : int
     def to_values_and_delta(self, derotation_angles):
-        derotation_angles = _make_monotonic_angles_deg(derotation_angles)
         return np.arange(derotation_angles.shape[0]), self.nearest_n_frames
 
 RotationRange = Union[PixelRotationRangeSpec, AngleRangeSpec, FrameIndexRangeSpec]
