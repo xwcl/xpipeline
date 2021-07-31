@@ -869,20 +869,36 @@ def encircled_energy_and_profile(
         profile_value_at_rho,
     )
 
+@njit(numba.float64[:,:](numba.float64, numba.float64), cache=True, inline='always')
 def translation_matrix(dx, dy):
     """Affine transform matrix for displacement dx, dy"""
-    return np.array([
-        [1, 0, dx],
-        [0, 1, dy],
-        [0, 0, 1]
-    ], dtype=float)
+    xform = np.zeros((3, 3))
+    xform[0,0] = 1
+    xform[0,2] = dx
+    xform[1,1] = 1
+    xform[1,2] = dy
+    xform[2,2] = 1
+    # [
+    #     [1, 0, dx],
+    #     [0, 1, dy],
+    #     [0, 0, 1]
+    # ]
+    return xform
 
+@njit(numba.float64[:,:](numba.float64), cache=True, inline='always')
 def rotation_matrix(theta):
-    return np.array([
-        [np.cos(theta), -np.sin(theta), 0],
-        [np.sin(theta), np.cos(theta), 0],
-        [0, 0, 1]
-    ], dtype=float)
+    # return np.array([
+    #     [np.cos(theta), -np.sin(theta), 0],
+    #     [np.sin(theta), np.cos(theta), 0],
+    #     [0, 0, 1]
+    # ], dtype=float)
+    xform = np.zeros((3, 3))
+    xform[0,0] = np.cos(theta)
+    xform[0,1] = -np.sin(theta)
+    xform[1,0] = np.sin(theta)
+    xform[1,1] = np.cos(theta)
+    xform[2,2] = 1
+    return xform
 
 def make_rotation_about_center(image_shape, rotation_deg):
     '''Construct transformation matrix that maps
@@ -1140,9 +1156,12 @@ def coadd_ranges(data_cube, derotation_angles, range_spec):
     values, delta = range_spec.to_values_and_delta(derotation_angles)
     return _coadd_ranges(data_cube, values, delta, outcube)
 
+@njit(cache=True)
 def shift2(image, dx, dy, output_shape=None, fill_value=0.0):
     """Shift image by dx, dy with bicubic interpolation
     Direction convention: feature at (0, 0) moves to (dx, dy)
+    If ``output_shape`` is larger than ``image.shape``, image will be drawn into the center
+    of an array of ``output_shape``
     """
     if output_shape is not None:
         # compute center-to-center displacement such that
@@ -1154,6 +1173,6 @@ def shift2(image, dx, dy, output_shape=None, fill_value=0.0):
     else:
         base_dx = base_dy = 0
     xform = translation_matrix(-(dx + base_dx), -(dy + base_dy))
-    output = np.zeros_like(image) if output_shape is None else np.zeros(output_shape)
+    output = np.zeros_like(image) if output_shape is None else np.zeros(output_shape, dtype=image.dtype)
     matrix_transform_image(image, xform, output, fill_value)
     return output
