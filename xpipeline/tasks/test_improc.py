@@ -277,8 +277,10 @@ def test_coadd_ranges():
     rpxspec = improc.PixelRotationRangeSpec(np.pi / 2, r_px=1)
     for spec in (idxspec, anglespec, rpxspec):
         print(f'{spec=}')
-        final_cube = improc.coadd_ranges(data, angles, spec)
+        final_cube, final_angles = improc.coadd_ranges(data, angles, spec)
         print(f"{final_cube=}")
         assert final_cube.shape[0] == 2
         assert final_cube[0,0,0] == 3
+        assert np.isclose(final_angles[0], 60)
         assert final_cube[1,1,0] == 3
+        assert np.isclose(final_angles[1], -30)

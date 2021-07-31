@@ -1137,8 +1137,10 @@ def combine_cube(cube : np.ndarray, operation: constants.CombineOperation):
     return out_image
 
 @njit(cache=True)
-def _coadd_ranges(data_cube, values, delta, outcube):
+def _coadd_ranges(data_cube, derotation_angles, values, delta, outcube):
     outcube = np.zeros_like(data_cube)
+    outangles = np.zeros_like(derotation_angles)
+    outnframes = np.zeros_like(derotation_angles)
     target_idx = 0
     chunk_start_idx = 0
 
@@ -1147,14 +1149,31 @@ def _coadd_ranges(data_cube, values, delta, outcube):
             target_idx += 1
             chunk_start_idx = frame_idx
             outcube[target_idx] = data_cube[chunk_start_idx]
+            outangles[target_idx] = derotation_angles[chunk_start_idx]
+            outnframes[target_idx] = 1
         else:
             outcube[target_idx] += data_cube[frame_idx]
-    return np.copy(outcube[:target_idx+1])
+            outangles[target_idx] += derotation_angles[frame_idx]
+            outnframes[target_idx] += 1
+    outcube = np.copy(outcube[:target_idx+1])
+    outangles = outangles[:target_idx+1] / outnframes[:target_idx+1]
+    return outcube, outangles
 
 def coadd_ranges(data_cube, derotation_angles, range_spec):
+    """Using derotation angles and a range specified as `range_spec`, combine chunks of
+    adjacent frames from `data_cube` and return summed data and averaged derotation angles
+    corresponding to the new frames
+
+    Returns
+    -------
+    outcube : np.ndarray
+        Array with coadded frames
+    outangles : np.ndarray
+        Array with averaged derotation angles corresponding to these frames
+    """
     outcube = np.zeros_like(data_cube)
     values, delta = range_spec.to_values_and_delta(derotation_angles)
-    return _coadd_ranges(data_cube, values, delta, outcube)
+    return _coadd_ranges(data_cube, derotation_angles, values, delta, outcube)
 
 @njit(cache=True)
 def shift2(image, dx, dy, output_shape=None, fill_value=0.0):
