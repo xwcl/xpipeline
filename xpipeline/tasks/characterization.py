@@ -53,6 +53,20 @@ class Detection(Location):
 class RecoveredSignal(CompanionSpec, Detection):
     contrast_estimate_5sigma: float
 
+@njit(parallel=True, cache=True)
+def _inject_signals(cube, angles, spec_scales, spec_r_pxs, spec_pa_degs, template, template_scale_factors):
+    frame_shape = cube.shape[1:]
+    outcube = np.zeros_like(cube)
+    for frame_idx in numba.prange(cube.shape[0]):
+        for spec_idx in range(spec_scales.size):
+            if spec_scales[spec_idx] == 0:
+                continue
+            theta = np.deg2rad(90 + spec_pa_degs[spec_idx] - angles[frame_idx])
+            dx, dy = spec_r_pxs[spec_idx] * np.cos(theta), spec_r_pxs[spec_idx] * np.sin(theta)
+            addition = spec_scales[spec_idx] * template_scale_factors[frame_idx] * improc.shift2(template, dx, dy, output_shape=frame_shape)
+            result = outcube[frame_idx] + addition  # multiple companions get accumulated in outcube
+            outcube[frame_idx] = result
+    return outcube
 
 def inject_signals(
     cube: np.ndarray,
@@ -61,34 +75,18 @@ def inject_signals(
     template: np.ndarray,
     template_scale_factors: Optional[np.ndarray] = None,
     saturation_threshold: Optional[float] = None,
-    return_signal_only_cube: bool = False,
 ):
     if template_scale_factors is None:
         template_scale_factors = np.ones(cube.shape[0])
-    frame_shape = cube.shape[1:]
-    outcube = cube.copy()
-    signal_only_cube = np.zeros_like(cube) if return_signal_only_cube else None
+    spec_scales = np.array([spec.scale for spec in specs])
+    spec_r_pxs = np.array([spec.r_px for spec in specs])
+    spec_pa_degs = np.array([spec.pa_deg for spec in specs])
 
-    for frame_idx in range(cube.shape[0]):
-        for spec in specs:
-            if spec.scale == 0:
-                continue
-            theta = np.deg2rad(90 + spec.pa_deg - angles[frame_idx])
-            dx, dy = spec.r_px * np.cos(theta), spec.r_px * np.sin(theta)
-            addition = spec.scale * template_scale_factors[frame_idx] * improc.ft_shift2(template, dy, dx, output_shape=frame_shape, flux_tol=None)
-            result = outcube[frame_idx] + addition  # multiple companions get accumulated in outcube copy
-            if return_signal_only_cube:
-                signal_only_result = signal_only_cube[frame_idx] + addition
-
-            # clip saturated pixels to max
-            if saturation_threshold is not None:
-                result = np.clip(result, a_min=None, a_max=saturation_threshold)
-                if return_signal_only_cube:
-                    signal_only_result = np.clip(signal_only_result, a_min=None, a_max=saturation_threshold)
-
-            outcube[frame_idx] = result
-            if return_signal_only_cube:
-                signal_only_cube[frame_idx] = signal_only_result
+    signal_only_cube = _inject_signals(cube, angles, spec_scales, spec_r_pxs, spec_pa_degs, template, template_scale_factors)
+    outcube = cube + signal_only_cube
+    if saturation_threshold is not None:
+        outcube = np.clip(outcube, a_min=None, a_max=saturation_threshold)
+        signal_only_cube = np.clip(signal_only_cube, a_min=None, a_max=saturation_threshold)
     return outcube, signal_only_cube
 
 
