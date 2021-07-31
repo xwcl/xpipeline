@@ -1,11 +1,7 @@
-from enum import Enum
-from multiprocessing import Pipe
 import logging
 from pprint import pformat
-from re import template
 import numpy as np
 import typing
-from astropy.io import fits
 import dask
 import dask.array as da
 import pandas as pd
@@ -308,18 +304,10 @@ def vapp_stitch(
     log.debug("done assembling vapp_stitch")
     return final_cube
 
-def combine_cube(cube : np.ndarray, operation: CombineOperation):
-    if operation is CombineOperation.MEAN:
-        out_image = np.nanmean(cube, axis=0)
-    elif operation is CombineOperation.SUM:
-        out_image = np.nansum(cube, axis=0)
-    else:
-        raise ValueError("Supported operations: average, sum")
-    return out_image
 
 def adi(cube: np.ndarray, derotation_angles: np.ndarray, operation : CombineOperation):
     derot_cube = improc.derotate_cube(cube, derotation_angles)
-    out_image = combine_cube(derot_cube, operation)
+    out_image = improc.combine_cube(derot_cube, operation)
     return out_image
 
 def adi_coverage(combination_mask, derotation_angles):
@@ -346,10 +334,9 @@ def klip(
     log.debug("done assembling")
     return outcube
 
-
 def evaluate_starlight_subtraction(
     klip_input: KlipInput,
-    derotation_angles: da.core.Array,
+    derotation_angles: np.ndarray,
     specs: List[characterization.CompanionSpec],
     template_psf: np.ndarray,
     klip_params: KlipParams,

@@ -1,5 +1,4 @@
 from enum import Enum
-import distributed.protocol
 
 DQ_BAD_PIXEL = 0b00000001
 DQ_SATURATED = 0b00000010
@@ -20,5 +19,3 @@ class ValueFilter(Enum):
 class CombineOperation(Enum):
     MEAN = 'mean'
     SUM = 'sum'
-
-# distributed.protocol.register_generic(KlipStrategy)

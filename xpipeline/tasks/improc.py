@@ -4,7 +4,7 @@ import math
 from functools import partial
 import numpy as np
 import logging
-from numba import jit, float64, int64
+from numba import njit, jit, float64, int64
 from numpy.core.numeric import count_nonzero
 from scipy.ndimage import binary_dilation
 import skimage.transform
@@ -13,7 +13,7 @@ from astropy.convolution import convolve_fft
 from astropy.convolution.kernels import Gaussian2DKernel
 from dataclasses import dataclass
 import distributed.protocol
-from .. import core
+from .. import core, constants
 
 log = logging.getLogger(__name__)
 
@@ -1108,3 +1108,63 @@ def compute_template_scale_factors(
     radii, profile = trim_radial_profile(template_array)
 
     return _block_compute_template_scale_factors(data_cube, radii, profile, saturated_pixel_threshold)
+
+def _make_monotonic_angles_deg(angles_deg):
+    angles_deg = angles_deg - np.min(angles_deg)  # shift -180 to 180 into 0 to 360
+    angles_deg = np.unwrap(angles_deg, period=360)
+    angles_deg -= angles_deg[0]
+    if angles_deg[1] - angles_deg[0] < 0:
+        angles_deg = -angles_deg
+    return angles_deg
+
+@dataclass
+class PixelRotationRangeSpec:
+    delta_px : float
+    r_px : float
+    def to_values_and_delta(self, derotation_angles):
+        derotation_angles = _make_monotonic_angles_deg(derotation_angles)
+        values = np.deg2rad(derotation_angles) * self.r_px
+        return values, self.delta_px
+@dataclass
+class AngleRangeSpec:
+    delta_deg : float
+    def to_values_and_delta(self, derotation_angles):
+        derotation_angles = _make_monotonic_angles_deg(derotation_angles)
+        return derotation_angles, self.delta_deg
+@dataclass
+class FrameIndexRangeSpec:
+    nearest_n_frames : int
+    def to_values_and_delta(self, derotation_angles):
+        derotation_angles = _make_monotonic_angles_deg(derotation_angles)
+        return np.arange(derotation_angles.shape[0]), self.nearest_n_frames
+
+RotationRange = Union[PixelRotationRangeSpec, AngleRangeSpec, FrameIndexRangeSpec]
+
+def combine_cube(cube : np.ndarray, operation: constants.CombineOperation):
+    if operation is constants.CombineOperation.MEAN:
+        out_image = np.nanmean(cube, axis=0)
+    elif operation is constants.CombineOperation.SUM:
+        out_image = np.nansum(cube, axis=0)
+    else:
+        raise ValueError("Supported operations: average, sum")
+    return out_image
+
+@njit(cache=True)
+def _coadd_ranges(data_cube, values, delta, outcube):
+    outcube = np.zeros_like(data_cube)
+    target_idx = 0
+    chunk_start_idx = 0
+
+    for frame_idx in range(data_cube.shape[0]):
+        if values[frame_idx] - values[chunk_start_idx] >= delta:
+            target_idx += 1
+            chunk_start_idx = frame_idx
+            outcube[target_idx] = data_cube[chunk_start_idx]
+        else:
+            outcube[target_idx] += data_cube[frame_idx]
+    return np.copy(outcube[:target_idx+1])
+
+def coadd_ranges(data_cube, derotation_angles, range_spec):
+    outcube = np.zeros_like(data_cube)
+    values, delta = range_spec.to_values_and_delta(derotation_angles)
+    return _coadd_ranges(data_cube, values, delta, outcube)

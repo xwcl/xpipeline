@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 import dask.array as da
-from .. import core
+from .. import constants
 from . import improc
 from .improc import (
     rough_peak_in_box,
@@ -237,3 +237,32 @@ def test_encircled_energy_radial_profile():
     profile_values = np.unique(profile)
     assert len(profile_values) == 1, "Profile should be identically 1 at all radii"
     assert profile_values[0] == 1, "Profile should be identically 1 at all radii"
+
+def test_coadd_ranges():
+    data = np.zeros((6, 3, 3))
+    angles = np.zeros(6)
+
+    data[0,0,0] = 1
+    angles[0] = 90
+    data[1,0,0] = 1
+    angles[1] = 60
+    data[2,0,0] = 1
+    angles[2] = 30
+
+    data[3,1,0] = 1
+    angles[3] = 0
+    data[4,1,0] = 1
+    angles[4] = -30
+    data[5,1,0] = 1
+    angles[5] = -60
+
+    idxspec = improc.FrameIndexRangeSpec(nearest_n_frames=3)
+    anglespec = improc.AngleRangeSpec(delta_deg=90)
+    rpxspec = improc.PixelRotationRangeSpec(np.pi / 2, r_px=1)
+    for spec in (idxspec, anglespec, rpxspec):
+        print(f'{spec=}')
+        final_cube = improc.coadd_ranges(data, angles, spec)
+        print(f"{final_cube=}")
+        assert final_cube.shape[0] == 2
+        assert final_cube[0,0,0] == 3
+        assert final_cube[1,1,0] == 3

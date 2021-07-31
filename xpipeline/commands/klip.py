@@ -10,10 +10,6 @@ from .base import InputCommand
 
 log = logging.getLogger(__name__)
 
-class RotationUnit(Enum):
-    PX = 'px'
-    DEG = 'deg'
-
 @xconf.config
 class PixelRotationExclusionConfig:
     delta_px : float = xconf.field(default=0, help="Minimum absolute difference between target frame value and nearest included reference")
