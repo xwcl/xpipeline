@@ -5,6 +5,7 @@ from functools import partial
 import numpy as np
 import logging
 from numba import njit, jit, float64, int64
+import numba
 from numpy.core.numeric import count_nonzero
 from scipy.ndimage import binary_dilation
 import skimage.transform
@@ -892,8 +893,22 @@ def encircled_energy_and_profile(
         profile_value_at_rho,
     )
 
+def translation_matrix(dx, dy):
+    """Affine transform matrix for displacement dx, dy"""
+    return np.array([
+        [1, 0, dx],
+        [0, 1, dy],
+        [0, 0, 1]
+    ])
 
-def make_transform(image_shape, rotation_deg):
+def rotation_matrix(theta):
+    return np.array([
+        [np.cos(theta), -np.sin(theta), 0],
+        [np.sin(theta), np.cos(theta), 0],
+        [0, 0, 1]
+    ])
+
+def make_rotation_about_center(image_shape, rotation_deg):
     '''Construct transformation matrix that maps
     (u, v) final image coordinates to (x, y) source
     image coordinates
@@ -913,26 +928,12 @@ def make_transform(image_shape, rotation_deg):
     transform_mtx : (3, 3) array
         The augmented matrix expressing the affine transform
     '''
-
-    def trans(dx, dy):
-        return np.array([
-            [1, 0, dx],
-            [0, 1, dy],
-            [0, 0, 1]
-        ])
-
-    def rot(theta):
-        return np.array([
-            [np.cos(theta), -np.sin(theta), 0],
-            [np.sin(theta), np.cos(theta), 0],
-            [0, 0, 1]
-        ])
-
     npix_y, npix_x = image_shape
     ctr_x, ctr_y = (npix_x - 1) / 2, (npix_y - 1) / 2
-    temp1 = trans(-ctr_x, -ctr_y)
-    temp2 = rot(np.deg2rad(-rotation_deg))
-    return trans(ctr_x, ctr_y) @ rot(np.deg2rad(-rotation_deg)) @ trans(-ctr_x, -ctr_y)
+    if rotation_deg != 0:
+        return translation_matrix(ctr_x, ctr_y) @ rotation_matrix(np.deg2rad(-rotation_deg)) @ translation_matrix(-ctr_x, -ctr_y)
+    else:
+        return np.eye(3)
 
 @jit((float64, float64, float64, float64, float64), nopython=True, cache=True)
 def cpu_cubic1d(t, f_minus1, f_0, f_1, f_2):
@@ -941,16 +942,6 @@ def cpu_cubic1d(t, f_minus1, f_0, f_1, f_2):
     c = 2 * f_minus1 - 5 * f_0 + 4 * f_1 - f_2
     d = -1 * f_minus1 + 3 * f_0 - 3 * f_1 + f_2
     return 0.5 * (a + t * b + t ** 2 * c + t ** 3 * d)
-
-@jit(float64(float64[:, :], int64, int64, float64), nopython=True, cache=True)
-def get_or_fill(arr, y, x, fill_value):
-    '''Returns arr[y, x] unless that would
-    be out of bounds, in which case returns 0.0'''
-    ny, nx = arr.shape
-    if y < ny and y >= 0 and x < nx and x >= 0:
-        return arr[y,x]
-    else:
-        return np.nan
 
 @jit(float64(float64, float64, float64[:, :]), nopython=True, cache=True)
 def cpu_bicubic(dx, dy, region):
@@ -963,6 +954,16 @@ def cpu_bicubic(dx, dy, region):
     interpolated_value = cpu_cubic1d(dy, b_minus1, b_0, b_1, b_2)
     return interpolated_value
 
+
+@jit(float64(float64[:, :], int64, int64, float64), nopython=True, cache=True)
+def get_or_fill(arr, y, x, fill_value):
+    """Returns arr[y, x] unless that would
+    be out of bounds, in which case returns `fill_value`"""
+    ny, nx = arr.shape
+    if y < ny and y >= 0 and x < nx and x >= 0:
+        return arr[y,x]
+    else:
+        return fill_value
 
 @jit(float64[:, :](float64[:, :], float64[:, :]), nopython=True, cache=True)
 def _interpolate_nonfinite(source_image, dest_image):
@@ -992,26 +993,16 @@ def _interpolate_nonfinite(source_image, dest_image):
 
     return dest_image
 
+
 def interpolate_nonfinite(source_image, dest_image=None):
     source_image = source_image.astype('=f8')
     if dest_image is None:
         dest_image = np.zeros_like(source_image)
     return _interpolate_nonfinite(source_image, dest_image)
 
-@jit(float64(float64[:, :], int64, int64, float64), nopython=True, cache=True)
-def get_or_fill(arr, y, x, fill_value):
-    """Returns arr[y, x] unless that would
-    be out of bounds, in which case returns `fill_value`"""
-    ny, nx = arr.shape
-    if y < ny and y >= 0 and x < nx and x >= 0:
-        return arr[y,x]
-    else:
-        return fill_value
-
 @jit(float64[:, :](float64[:, :], float64[:, :], float64[:, :], float64), nopython=True, cache=True)
 def matrix_transform_image(source_image, transform_mtx, dest_image, fill_value):
     transform_mtx = np.ascontiguousarray(transform_mtx)  # should be a no-op but silences NumbaPerformanceWarning
-    npix_y, npix_x = source_image.shape
     for dest_y in range(dest_image.shape[0]):
         for dest_x in range(dest_image.shape[1]):
             xform_coord = transform_mtx @ np.array([dest_x, dest_y, 1.0])
@@ -1033,12 +1024,17 @@ def matrix_transform_image(source_image, transform_mtx, dest_image, fill_value):
 
     return dest_image
 
+@njit(parallel=True, cache=True)
+def matrix_transform_cube(data_cube, transform_mtxes, dest_cube, fill_value):
+    for i in numba.prange(data_cube.shape[0]):
+        matrix_transform_image(data_cube[i], transform_mtxes[i], dest_cube[i], fill_value)
+    return dest_cube
 
-def cpu_rotate(source_image, angle_deg, dest_image=None, fill_value=np.nan):
+def rotate(source_image, angle_deg, dest_image=None, fill_value=np.nan):
     source_image = np.asarray(source_image)
     if dest_image is None:
         dest_image = np.zeros_like(source_image)
-    transform_mtx = make_transform(source_image.shape, angle_deg)
+    transform_mtx = make_rotation_about_center(source_image.shape, angle_deg)
     matrix_transform_image(source_image, transform_mtx, dest_image, fill_value)
     return dest_image
 

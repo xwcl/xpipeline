@@ -210,19 +210,35 @@ def test_rotate():
     # cpu
     image = improc.f_test(100)
     # no dest supplied
-    result1 = improc.cpu_rotate(image, 45)
+    result1 = improc.rotate(image, 45)
     # just smoke test:
     assert np.count_nonzero(result1) != 0, "CPU rotate somehow clobbered input"
     # yes dest supplied
     dest = np.zeros_like(image)
-    result2 = improc.cpu_rotate(image, 45, dest_image=dest)
+    result2 = improc.rotate(image, 45, dest_image=dest)
     assert result2 is dest, "CPU rotate supplying dest array didn't return the dest array"
     nanmask = np.isnan(result1)
     assert np.allclose(result1[~nanmask], result2[~nanmask]), "CPU rotate with supplied dest array produced different answer from newly allocated"
     # 90deg agrees
     # nb sense of angle reversed between this code and np/cp.rot90
-    result3 = improc.cpu_rotate(image, -90, fill_value=0.0)  # TODO flip arrays first and only rotate the remaining <90deg
+    result3 = improc.rotate(image, -90, fill_value=0.0)  # TODO flip arrays first and only rotate the remaining <90deg
     assert np.allclose(result3, np.rot90(image)), "CPU interpolated image disagrees with simple 90deg rotation"
+
+def test_matrix_transform_cube():
+    npix = 50
+    cube = np.array([
+        improc.f_test(npix),
+        np.rot90(improc.f_test(npix)),
+        np.rot90(np.rot90(improc.f_test(npix)))
+    ])
+    transforms = np.array([
+        improc.make_rotation_about_center((npix, npix), 0),
+        improc.make_rotation_about_center((npix, npix), -90),
+        improc.make_rotation_about_center((npix, npix), -180),
+    ])
+    outcube = np.zeros_like(cube)
+    improc.matrix_transform_cube(cube, transforms, outcube, 0)
+    assert np.allclose(cube[0], outcube[0])
 
 
 def test_max_radius():
