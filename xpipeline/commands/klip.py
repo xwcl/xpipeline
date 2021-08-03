@@ -10,24 +10,35 @@ from .base import InputCommand
 log = logging.getLogger(__name__)
 
 @xconf.config
-class PixelRotationExclusionConfig:
-    delta_px : float = xconf.field(default=0, help="Minimum absolute difference between target frame value and nearest included reference")
+class PixelRotationRangeConfig:
+    delta_px : float = xconf.field(default=0, help="Maximum difference between target frame value and matching frames")
     r_px : float = xconf.field(default=None, help="Radius at which to calculate motion in pixels")
 
 @xconf.config
-class AngleExclusionConfig:
-    delta_deg : float = xconf.field(default=0, help="Minimum absolute difference between target frame value and nearest included reference")
+class AngleRangeConfig:
+    delta_deg : float = xconf.field(default=0, help="Maximum difference between target frame value and matching frames")
 
 @xconf.config
-class ExclusionConfig:
-    angle : Union[AngleExclusionConfig,PixelRotationExclusionConfig] = xconf.field(default=AngleExclusionConfig(), help="Apply exclusion to derotation angles")
-    nearest_n_frames : int = xconf.field(default=0, help="Number of additional temporally-adjacent frames (besides the target frame) to exclude from the sequence when computing the KLIP eigenimages")
+class ExcludeRangeConfig:
+    angle : Union[AngleRangeConfig,PixelRotationRangeConfig] = xconf.field(default=AngleRangeConfig(), help="Apply exclusion to derotation angles")
+    nearest_n_frames : int = xconf.field(default=0, help="Number of additional temporally-adjacent frames on either side of the target frame to exclude from the sequence when computing the KLIP eigenimages")
+
+@xconf.config
+class CoaddFramesConfig:
+    n_frames : int = xconf.field(default=1, help="Number of frames to ")
+
+@xconf.config
+class CoaddAnglesConfig:
+    angle : Union[AngleRangeConfig,PixelRotationRangeConfig] = xconf.field(default=AngleRangeConfig(), help="Coadd frames with derotation angles within range")
+
+CoaddConfig = Union[CoaddFramesConfig, CoaddAnglesConfig]
 
 @xconf.config
 class Klip(InputCommand):
     "Subtract starlight with KLIP"
     k_klip : int = xconf.field(default=10, help="Number of modes to subtract in starlight subtraction")
-    exclude : ExclusionConfig = xconf.field(default=ExclusionConfig(), help="How to exclude frames from reference sample")
+    exclude : ExcludeRangeConfig = xconf.field(default=ExcludeRangeConfig(), help="How to exclude frames from reference sample")
+    coadd : CoaddConfig = xconf.field(default=CoaddFramesConfig(), help="How to determine ranges of frames to coadd before decomposition")
     strategy : constants.KlipStrategy = xconf.field(default=constants.KlipStrategy.DOWNDATE_SVD, help="Implementation of KLIP to use")
     reuse_eigenimages : bool = xconf.field(default=False, help="Apply KLIP without adjusting the eigenimages at each step (much faster, less powerful)")
     combine_by : constants.CombineOperation = xconf.field(default=constants.CombineOperation.MEAN, help="Operation used to combine final derotated frames into a single output frame")
@@ -46,6 +57,7 @@ class Klip(InputCommand):
         then frame N from extension B will be scaled by 1/2."""
     ))
     output_mean_image : bool = xconf.field(default=True, help="Whether to output the mean un-KLIPped image")
+    output_coadded : bool = xconf.field(default=False, help="Whether to output the data cube after coadding")
     output_coverage_map : bool = xconf.field(default=True, help="Whether to output a coverage map image showing how many input images contributed to each pixel")
 
     def _get_derotation_angles(self, input_cube_hdul, obs_method):
@@ -124,6 +136,7 @@ class Klip(InputCommand):
         output_klip_final_fn = utils.join(self.destination, "klip_final.fits")
         output_mean_image_fn = utils.join(self.destination, "mean_image.fits")
         output_coverage_map_fn = utils.join(self.destination, "coverage_map.fits")
+        output_coadded_fn = utils.join(self.destination, "coadded.fits")
         destination = self.destination
         dest_fs = utils.get_fs(destination)
         dest_fs.makedirs(destination, exist_ok=True)
@@ -132,9 +145,13 @@ class Klip(InputCommand):
             outputs.append(output_mean_image_fn)
         if self.output_coverage_map:
             outputs.append(output_coverage_map_fn)
+        if self.output_coadded:
+            outputs.append(output_coadded_fn)
         self.quit_if_outputs_exist(outputs)
 
-        klip_inputs, obs_method, derotation_angles = self._assemble_klip_inputs(self.input)
+        input_cube_hdul, obs_method = self._load_dataset(self.input)
+        klip_inputs, obs_method, derotation_angles = self._assemble_klip_inputs(input_cube_hdul, obs_method)
+        klip_inputs, derotation_angles = self._coadd_klip_inputs(klip_inputs, derotation_angles)
         klip_params = self._assemble_klip_params(klip_inputs, derotation_angles)
         import time
         start = time.perf_counter()
@@ -156,9 +173,14 @@ class Klip(InputCommand):
             iofits.write_fits(
                 iofits.DaskHDUList([iofits.DaskHDU(coverage_image)]), output_coverage_map_fn
             )
+        if self.output_coadded:
+            hdus = [iofits.DaskHDU(data=None, kind="primary"), iofits.DaskHDU(derotation_angles, name="ANGLES")]
+            for idx, kinput in enumerate(klip_inputs):
+                hdus.append(iofits.DaskHDU(kinput.sci_arr))
+            iofits.write_fits(iofits.DaskHDUList(hdus), output_coadded_fn)
 
 
-    def _make_exclusions(self, exclude : ExclusionConfig, derotation_angles):
+    def _make_exclusions(self, exclude : ExcludeRangeConfig, derotation_angles):
         import numpy as np
         from ..tasks import starlight_subtraction
         exclusions = []
@@ -170,13 +192,13 @@ class Klip(InputCommand):
                 num_excluded_max=2 * exclude.nearest_n_frames + 1
             )
             exclusions.append(exc)
-        if isinstance(exclude.angle, PixelRotationExclusionConfig) and exclude.angle.delta_px > 0:
+        if isinstance(exclude.angle, PixelRotationRangeConfig) and exclude.angle.delta_px > 0:
             exc = starlight_subtraction.ExclusionValues(
                 exclude_within_delta=exclude.angle.delta_px,
                 values=exclude.angle.r_px * np.unwrap(np.deg2rad(derotation_angles))
             )
             exclusions.append(exc)
-        elif isinstance(exclude.angle, AngleExclusionConfig) and exclude.angle.delta_deg > 0:
+        elif isinstance(exclude.angle, AngleRangeConfig) and exclude.angle.delta_deg > 0:
             exc = starlight_subtraction.ExclusionValues(
                 exclude_within_delta=exclude.angle.delta_deg,
                 values=derotation_angles
@@ -199,18 +221,24 @@ class Klip(InputCommand):
         )
         return klip_params
 
-    def _assemble_klip_inputs(self, dataset_path):
+    def _load_input(self, dataset_path):
+        from ..tasks import iofits
+        input_cube_hdul = iofits.load_fits_from_path(dataset_path)
+        obs_method = utils.parse_obs_method(input_cube_hdul[0].header["OBSMETHD"])
+        return input_cube_hdul, obs_method
+
+    def _assemble_klip_inputs(self, input_cube_hdul, obs_method):
         import numpy as np
         from .. import pipelines
-        from ..tasks import iofits, improc
-        input_cube_hdul = iofits.load_fits_from_path(dataset_path)
-        if self.scale_factors_path is not None:
-            scale_factors_hdul = iofits.load_fits_from_path(self.scale_factors_path)
+        from ..tasks import iofits
 
-        obs_method = utils.parse_obs_method(input_cube_hdul[0].header["OBSMETHD"])
+
         derotation_angles = self._get_derotation_angles(input_cube_hdul, obs_method)
 
         klip_inputs = []
+
+        if self.scale_factors_path is not None:
+            scale_factors_hdul = iofits.load_fits_from_path(self.scale_factors_path)
 
         if "vapp" in obs_method:
             left_extname = obs_method["vapp"]["left"]
@@ -221,11 +249,13 @@ class Klip(InputCommand):
             if self.scale_factors_path is not None:
                 scale_left = self._get_sci_arr(scale_factors_hdul, left_extname)
                 scale_right = self._get_sci_arr(scale_factors_hdul, right_extname)
+                template_scale_factors = [scale_left, scale_right]
             else:
                 log.info("Using ratio of per-frame median values as proxy for inter-PSF scaling")
                 scale_left = np.nanmedian(sci_arr_left, axis=(1,2))
                 scale_right = np.nanmedian(sci_arr_right, axis=(1,2))
-            sci_arr_right = (scale_left / scale_right)[:,np.newaxis,np.newaxis] * sci_arr_right
+                # right * (scale_left / scale_right) = scaled right
+                template_scale_factors = [np.ones_like(scale_left), scale_left / scale_right]
 
             estimation_mask_left, combination_mask_left = self._make_masks(
                 sci_arr_left, left_extname
@@ -266,7 +296,33 @@ class Klip(InputCommand):
                     estimation_mask, combination_mask
                 )
             )
-        return klip_inputs, obs_method, derotation_angles
+        return klip_inputs, obs_method, derotation_angles, template_scale_factors
+
+    def _coadd_klip_inputs(self, klip_inputs, derotation_angles):
+        from xpipeline.tasks import improc
+        if hasattr(self.coadd, 'n_frames'):
+            range_spec = improc.FrameIndexRangeSpec(n_frames=self.coadd.n_frames)
+        elif hasattr(self.coadd, "angle"):
+            if hasattr(self.coadd.angle, "delta_deg"):
+                range_spec = improc.AngleRangeSpec(delta_deg=self.coadd.angle.delta_deg)
+            else:
+                range_sepc = improc.PixelRotationRangeSpec(delta_px=self.coadd.angle.delta_px, r_px=self.coadd.angle.r_px)
+        else:
+            raise RuntimeError("self.coadd isn't a CoaddConfig")
+        if range_spec == improc.FrameIndexRangeSpec(n_frames=1):
+            log.debug(f"Got {range_spec=}, skipping coadd")
+            return klip_inputs, derotation_angles
+        log.debug(f"Coadding according to {range_spec=}")
+        new_angles = None
+        for kinput in klip_inputs:
+            old_shape = kinput.sci_arr.shape
+            data, angles = improc.coadd_ranges(kinput.sci_arr, derotation_angles, range_spec)
+            kinput.sci_arr = data
+            log.debug(f"Old data shape: {old_shape}, new data shape after coadding: {data.shape}")
+            if new_angles is None:
+                new_angles = angles
+            assert kinput.sci_arr.shape[0] == new_angles.shape[0]
+        return klip_inputs, new_angles
 
     def _assemble_out_images(self, klip_inputs, obs_method, outcubes, outmeans, derotation_angles):
         import numpy as np

@@ -928,7 +928,10 @@ def cpu_bicubic(dx, dy, region):
     return interpolated_value
 
 
-@jit(float64(float64[:, :], int64, int64, float64), nopython=True, cache=True)
+@jit([
+    some_float(some_float[:, :], int64, int64, some_float)
+    for some_float in (numba.float32, numba.float64)
+], nopython=True, cache=True)
 def get_or_fill(arr, y, x, fill_value):
     """Returns arr[y, x] unless that would
     be out of bounds, in which case returns `fill_value`"""
@@ -1173,6 +1176,12 @@ def shift2(image, dx, dy, output_shape=None, fill_value=0.0):
     return output
 
 @njit(parallel=True)
+def _derotate_cube(cube, derotation_angles, output):
+    for idx in numba.prange(cube.shape[0]):
+        transform_mtx = make_rotation_about_center(cube[idx].shape, derotation_angles[idx])
+        matrix_transform_image(cube[idx], transform_mtx, output[idx], fill_value=0.0)
+    return output
+
 def derotate_cube(cube, derotation_angles):
     """Rotate each plane of `cube` by the corresponding entry
     in `derotation_angles`, interpreted as deg E of N when N +Y and
@@ -1189,9 +1198,11 @@ def derotate_cube(cube, derotation_angles):
     """
     if cube.shape[0] != derotation_angles.shape[0]:
         raise ValueError("Number of cube planes and derotation angles must match")
-    cube = cube.astype(derotation_angles.dtype)
+    if not np.issubdtype(derotation_angles.dtype, np.floating):
+        derotation_angles = derotation_angles.astype(np.float32)
+    if not np.issubdtype(cube.dtype, np.floating):
+        cube = cube.astype(np.float32)
+
     output = np.zeros_like(cube)
-    for idx in numba.prange(cube.shape[0]):
-        transform_mtx = make_rotation_about_center(cube[idx].shape, derotation_angles[idx])
-        matrix_transform_image(cube[idx], transform_mtx, output[idx], fill_value=0.0)
+    _derotate_cube(cube, derotation_angles, output)
     return output

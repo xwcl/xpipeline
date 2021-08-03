@@ -277,11 +277,11 @@ def klip_one(klip_input: KlipInput, klip_params: KlipParams):
     return cubes[0], means[0]
 
 
-def klip_vapp_separately(left_input : KlipInput, right_input: KlipInput, klip_params : KlipParams, vapp_symmetry_angle : float):
+def klip_vapp_separately(left_input : KlipInput, right_input: KlipInput, klip_params : KlipParams, vapp_symmetry_angle : float, left_over_right_ratios: float):
     left_cube, left_mean = klip_one(left_input, klip_params)
     right_cube, right_mean = klip_one(right_input, klip_params)
 
-    final_cube = vapp_stitch(left_cube, right_cube, vapp_symmetry_angle)
+    final_cube = vapp_stitch(left_cube, right_cube, vapp_symmetry_angle, left_over_right_ratios)
     final_mean = vapp_stitch(left_mean[np.newaxis,:], right_mean[np.newaxis,:], vapp_symmetry_angle)
     return final_cube, final_mean
 
@@ -289,19 +289,20 @@ def vapp_stitch(
     left_cube,
     right_cube,
     vapp_symmetry_angle: float,
+    left_over_right_ratios: float
 ):
-    log.debug("assembling vapp_stitch")
+    log.debug("begin vapp_stitch")
     if right_cube.shape != left_cube.shape:
         raise ValueError("Left and right vAPP cubes must be the same shape")
     plane_shape = left_cube.shape[1:]
     left_half, right_half = vapp.mask_along_angle(plane_shape, vapp_symmetry_angle)
     final_cube = improc.combine_paired_cubes(
         left_cube,
-        right_cube,
+        left_over_right_ratios * right_cube,
         left_half,
         right_half,
     )
-    log.debug("done assembling vapp_stitch")
+    log.debug("vapp_stitch finished")
     return final_cube
 
 
@@ -347,7 +348,8 @@ def evaluate_starlight_subtraction(
     saturation_threshold: Optional[float] = None
 ):
     injected_sci_arr, _ = characterization.inject_signals(
-        klip_input.sci_arr, derotation_angles, specs, template_psf,
+        klip_input.sci_arr, specs, template_psf,
+        angles=derotation_angles,
         template_scale_factors=template_scale_factors,
         saturation_threshold=saturation_threshold
     )

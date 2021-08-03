@@ -150,6 +150,8 @@ class EvalKlip(Klip):
                 saturation_threshold=self.saturation_threshold
             )
 
+        klip_inputs, derotation_angles = self._coadd_klip_inputs(klip_inputs, derotation_angles)
+
         import time
         start = time.perf_counter()
         outcubes, outmeans = self._klip(klip_inputs, klip_params, obs_method)

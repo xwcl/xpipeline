@@ -270,7 +270,7 @@ def test_coadd_ranges():
     data[5,1,0] = 1
     angles[5] = -60
 
-    idxspec = improc.FrameIndexRangeSpec(nearest_n_frames=3)
+    idxspec = improc.FrameIndexRangeSpec(n_frames=3)
     anglespec = improc.AngleRangeSpec(delta_deg=90)
     rpxspec = improc.PixelRotationRangeSpec(np.pi / 2, r_px=1)
     for spec in (idxspec, anglespec, rpxspec):
