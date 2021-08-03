@@ -1116,26 +1116,27 @@ def combine_cube(cube : np.ndarray, operation: constants.CombineOperation):
     return out_image
 
 @njit(cache=True)
-def _coadd_ranges(data_cube, derotation_angles, values, delta, outcube):
-    outcube = np.zeros_like(data_cube)
+def _coadd_ranges(data_cube, derotation_angles, values, delta, outcube, operation='sum'):
     outangles = np.zeros_like(derotation_angles)
-    outnframes = np.zeros_like(derotation_angles)
     target_idx = 0
     chunk_start_idx = 0
-
-    for frame_idx in range(data_cube.shape[0]):
+    n_obs = data_cube.shape[0]
+    for frame_idx in range(n_obs):
         if values[frame_idx] - values[chunk_start_idx] >= delta:
+            chunk = slice(chunk_start_idx, frame_idx)
+            if operation == "sum":
+                outcube[target_idx] = data_cube[chunk].sum(axis=0)
+                outangles[target_idx] = derotation_angles[chunk].mean()
             target_idx += 1
             chunk_start_idx = frame_idx
-            outcube[target_idx] = data_cube[chunk_start_idx]
-            outangles[target_idx] = derotation_angles[chunk_start_idx]
-            outnframes[target_idx] = 1
-        else:
-            outcube[target_idx] += data_cube[frame_idx]
-            outangles[target_idx] += derotation_angles[frame_idx]
-            outnframes[target_idx] += 1
+
+    # handle the last of the observations
+    if n_obs - chunk_start_idx > 0:
+        outcube[target_idx] = data_cube[chunk_start_idx:].sum(axis=0)
+        outangles[target_idx] = derotation_angles[chunk_start_idx:].mean()
+
     outcube = np.copy(outcube[:target_idx+1])
-    outangles = outangles[:target_idx+1] / outnframes[:target_idx+1]
+    outangles = outangles[:target_idx+1]
     return outcube, outangles
 
 def coadd_ranges(data_cube, derotation_angles, range_spec):
