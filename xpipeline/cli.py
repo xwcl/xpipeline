@@ -19,6 +19,7 @@ from .commands import (
     combine_images,
     collect_dataset,
     scale_templates,
+    inject,
     klip,
     eval_klip,
 )
@@ -40,6 +41,7 @@ COMMANDS = {
     combine_images.CombineImages,
     collect_dataset.CollectDataset,
     scale_templates.ScaleTemplates,
+    inject.Inject,
     klip.Klip,
     eval_klip.EvalKlip,
 }

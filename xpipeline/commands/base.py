@@ -5,7 +5,7 @@ import os
 import sys
 import os.path
 import xconf
-from .. import core, utils
+from .. import core, utils, types
 
 log = logging.getLogger(__name__)
 
@@ -122,3 +122,35 @@ class MultiInputCommand(InputCommand):
                 all_inputs = [self.input]
         return list(sorted(all_inputs))[::self.sample_every_n]
 
+
+
+@xconf.config
+class CompanionConfig:
+    scale : float = xconf.field(help=utils.unwrap(
+        """Scale factor multiplied by template (and optional template
+        per-frame scale factor) to give companion image,
+        i.e., contrast ratio. Can be negative or zero."""))
+    r_px : float = xconf.field(help="Radius of companion")
+    pa_deg : float = xconf.field(help="Position angle of companion in degrees East of North")
+
+@xconf.config
+class TemplateConfig:
+    path : str = xconf.field(help=utils.unwrap(
+        """Path to FITS image of template PSF, scaled to the
+        average amplitude of the host star signal such that
+        multiplying by the contrast gives an appropriately
+        scaled planet PSF"""
+    ))
+    ext : types.FITS_EXT = xconf.field(default=None, help=utils.unwrap("""
+        Extension containing the template data (default: same as template name)
+    """))
+    scale_factors_path : str = xconf.field(help=utils.unwrap(
+        """Path to FITS file with extensions for each data extension
+        containing 1D arrays of scale factors that match template PSF
+        intensity to real PSF intensity per-frame"""
+    ))
+    scale_factors_ext : types.FITS_EXT = xconf.field(default=None, help=utils.unwrap("""
+        Extension containing the per-frame scale factors by which
+        the template data is multiplied before applying the
+        companion scale factor (default: same as template name)
+    """))

@@ -1,4 +1,3 @@
-from multiprocessing import Value
 import xconf
 import sys
 import logging

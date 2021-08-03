@@ -973,7 +973,7 @@ def interpolate_nonfinite(source_image, dest_image=None):
         dest_image = np.zeros_like(source_image)
     return _interpolate_nonfinite(source_image, dest_image)
 
-@jit(float64[:, :](float64[:, :], float64[:, :], float64[:, :], float64), nopython=True, cache=True)
+@jit(nopython=True, cache=True)
 def matrix_transform_image(source_image, transform_mtx, dest_image, fill_value):
     transform_mtx = np.ascontiguousarray(transform_mtx)  # should be a no-op but silences NumbaPerformanceWarning
     for dest_y in range(dest_image.shape[0]):
@@ -1097,9 +1097,9 @@ class AngleRangeSpec:
         return derotation_angles, self.delta_deg
 @dataclass
 class FrameIndexRangeSpec:
-    nearest_n_frames : int
+    n_frames : int
     def to_values_and_delta(self, derotation_angles):
-        return np.arange(derotation_angles.shape[0]), self.nearest_n_frames
+        return np.arange(derotation_angles.shape[0]), self.n_frames
 
 RotationRange = Union[PixelRotationRangeSpec, AngleRangeSpec, FrameIndexRangeSpec]
 
@@ -1189,6 +1189,7 @@ def derotate_cube(cube, derotation_angles):
     """
     if cube.shape[0] != derotation_angles.shape[0]:
         raise ValueError("Number of cube planes and derotation angles must match")
+    cube = cube.astype(derotation_angles.dtype)
     output = np.zeros_like(cube)
     for idx in numba.prange(cube.shape[0]):
         transform_mtx = make_rotation_about_center(cube[idx].shape, derotation_angles[idx])

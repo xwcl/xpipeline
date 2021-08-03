@@ -1,7 +1,7 @@
 import logging
 import warnings
 import numpy as np
-from typing import List, Optional
+from typing import List, Optional, Union
 from dataclasses import dataclass
 import numba
 from numba import njit
@@ -53,6 +53,12 @@ class Detection(Location):
 class RecoveredSignal(CompanionSpec, Detection):
     contrast_estimate_5sigma: float
 
+
+@dataclass
+class TemplateSignal:
+    signal : np.ndarray
+    scale_factors : Union[np.ndarray,float]
+
 @njit(parallel=True, cache=True)
 def _inject_signals(cube, angles, spec_scales, spec_r_pxs, spec_pa_degs, template, template_scale_factors):
     frame_shape = cube.shape[1:]
@@ -70,14 +76,16 @@ def _inject_signals(cube, angles, spec_scales, spec_r_pxs, spec_pa_degs, templat
 
 def inject_signals(
     cube: np.ndarray,
-    angles: np.ndarray,
     specs: List[CompanionSpec],
     template: np.ndarray,
+    angles: np.ndarray = None,
     template_scale_factors: Optional[np.ndarray] = None,
     saturation_threshold: Optional[float] = None,
 ):
     if template_scale_factors is None:
         template_scale_factors = np.ones(cube.shape[0])
+    if angles is None:
+        angles = np.zeros(cube.shape[0])
     spec_scales = np.array([spec.scale for spec in specs])
     spec_r_pxs = np.array([spec.r_px for spec in specs])
     spec_pa_degs = np.array([spec.pa_deg for spec in specs])

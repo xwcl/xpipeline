@@ -8,6 +8,7 @@ from .. import utils
 # from ..core import LazyPipelineCollection
 # from ..tasks import iofits, characterization
 
+from .base import CompanionConfig, TemplateConfig
 from .klip import Klip
 
 log = logging.getLogger(__name__)
@@ -19,28 +20,6 @@ class SearchConfig:
     snr_threshold : float = xconf.field(default=5.0, help="Threshold above which peaks of interest should be reported")
 
 
-@xconf.config
-class CompanionConfig:
-    scale : float = xconf.field(help=utils.unwrap(
-        """Scale factor multiplied by template to give companion,
-        i.e., contrast ratio. Can be negative or zero."""))
-    r_px : float = xconf.field(help="Radius at which to measure SNR")
-    pa_deg : float = xconf.field(help="Position angle in degrees East of North at which to measure SNR")
-
-
-@xconf.config
-class TemplateConfig:
-    path : str = xconf.field(help=utils.unwrap(
-        """Path to FITS image of template PSF, scaled to the
-        average amplitude of the host star signal such that
-        multiplying by the contrast gives an appropriately
-        scaled planet PSF"""
-    ))
-    scale_factors_path : str = xconf.field(help=utils.unwrap(
-        """Path to FITS file with extensions for each data extension
-        containing 1D arrays of scale factors that match template PSF
-        intensity to real PSF intensity per-frame"""
-    ))
 
 
 @xconf.config

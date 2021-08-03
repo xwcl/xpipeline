@@ -71,7 +71,7 @@ class CollectDataset(MultiInputCommand):
         from .. import utils
         from .. import pipelines
         from ..ref import clio
-        from ..tasks import iofits, vapp
+        from ..tasks import iofits, vapp, obs_table
 
         destination = self.destination
         dest_fs = utils.get_fs(destination)
@@ -108,19 +108,18 @@ class CollectDataset(MultiInputCommand):
         obs_table_name = "OBSTABLE"
         obs_table_mask_name = "OBSTABLE_MASK"
 
-        static_header, metadata_table, metadata_table_mask = (inputs
-                                                              .map(lambda hdulist: hdulist[self.metadata_ext].header.copy())
-                                                              .collect(iofits.construct_headers_table, _delayed_kwargs={"nout": 3})
-                                                              )
+        static_header, metadata_table = (inputs
+            .map(lambda hdulist: hdulist[self.metadata_ext].header.copy())
+            .collect(obs_table.construct_headers_table, _delayed_kwargs={"nout": 2})
+        )
 
-        static_header, metadata_table, metadata_table_mask, cubes = dask.compute(
-            static_header, metadata_table, metadata_table_mask, cubes
+        static_header, metadata_table, cubes = dask.compute(
+            static_header, metadata_table, cubes
         )
 
         date_obs_keyword = self.date_obs_keyword
         sorted_index = np.argsort(metadata_table[date_obs_keyword])
         metadata_table = metadata_table[sorted_index]
-        metadata_table_mask = metadata_table_mask[sorted_index]
 
         obs_method = {}
 
@@ -158,6 +157,10 @@ class CollectDataset(MultiInputCommand):
                 obs_method['vapp'] = {}
             obs_method['vapp']['left'] = left_extname
             obs_method['vapp']['right'] = right_extname
+        elif hasattr(self.obs, "ext"):
+            obs_method["ext"] = self.obs.ext
+        else:
+            raise RuntimeError(f"No extension specified as ext= or vapp_*_ext= (shouldn't happen at this point)")
 
         static_header["OBSMETHD"] = utils.flatten_obs_method(obs_method)
 
@@ -177,7 +180,7 @@ class CollectDataset(MultiInputCommand):
         table_hdu.header["EXTNAME"] = obs_table_name
         hdul.append(table_hdu)
 
-        table_mask_hdu = iofits.DaskHDU(metadata_table_mask, kind="bintable")
+        table_mask_hdu = iofits.DaskHDU(metadata_table.mask, kind="bintable")
         table_mask_hdu.header["EXTNAME"] = obs_table_mask_name
         hdul.append(table_mask_hdu)
 
