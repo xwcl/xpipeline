@@ -1115,29 +1115,33 @@ def combine_cube(cube : np.ndarray, operation: constants.CombineOperation):
         raise ValueError("Supported operations: average, sum")
     return out_image
 
-@njit(cache=True)
-def _coadd_ranges(data_cube, derotation_angles, values, delta, outcube, operation='sum'):
+# @njit(cache=True)
+def _coadd_ranges(data_cubes, derotation_angles, values, delta, operation='sum'):
     outangles = np.zeros_like(derotation_angles)
     target_idx = 0
     chunk_start_idx = 0
-    n_obs = data_cube.shape[0]
+    outcubes = [np.zeros_like(cube) for cube in data_cubes]
+    n_data_cubes = len(data_cubes)
+    n_obs = data_cubes[0].shape[0]
     for frame_idx in range(n_obs):
         if values[frame_idx] - values[chunk_start_idx] >= delta:
             chunk = slice(chunk_start_idx, frame_idx)
             if operation == "sum":
-                outcube[target_idx] = data_cube[chunk].sum(axis=0)
+                for i in range(n_data_cubes):
+                    outcubes[i][target_idx] = data_cubes[i][chunk].sum(axis=0)
                 outangles[target_idx] = derotation_angles[chunk].mean()
             target_idx += 1
             chunk_start_idx = frame_idx
 
     # handle the last of the observations
     if n_obs - chunk_start_idx > 0:
-        outcube[target_idx] = data_cube[chunk_start_idx:].sum(axis=0)
+        for i in range(n_data_cubes):
+            outcubes[i][target_idx] = data_cubes[i][chunk_start_idx:].sum(axis=0)
         outangles[target_idx] = derotation_angles[chunk_start_idx:].mean()
 
-    outcube = np.copy(outcube[:target_idx+1])
+    outcubes = [np.copy(outcube[:target_idx+1]) for outcube in outcubes]
     outangles = outangles[:target_idx+1]
-    return outcube, outangles
+    return outcubes, outangles
 
 def coadd_ranges(data_cube, derotation_angles, range_spec):
     """Using derotation angles and a range specified as `range_spec`, combine chunks of
@@ -1151,9 +1155,9 @@ def coadd_ranges(data_cube, derotation_angles, range_spec):
     outangles : np.ndarray
         Array with averaged derotation angles corresponding to these frames
     """
-    outcube = np.zeros_like(data_cube)
     values, delta = range_spec.to_values_and_delta(derotation_angles)
-    return _coadd_ranges(data_cube, derotation_angles, values, delta, outcube)
+    outcubes, outangles = _coadd_ranges([data_cube], derotation_angles, values, delta)
+    return outcubes[0], outangles
 
 @njit(cache=True)
 def shift2(image, dx, dy, output_shape=None, fill_value=0.0):
