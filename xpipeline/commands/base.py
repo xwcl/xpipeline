@@ -141,16 +141,26 @@ class TemplateConfig:
         multiplying by the contrast gives an appropriately
         scaled planet PSF"""
     ))
-    ext : types.FITS_EXT = xconf.field(default=None, help=utils.unwrap("""
+    ext : typing.Optional[types.FITS_EXT] = xconf.field(default=None, help=utils.unwrap("""
         Extension containing the template data (default: same as template name)
     """))
-    scale_factors_path : str = xconf.field(help=utils.unwrap(
+    scale_factors_path : typing.Optional[str] = xconf.field(help=utils.unwrap(
         """Path to FITS file with extensions for each data extension
         containing 1D arrays of scale factors that match template PSF
         intensity to real PSF intensity per-frame"""
     ))
-    scale_factors_ext : types.FITS_EXT = xconf.field(default=None, help=utils.unwrap("""
+    scale_factors_ext : typing.Optional[types.FITS_EXT] = xconf.field(default=None, help=utils.unwrap("""
         Extension containing the per-frame scale factors by which
         the template data is multiplied before applying the
         companion scale factor (default: same as template name)
     """))
+
+
+@xconf.config
+class PixelRotationRangeConfig:
+    delta_px : float = xconf.field(default=0, help="Maximum difference between target frame value and matching frames")
+    r_px : float = xconf.field(default=None, help="Radius at which to calculate motion in pixels")
+
+@xconf.config
+class AngleRangeConfig:
+    delta_deg : float = xconf.field(default=0, help="Maximum difference between target frame value and matching frames")

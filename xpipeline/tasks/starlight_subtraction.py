@@ -48,6 +48,14 @@ class ExclusionValues:
 
 distributed.protocol.register_generic(ExclusionValues)
 
+
+@dataclass
+class InitialDecomposition:
+    mtx_u0 : np.ndarray
+    diag_s0 : np.ndarray
+    mtx_v0 : np.ndarray
+    image_vecs_meansub : np.ndarray
+
 @dataclass
 class KlipParams:
     k_klip: int
@@ -57,6 +65,8 @@ class KlipParams:
     initial_decomposer : Optional[Callable] = None
     missing_data_value: float = np.nan
     strategy : constants.KlipStrategy = constants.KlipStrategy.DOWNDATE_SVD
+    initial_decomposition : Optional[InitialDecomposition] = None
+    warmup : bool = False
 
     def __post_init__(self):
         if self.initial_decomposer is None:
@@ -283,6 +293,9 @@ def klip_chunk_svd(
             n_excluded = max_excluded_idx - min_excluded_idx + 1
             print('processing frame', i, ', excluding', n_excluded, ' frames (from frame', min_excluded_idx, 'to', max_excluded_idx, ")")
             if strategy == constants.KlipStrategy.DOWNDATE_SVD:
+                assert mtx_u0 is not None
+                assert diag_s0 is not None
+                assert mtx_v0 is not None
                 subset_mtx_u0 = np.ascontiguousarray(mtx_u0[:,:k_klip + n_excluded])
                 subset_diag_s = diag_s0[:k_klip + n_excluded]
                 subset_mtx_v0 = np.ascontiguousarray(mtx_v0[:,:k_klip + n_excluded])
@@ -298,7 +311,8 @@ def klip_chunk_svd(
                 subset_image_vecs = utils.drop_idx_range_cols(image_vecs_meansub, min_excluded_idx, max_excluded_idx + 1)
                 eigenimages, _, _ = learning._numba_svd_wrap(subset_image_vecs, k_klip)
         else:
-            eigenimages = mtx_u0
+            assert mtx_u0 is not None
+            eigenimages = mtx_u0[:, :k_klip]
         meansub_target = image_vecs_meansub[:, i]
         # Since we may have truncated by columns above, this re-contiguou-fies
         # and silences the NumbaPerformanceWarning
@@ -333,13 +347,29 @@ def klip_mtx_svd(image_vecs_meansub, params : KlipParams):
     if image_vecs_meansub.shape[0] < initial_k or image_vecs_meansub.shape[1] < initial_k:
         raise ValueError(f"Number of modes requested exceeds dimensions of input")
     
-    # All hands on deck for initial decomposition
-    core.set_num_mkl_threads(core.MKL_MAX_THREADS)
-    log.info(f'Computing initial decomposition')
-    mtx_u0, diag_s0, mtx_v0 = learning.generic_svd(image_vecs_meansub, initial_k)
-    # Maximize number of independent subproblems
-    core.set_num_mkl_threads(1)
-    log.info(f"Done computing initial decomposition")
+    if (
+        params.strategy is constants.KlipStrategy.DOWNDATE_SVD or 
+        (params.strategy is constants.KlipStrategy.SVD and params.reuse)
+    ):
+        initial_decomposition = params.initial_decomposition
+        if initial_decomposition is None:
+            # All hands on deck for initial decomposition
+            core.set_num_mkl_threads(core.MKL_MAX_THREADS)
+            log.info(f'Computing initial decomposition')
+            mtx_u0, diag_s0, mtx_v0 = learning.generic_svd(image_vecs_meansub, initial_k)
+            # Maximize number of independent subproblems
+            core.set_num_mkl_threads(1)
+            log.info(f"Done computing initial decomposition")
+        else:
+            mtx_u0 = np.ascontiguousarray(initial_decomposition.mtx_u0[:, :initial_k])
+            diag_s0 = np.ascontiguousarray(initial_decomposition.diag_s0[:initial_k])
+            mtx_v0 = np.ascontiguousarray(initial_decomposition.mtx_v0[:, :initial_k])
+    else:
+        mtx_u0 = diag_s0 = mtx_v0 = None
+
+    if params.warmup:
+        return InitialDecomposition(mtx_u0, diag_s0, mtx_v0, image_vecs_meansub)
+
     exclusion_values, exclusion_deltas = _exclusions_to_arrays(params)
     log.info(f'Computing KLIPed vectors')
     start = time.perf_counter()

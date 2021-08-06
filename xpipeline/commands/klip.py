@@ -5,18 +5,9 @@ from typing import Optional, Union
 from enum import Enum
 from .. import utils, constants
 
-from .base import InputCommand
+from .base import InputCommand, AngleRangeConfig, PixelRotationRangeConfig
 
 log = logging.getLogger(__name__)
-
-@xconf.config
-class PixelRotationRangeConfig:
-    delta_px : float = xconf.field(default=0, help="Maximum difference between target frame value and matching frames")
-    r_px : float = xconf.field(default=None, help="Radius at which to calculate motion in pixels")
-
-@xconf.config
-class AngleRangeConfig:
-    delta_deg : float = xconf.field(default=0, help="Maximum difference between target frame value and matching frames")
 
 @xconf.config
 class ExcludeRangeConfig:
@@ -24,24 +15,13 @@ class ExcludeRangeConfig:
     nearest_n_frames : int = xconf.field(default=0, help="Number of additional temporally-adjacent frames on either side of the target frame to exclude from the sequence when computing the KLIP eigenimages")
 
 @xconf.config
-class CoaddFramesConfig:
-    n_frames : int = xconf.field(default=1, help="Number of frames to ")
-
-@xconf.config
-class CoaddAnglesConfig:
-    angle : Union[AngleRangeConfig,PixelRotationRangeConfig] = xconf.field(default=AngleRangeConfig(), help="Coadd frames with derotation angles within range")
-
-CoaddConfig = Union[CoaddFramesConfig, CoaddAnglesConfig]
-
-@xconf.config
 class Klip(InputCommand):
     "Subtract starlight with KLIP"
     k_klip : int = xconf.field(default=10, help="Number of modes to subtract in starlight subtraction")
     exclude : ExcludeRangeConfig = xconf.field(default=ExcludeRangeConfig(), help="How to exclude frames from reference sample")
-    coadd : CoaddConfig = xconf.field(default=CoaddFramesConfig(), help="How to determine ranges of frames to coadd before decomposition")
     strategy : constants.KlipStrategy = xconf.field(default=constants.KlipStrategy.DOWNDATE_SVD, help="Implementation of KLIP to use")
     reuse_eigenimages : bool = xconf.field(default=False, help="Apply KLIP without adjusting the eigenimages at each step (much faster, less powerful)")
-    combine_by : constants.CombineOperation = xconf.field(default=constants.CombineOperation.MEAN, help="Operation used to combine final derotated frames into a single output frame")
+    combine_output_by : constants.CombineOperation = xconf.field(default=constants.CombineOperation.MEAN, help="Operation used to combine final derotated frames into a single output frame")
     saturation_threshold : Optional[float] = xconf.field(default=None, help="Value in counts above which pixels should be considered saturated and ignored")
     mask_min_r_px : int = xconf.field(default=None, help="Apply radial mask excluding pixels < mask_min_r_px from center")
     mask_max_r_px : int = xconf.field(default=None, help="Apply radial mask excluding pixels > mask_max_r_px from center")
@@ -57,7 +37,6 @@ class Klip(InputCommand):
         then frame N from extension B will be scaled by 1/2."""
     ))
     output_mean_image : bool = xconf.field(default=True, help="Whether to output the mean un-KLIPped image")
-    output_coadded : bool = xconf.field(default=False, help="Whether to output the data cube after coadding")
     output_coverage_map : bool = xconf.field(default=True, help="Whether to output a coverage map image showing how many input images contributed to each pixel")
 
     def _get_derotation_angles(self, input_cube_hdul, obs_method):
@@ -121,11 +100,11 @@ class Klip(InputCommand):
         combination_mask &= estimation_mask
         return estimation_mask, combination_mask
 
-    def _klip(self, klip_inputs, klip_params, obs_method: dict):
+    def _klip(self, klip_inputs, klip_params, obs_method: dict, left_over_right_ratios):
         from .. import pipelines
         if "vapp" in obs_method:
             left_input, right_input = klip_inputs
-            outcube, mean = pipelines.klip_vapp_separately(left_input, right_input, klip_params, self.vapp_mask_angle_deg)
+            outcube, mean = pipelines.klip_vapp_separately(left_input, right_input, klip_params, self.vapp_mask_angle_deg, left_over_right_ratios)
             outcubes, means = [outcube], [mean]
         else:
             outcubes, means = pipelines.klip_multi(klip_inputs, klip_params)
@@ -136,7 +115,6 @@ class Klip(InputCommand):
         output_klip_final_fn = utils.join(self.destination, "klip_final.fits")
         output_mean_image_fn = utils.join(self.destination, "mean_image.fits")
         output_coverage_map_fn = utils.join(self.destination, "coverage_map.fits")
-        output_coadded_fn = utils.join(self.destination, "coadded.fits")
         destination = self.destination
         dest_fs = utils.get_fs(destination)
         dest_fs.makedirs(destination, exist_ok=True)
@@ -145,23 +123,19 @@ class Klip(InputCommand):
             outputs.append(output_mean_image_fn)
         if self.output_coverage_map:
             outputs.append(output_coverage_map_fn)
-        if self.output_coadded:
-            outputs.append(output_coadded_fn)
         self.quit_if_outputs_exist(outputs)
 
         input_cube_hdul, obs_method = self._load_dataset(self.input)
-        klip_inputs, obs_method, derotation_angles = self._assemble_klip_inputs(input_cube_hdul, obs_method)
-        klip_inputs, derotation_angles = self._coadd_klip_inputs(klip_inputs, derotation_angles)
+        klip_inputs, obs_method, derotation_angles, left_over_right_ratios = self._assemble_klip_inputs(input_cube_hdul, obs_method)
+        # left_over_right_ratios is only non-None for vAPP
         klip_params = self._assemble_klip_params(klip_inputs, derotation_angles)
         import time
         start = time.perf_counter()
-        outcubes, outmeans = self._klip(klip_inputs, klip_params, obs_method)
+        outcubes, outmeans = self._klip(klip_inputs, klip_params, obs_method, left_over_right_ratios)
         out_image, mean_image, coverage_image = self._assemble_out_images(klip_inputs, obs_method, outcubes, outmeans, derotation_angles)
         elapsed = time.perf_counter() - start
         log.info(f"Computed in {elapsed} sec")
 
-        # log.info(f"Computing klip pipeline result...")
-        # out_image = out_image.compute()
         iofits.write_fits(
             iofits.DaskHDUList([iofits.DaskHDU(out_image)]), output_klip_final_fn
         )
@@ -173,11 +147,6 @@ class Klip(InputCommand):
             iofits.write_fits(
                 iofits.DaskHDUList([iofits.DaskHDU(coverage_image)]), output_coverage_map_fn
             )
-        if self.output_coadded:
-            hdus = [iofits.DaskHDU(data=None, kind="primary"), iofits.DaskHDU(derotation_angles, name="ANGLES")]
-            for idx, kinput in enumerate(klip_inputs):
-                hdus.append(iofits.DaskHDU(kinput.sci_arr))
-            iofits.write_fits(iofits.DaskHDUList(hdus), output_coadded_fn)
 
 
     def _make_exclusions(self, exclude : ExcludeRangeConfig, derotation_angles):
@@ -249,13 +218,12 @@ class Klip(InputCommand):
             if self.scale_factors_path is not None:
                 scale_left = self._get_sci_arr(scale_factors_hdul, left_extname)
                 scale_right = self._get_sci_arr(scale_factors_hdul, right_extname)
-                template_scale_factors = [scale_left, scale_right]
             else:
                 log.info("Using ratio of per-frame median values as proxy for inter-PSF scaling")
                 scale_left = np.nanmedian(sci_arr_left, axis=(1,2))
                 scale_right = np.nanmedian(sci_arr_right, axis=(1,2))
-                # right * (scale_left / scale_right) = scaled right
-                template_scale_factors = [np.ones_like(scale_left), scale_left / scale_right]
+            # right * (scale_left / scale_right) = scaled right
+            left_over_right_ratios = scale_left / scale_right
 
             estimation_mask_left, combination_mask_left = self._make_masks(
                 sci_arr_left, left_extname
@@ -288,6 +256,7 @@ class Klip(InputCommand):
                 )
                 sys.exit(1)
             sci_arr = self._get_sci_arr(input_cube_hdul, extname)
+            left_over_right_ratios = None
             estimation_mask, combination_mask = self._make_masks(sci_arr, extname)
             klip_inputs.append(
                 pipelines.KlipInput(
@@ -296,39 +265,13 @@ class Klip(InputCommand):
                     estimation_mask, combination_mask
                 )
             )
-        return klip_inputs, obs_method, derotation_angles, template_scale_factors
-
-    def _coadd_klip_inputs(self, klip_inputs, derotation_angles):
-        from xpipeline.tasks import improc
-        if hasattr(self.coadd, 'n_frames'):
-            range_spec = improc.FrameIndexRangeSpec(n_frames=self.coadd.n_frames)
-        elif hasattr(self.coadd, "angle"):
-            if hasattr(self.coadd.angle, "delta_deg"):
-                range_spec = improc.AngleRangeSpec(delta_deg=self.coadd.angle.delta_deg)
-            else:
-                range_sepc = improc.PixelRotationRangeSpec(delta_px=self.coadd.angle.delta_px, r_px=self.coadd.angle.r_px)
-        else:
-            raise RuntimeError("self.coadd isn't a CoaddConfig")
-        if range_spec == improc.FrameIndexRangeSpec(n_frames=1):
-            log.debug(f"Got {range_spec=}, skipping coadd")
-            return klip_inputs, derotation_angles
-        log.debug(f"Coadding according to {range_spec=}")
-        new_angles = None
-        for kinput in klip_inputs:
-            old_shape = kinput.sci_arr.shape
-            data, angles = improc.coadd_ranges(kinput.sci_arr, derotation_angles, range_spec)
-            kinput.sci_arr = data
-            log.debug(f"Old data shape: {old_shape}, new data shape after coadding: {data.shape}")
-            if new_angles is None:
-                new_angles = angles
-            assert kinput.sci_arr.shape[0] == new_angles.shape[0]
-        return klip_inputs, new_angles
+        return klip_inputs, obs_method, derotation_angles, left_over_right_ratios
 
     def _assemble_out_images(self, klip_inputs, obs_method, outcubes, outmeans, derotation_angles):
         import numpy as np
         from .. import pipelines
         out_image = pipelines.adi(
-            outcubes[0], derotation_angles, operation=self.combine_by
+            outcubes[0], derotation_angles, operation=self.combine_output_by
         )
         out_mean_image = outmeans[0]
         if "vapp" in obs_method:

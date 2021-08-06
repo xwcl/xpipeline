@@ -1106,24 +1106,16 @@ class FrameIndexRangeSpec:
 
 RotationRange = Union[PixelRotationRangeSpec, AngleRangeSpec, FrameIndexRangeSpec]
 
-def combine_cube(cube : np.ndarray, operation: constants.CombineOperation):
+def combine(cube : np.ndarray, operation: constants.CombineOperation):
     if operation is constants.CombineOperation.MEAN:
         out_image = np.nanmean(cube, axis=0)
     elif operation is constants.CombineOperation.SUM:
         out_image = np.nansum(cube, axis=0)
+    elif operation is constants.CombineOperation.MEDIAN:
+        return np.median(cube, axis=0)
     else:
         raise ValueError("Supported operations: average, sum")
     return out_image
-
-def _combine(chunk, operation: constants.CombineOperation):
-    if operation is constants.CombineOperation.MEAN:
-        return chunk.mean(axis=0)
-    elif operation is constants.CombineOperation.SUM:
-        return chunk.sum(axis=0)
-    elif operation is constants.CombineOperation.MEDIAN:
-        return np.median(chunk, axis=0)
-    else:
-        raise ValueError(f"Invalid operation {operation}")
 
 def combine_ranges(obs_sequences, derotation_angles, range_spec, metadata=None, operation: constants.CombineOperation = constants.CombineOperation.MEAN):
     """Using derotation angles and a range specified as `range_spec`, combine chunks of
@@ -1156,7 +1148,7 @@ def combine_ranges(obs_sequences, derotation_angles, range_spec, metadata=None, 
             for field in metadata.dtype.fields:
                 field_dtype = metadata.dtype[field]
                 if np.issubdtype(field_dtype, np.floating) or np.issubdtype(field_dtype, np.integer):
-                    out_metadata[target_idx][field] = _combine(metadata[chunk][field], operation)
+                    out_metadata[target_idx][field] = combine(metadata[chunk][field], operation)
                 else:
                     # take first value from chunk since we don't know how to interpolate
                     # unknown types
@@ -1180,6 +1172,7 @@ def combine_ranges(obs_sequences, derotation_angles, range_spec, metadata=None, 
 
     out_seqs = [np.copy(outcube[:target_idx+1]) for outcube in out_seqs]
     outangles = outangles[:target_idx+1]
+    out_metadata = out_metadata[:target_idx+1]
     return out_seqs, outangles, out_metadata
 
 

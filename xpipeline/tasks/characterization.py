@@ -79,13 +79,16 @@ def inject_signals(
     specs: List[CompanionSpec],
     template: np.ndarray,
     angles: np.ndarray = None,
-    template_scale_factors: Optional[np.ndarray] = None,
+    template_scale_factors: Optional[Union[np.ndarray,float]] = None,
     saturation_threshold: Optional[float] = None,
 ):
+    n_obs = cube.shape[0]
     if template_scale_factors is None:
-        template_scale_factors = np.ones(cube.shape[0])
+        template_scale_factors = np.ones(n_obs)
+    if np.isscalar(template_scale_factors):
+        template_scale_factors = np.repeat(np.array([template_scale_factors]), n_obs)
     if angles is None:
-        angles = np.zeros(cube.shape[0])
+        angles = np.zeros(n_obs)
     spec_scales = np.array([spec.scale for spec in specs])
     spec_r_pxs = np.array([spec.r_px for spec in specs])
     spec_pa_degs = np.array([spec.pa_deg for spec in specs])

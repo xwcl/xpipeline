@@ -112,7 +112,7 @@ register_generic(DaskHDU)
 
 
 def _check_ext(key, hdu, idx):
-    if "EXTNAME" in hdu.header and hdu.header["EXTNAME"].lower() == key.lower():
+    if "EXTNAME" in hdu.header and isinstance(key, str) and hdu.header["EXTNAME"].lower() == key.lower():
         return True
     if idx == key:
         return True

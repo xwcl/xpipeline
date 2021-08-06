@@ -9,7 +9,7 @@ from typing import List, Union, Optional
 
 from .. import constants as const
 from .. import core
-from ..core import PipelineCollection
+from ..core import PipelineCollection, reduce_bitwise_or
 
 from ..tasks import (
     obs_table,
@@ -182,7 +182,7 @@ def compute_sky_model(
     log.debug("Assembling compute_sky_model pipeline...")
     sky_cube = iofits.hdulists_to_dask_cube(inputs_collection.items, plane_shape, ext=ext)
     dq_cube = iofits.hdulists_to_dask_cube(inputs_collection.items, plane_shape, ext=dq_ext, dtype=int)
-    badpix_arr = np.bitwise_or.reduce(dq_cube, axis=0)
+    badpix_arr = reduce_bitwise_or(dq_cube)
     sky_cube_train, sky_cube_test = learning.train_test_split(
         sky_cube, test_fraction, random_state=random_state
     )
@@ -198,9 +198,7 @@ def compute_sky_model(
     )
     return model
 
-
-def klip_multi(klip_inputs: List[KlipInput], klip_params: KlipParams):
-    log.debug("assembling klip_multi")
+def klip_inputs_to_mtx_x(klip_inputs: List[KlipInput]):
     matrices = []
     subset_indices = []
     xp = core.get_array_module(klip_inputs[0].sci_arr)
@@ -215,9 +213,18 @@ def klip_multi(klip_inputs: List[KlipInput], klip_params: KlipParams):
         subset_indices.append(subset_idxs)
 
     mtx_x = xp.vstack(matrices)
-    subtracted_mtx, mean_vec = starlight_subtraction.klip_mtx(
+    return mtx_x, subset_indices
+
+def klip_multi(klip_inputs: List[KlipInput], klip_params: KlipParams):
+    log.debug("assembling klip_multi")
+    mtx_x, subset_indices = klip_inputs_to_mtx_x(klip_inputs)
+    result = starlight_subtraction.klip_mtx(
         mtx_x, klip_params
     )
+    if klip_params.warmup:
+        return result
+    else:
+        subtracted_mtx, mean_vec = result
     start_idx = 0
     cubes, mean_images = [], []
     for input_data, subset_idxs in zip(klip_inputs, subset_indices):
@@ -277,12 +284,18 @@ def klip_one(klip_input: KlipInput, klip_params: KlipParams):
     return cubes[0], means[0]
 
 
-def klip_vapp_separately(left_input : KlipInput, right_input: KlipInput, klip_params : KlipParams, vapp_symmetry_angle : float, left_over_right_ratios: float):
+def klip_vapp_separately(
+    left_input : KlipInput,
+    right_input: KlipInput,
+    klip_params : KlipParams,
+    vapp_symmetry_angle : float,
+    left_over_right_ratios: float
+):
     left_cube, left_mean = klip_one(left_input, klip_params)
     right_cube, right_mean = klip_one(right_input, klip_params)
 
     final_cube = vapp_stitch(left_cube, right_cube, vapp_symmetry_angle, left_over_right_ratios)
-    final_mean = vapp_stitch(left_mean[np.newaxis,:], right_mean[np.newaxis,:], vapp_symmetry_angle)
+    final_mean = vapp_stitch(left_mean[np.newaxis,:], right_mean[np.newaxis,:], vapp_symmetry_angle, left_over_right_ratios)
     return final_cube, final_mean
 
 def vapp_stitch(
@@ -298,7 +311,7 @@ def vapp_stitch(
     left_half, right_half = vapp.mask_along_angle(plane_shape, vapp_symmetry_angle)
     final_cube = improc.combine_paired_cubes(
         left_cube,
-        left_over_right_ratios * right_cube,
+        left_over_right_ratios * right_cube, # right * (scale_left / scale_right) = scaled right
         left_half,
         right_half,
     )
@@ -308,7 +321,7 @@ def vapp_stitch(
 
 def adi(cube: np.ndarray, derotation_angles: np.ndarray, operation : CombineOperation):
     derot_cube = improc.derotate_cube(cube, derotation_angles)
-    out_image = improc.combine_cube(derot_cube, operation)
+    out_image = improc.combine(derot_cube, operation)
     return out_image
 
 def adi_coverage(combination_mask, derotation_angles):

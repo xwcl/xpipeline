@@ -19,9 +19,6 @@ class SearchConfig:
     max_r_px : float = xconf.field(default=None, help="Limit blind search to pixels less than this radius from center")
     snr_threshold : float = xconf.field(default=5.0, help="Threshold above which peaks of interest should be reported")
 
-
-
-
 @xconf.config
 class EvalKlip(Klip):
     "Inject and recover a companion in ADI data through KLIP"
@@ -98,7 +95,7 @@ class EvalKlip(Klip):
         template_scale_factors = iofits.load_fits_from_path(self.template.scale_factors_path)
 
         # process like the klip command
-        klip_inputs, obs_method, derotation_angles = self._assemble_klip_inputs(dataset_path)
+        klip_inputs, obs_method, derotation_angles, left_over_right_ratios = self._assemble_klip_inputs(dataset_path)
         klip_params = self._assemble_klip_params(klip_inputs, derotation_angles)
 
         log.info("Injecting signals")
@@ -154,7 +151,7 @@ class EvalKlip(Klip):
 
         import time
         start = time.perf_counter()
-        outcubes, outmeans = self._klip(klip_inputs, klip_params, obs_method)
+        outcubes, outmeans = self._klip(klip_inputs, klip_params, obs_method, left_over_right_ratios)
         out_image, mean_image, coverage_image = self._assemble_out_images(klip_inputs, obs_method, outcubes, outmeans, derotation_angles)
         elapsed = time.perf_counter() - start
         log.info(f"Computed in {elapsed} sec")

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 import dateutil
 
-from ...tasks import iofits, improc, vapp, detector
+from ...tasks import iofits, improc, vapp, detector, obs_table
 from ... import constants
 from .. import magellan
 from ... import utils
@@ -99,7 +99,8 @@ def serial_split_frames_cube(all_hduls, filenames, ext=0):
         non_varying_kw,
         varying_kw,
         varying_dtypes,
-    ) = iofits.separate_varying_header_keywords(all_headers)
+        _
+    ) = obs_table.separate_varying_header_keywords(all_headers)
     varying_numeric_dtypes = list(
         filter(lambda x: np.issubdtype(x[1], np.number), varying_dtypes)
     )

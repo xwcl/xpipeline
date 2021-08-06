@@ -26,7 +26,6 @@ def _construct_dtype(varying_kw, columns):
             dtype.append((kw, str, max_length))
             try:
                 _datetime_str_to_posix_time(example)
-                dtype.append((kw+"_TS", np.float64))
                 dateful.append(kw)
             except ValueError:
                 pass
@@ -58,6 +57,15 @@ def separate_varying_header_keywords(all_headers):
     varying_dtypes, dateful_kws = _construct_dtype(varying_kw, columns)
     return non_varying_kw, varying_kw, varying_dtypes, dateful_kws
 
+def _date_timestamp_cols(varying_dtypes, dateful_kws):
+    for kw in dateful_kws:
+        for idx, field in enumerate(varying_dtypes):
+            field_name = field[0]
+            if field_name == kw:
+                varying_dtypes.insert(idx + 1, (kw+"_TS", np.float64))
+                break
+    return varying_dtypes
+    
 
 def construct_headers_table(all_headers : list[fits.Header]):
     """Given an iterable of astropy.io.fits.Header objects, identify
@@ -78,6 +86,7 @@ def construct_headers_table(all_headers : list[fits.Header]):
     non_varying_kw, varying_kw, varying_dtypes, dateful_kws = separate_varying_header_keywords(
         all_headers
     )
+    varying_dtypes = _date_timestamp_cols(varying_dtypes, dateful_kws)
     # for keywords that vary:
     tbl_data = np.zeros(len(all_headers), varying_dtypes)
     mask_dtypes = []

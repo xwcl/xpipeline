@@ -158,11 +158,12 @@ class CollectDataset(MultiInputCommand):
             obs_method['vapp']['left'] = left_extname
             obs_method['vapp']['right'] = right_extname
         elif hasattr(self.obs, "ext"):
-            obs_method["ext"] = self.obs.ext
+            obs_method["ext"] = self.obs.ext if self.obs.ext != 0 else "SCI"
         else:
             raise RuntimeError(f"No extension specified as ext= or vapp_*_ext= (shouldn't happen at this point)")
 
         static_header["OBSMETHD"] = utils.flatten_obs_method(obs_method)
+        log.debug(f"OBSMETHD {static_header['OBSMETHD']}")
 
         hdul = iofits.DaskHDUList(
             [iofits.DaskHDU(data=None, header=static_header, kind="primary")]
@@ -184,4 +185,4 @@ class CollectDataset(MultiInputCommand):
         table_mask_hdu.header["EXTNAME"] = obs_table_mask_name
         hdul.append(table_mask_hdu)
 
-        return iofits.write_fits(hdul, output_filepath, overwrite=True)
+        iofits.write_fits(hdul, output_filepath, overwrite=True)

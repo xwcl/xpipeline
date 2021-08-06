@@ -3,6 +3,7 @@ import psutil
 import numpy
 import numba
 import dask
+import dask.array as da
 import logging
 
 log = logging.getLogger(__name__)
@@ -61,7 +62,9 @@ def get_array_module(arr):
         xp = get_array_module(input_array)
         xp.sum(input_array)
     """
-    if isinstance(arr, numpy.ndarray):
+    if isinstance(arr, da.Array):
+        return da
+    elif isinstance(arr, numpy.ndarray):
         return numpy
     else:
         raise ValueError("Unrecognized type passed to get_array_module")
@@ -205,3 +208,24 @@ class EagerPipelineCollection(LazyPipelineCollection):
 
     def compute(self):
         return self.items
+
+
+def _dask_reduce_bitwise_or(chunks):
+    if hasattr(chunks, 'dtype'):
+        dtype = chunks.dtype
+    else:
+        dtype = chunks[0].dtype
+    if hasattr(chunks, 'shape'):
+        shape = chunks.shape[1:]
+    else:
+        shape = chunks[0].shape[1:]
+    out = numpy.zeros(shape, dtype)
+    for chunk in chunks:
+        out |= numpy.bitwise_or.reduce(chunk, axis=0)
+    return out
+def reduce_bitwise_or(arr):
+    xp = get_array_module(arr)
+    if xp is da:
+        return da.blockwise(_dask_reduce_bitwise_or, 'jk', arr, 'ijk')
+    else:
+        return numpy.bitwise_or.reduce(arr, axis=0) 

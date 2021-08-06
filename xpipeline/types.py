@@ -1,3 +1,3 @@
 import typing
-FITS_KW_VAL = typing.Union[str,int,float,bool]
-FITS_EXT = typing.Union[str,int]
+FITS_KW_VAL = typing.Union[bool,float,int,str]
+FITS_EXT = typing.Union[int,str]

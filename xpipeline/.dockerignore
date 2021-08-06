@@ -1,0 +1,10 @@
+__pycache__
+.idea
+.ipynb_checkpoints
+.pytest_cache
+.vscode
+dask-worker-space
+htmlcov
+xpipeline.egg-info
+.coverage
+*.ipynb
