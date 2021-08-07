@@ -36,6 +36,8 @@ class Klip(InputCommand):
         extension A element N is 2.0, and extension B element N is 4.0,
         then frame N from extension B will be scaled by 1/2."""
     ))
+    initial_decomposition_only : bool = xconf.field(default=False, help="Whether to output initial decomposition and exit")
+    initial_decomposition_path : Optional[str] = xconf.field(help="Path from which to load initial decomposition")
     output_mean_image : bool = xconf.field(default=True, help="Whether to output the mean un-KLIPped image")
     output_coverage_map : bool = xconf.field(default=True, help="Whether to output a coverage map image showing how many input images contributed to each pixel")
 
@@ -104,34 +106,83 @@ class Klip(InputCommand):
         from .. import pipelines
         if "vapp" in obs_method:
             left_input, right_input = klip_inputs
-            outcube, mean = pipelines.klip_vapp_separately(left_input, right_input, klip_params, self.vapp_mask_angle_deg, left_over_right_ratios)
+            result = pipelines.klip_vapp_separately(left_input, right_input, klip_params, self.vapp_mask_angle_deg, left_over_right_ratios)
+            if klip_params.warmup:
+                return result
+            outcube, mean = result
             outcubes, means = [outcube], [mean]
         else:
-            outcubes, means = pipelines.klip_multi(klip_inputs, klip_params)
+            result = pipelines.klip_multi(klip_inputs, klip_params)
+            if klip_params.warmup:
+                return result
+            outcubes, means = result
         return outcubes, means
+
+    def _load_initial_decomposition(self, path):
+        from ..tasks import iofits, starlight_subtraction
+        decomp_hdul = iofits.load_fits_from_path(path)
+        return starlight_subtraction.InitialDecomposition(
+            mtx_u0=decomp_hdul['MTX_U0'].data,
+            diag_s0=decomp_hdul['DIAG_S0'].data,
+            mtx_v0=decomp_hdul['MTX_V0'].data,
+        )
+
+    def _save_warmup(self, result, output_initial_decomp_fn):
+        from ..tasks import iofits
+        # save initial decomposition
+        mtx_u0, diag_s0, mtx_v0 = result.mtx_u0, result.diag_s0, result.mtx_v0
+        iofits.write_fits(
+            iofits.DaskHDUList([
+                iofits.DaskHDU(data=None, kind='primary'),
+                iofits.DaskHDU(data=mtx_u0, name='MTX_U0'),
+                iofits.DaskHDU(data=diag_s0, name='DIAG_S0'),
+                iofits.DaskHDU(data=mtx_v0, name='MTX_V0'),
+            ]), output_initial_decomp_fn
+        )
+        return 0
+
+    def _load_dataset(self, dataset_path):
+        from ..tasks import iofits
+        input_cube_hdul = iofits.load_fits_from_path(dataset_path)
+        obs_method = utils.parse_obs_method(input_cube_hdul[0].header["OBSMETHD"])
+        return input_cube_hdul, obs_method
 
     def main(self):
         from ..tasks import iofits
         output_klip_final_fn = utils.join(self.destination, "klip_final.fits")
         output_mean_image_fn = utils.join(self.destination, "mean_image.fits")
         output_coverage_map_fn = utils.join(self.destination, "coverage_map.fits")
+        output_initial_decomp_fn = utils.join(self.destination, "initial_decomposition.fits")
         destination = self.destination
         dest_fs = utils.get_fs(destination)
         dest_fs.makedirs(destination, exist_ok=True)
-        outputs = [output_klip_final_fn]
-        if self.output_mean_image:
-            outputs.append(output_mean_image_fn)
-        if self.output_coverage_map:
-            outputs.append(output_coverage_map_fn)
+        if self.initial_decomposition:
+            outputs = [output_initial_decomp_fn]
+        else:
+            outputs = [output_klip_final_fn]
+            if self.output_mean_image:
+                outputs.append(output_mean_image_fn)
+            if self.output_coverage_map:
+                outputs.append(output_coverage_map_fn)
+            
         self.quit_if_outputs_exist(outputs)
 
         input_cube_hdul, obs_method = self._load_dataset(self.input)
         klip_inputs, obs_method, derotation_angles, left_over_right_ratios = self._assemble_klip_inputs(input_cube_hdul, obs_method)
         # left_over_right_ratios is only non-None for vAPP
-        klip_params = self._assemble_klip_params(klip_inputs, derotation_angles)
+        if self.initial_decomposition_path is not None:
+            initial_decomposition = self._load_initial_decomposition(self.initial_decomposition_path)
+        else:
+            initial_decomposition = None
+        klip_params = self._assemble_klip_params(klip_inputs, derotation_angles, initial_decomposition)
         import time
         start = time.perf_counter()
-        outcubes, outmeans = self._klip(klip_inputs, klip_params, obs_method, left_over_right_ratios)
+        result = self._klip(klip_inputs, klip_params, obs_method, left_over_right_ratios)
+        if klip_params.warmup:
+            self._save_warmup(result, output_initial_decomp_fn)
+            return 0
+        else:
+            outcubes, outmeans = result
         out_image, mean_image, coverage_image = self._assemble_out_images(klip_inputs, obs_method, outcubes, outmeans, derotation_angles)
         elapsed = time.perf_counter() - start
         log.info(f"Computed in {elapsed} sec")
@@ -177,7 +228,7 @@ class Klip(InputCommand):
             pass  # not an error to have delta of zero, just don't exclude based on rotation
         return exclusions
 
-    def _assemble_klip_params(self, klip_inputs, derotation_angles):
+    def _assemble_klip_params(self, klip_inputs, derotation_angles, initial_decomposition):
         import numpy as np
         from ..tasks import starlight_subtraction
         exclusions = self._make_exclusions(self.exclude, derotation_angles)
@@ -187,7 +238,10 @@ class Klip(InputCommand):
             decomposer=starlight_subtraction.DEFAULT_DECOMPOSERS[self.strategy],
             strategy=self.strategy,
             reuse=self.reuse_eigenimages,
+            warmup=self.initial_decomposition_only,
+            initial_decomposition=initial_decomposition
         )
+        log.debug(klip_params)
         return klip_params
 
     def _load_input(self, dataset_path):

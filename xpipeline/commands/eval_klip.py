@@ -22,8 +22,8 @@ class SearchConfig:
 @xconf.config
 class EvalKlip(Klip):
     "Inject and recover a companion in ADI data through KLIP"
-    template : TemplateConfig = xconf.field(help="Paths for template image and scale factors")
-    companions : Optional[list[CompanionConfig]] = xconf.field(help="Companions to inject (optionally) and measure SNR for")
+    # template : TemplateConfig = xconf.field(help="Paths for template image and scale factors")
+    # companions : Optional[list[CompanionConfig]] = xconf.field(help="Companions to inject (optionally) and measure SNR for")
     aperture_diameter_px : float = xconf.field(help="Diameter of the SNR estimation aperture (~lambda/D) in pixels")
     apertures_to_exclude : int = xconf.field(default=1, help=utils.unwrap(
         """Number of apertures on *each side* of the specified target
@@ -32,12 +32,11 @@ class EvalKlip(Klip):
         one on each side)"""))
     search : SearchConfig = xconf.field(help="Configure blind search", default=SearchConfig())
     output_klip_final : bool = xconf.field(default=True, help="Whether to save the final KLIPped image for inspection")
-    output_injected_data : bool = xconf.field(default=False, help="Whether to save the data with fake signals for inspection")
 
-    def __post_init__(self):
-        if self.companions is None:
-            self.companions = []
-        return super().__post_init__()
+    # def __post_init__(self):
+    #     if self.companions is None:
+    #         self.companions = []
+    #     return super().__post_init__()
 
     def _load_inputs(self, *args, **kwargs):
         from ..tasks import iofits
@@ -45,16 +44,17 @@ class EvalKlip(Klip):
         template_psf = iofits.load_fits_from_path(self.template.path)[0].data
         return sci_arr, rot_arr, region_mask, template_psf
 
-    def _load_companions(self):
-        from ..tasks import characterization
-        specs = []
-        for companion in self.companions:
-            specs.append(characterization.CompanionSpec(
-                scale=companion.scale,
-                r_px=companion.r_px,
-                pa_deg=companion.pa_deg
-            ))
-        return specs
+    # def _load_companions(self):
+    #     from ..tasks import characterization
+    #     specs = []
+    #     for companion in self.companions:
+    #         specs.append(characterization.CompanionSpec(
+    #             scale=companion.scale,
+    #             r_px=companion.r_px,
+    #             pa_deg=companion.pa_deg
+    #         ))
+    #         log.debug(f'Companion: {specs[-1]}')
+    #     return specs
 
     def main(self):
         import fsspec.spec
@@ -74,92 +74,116 @@ class EvalKlip(Klip):
         output_klip_final_fn = utils.join(self.destination, "klip_final.fits")
         output_mean_image_fn = utils.join(self.destination, "mean_image.fits")
         output_coverage_map_fn = utils.join(self.destination, "coverage_map.fits")
-        output_injected_data_fn = utils.join(self.destination, "injected_data.fits")
-        outputs = [output_result_fn]
-        if self.output_klip_final:
-            outputs.append(output_klip_final_fn)
-        if self.output_mean_image:
-            outputs.append(output_mean_image_fn)
-        if self.output_coverage_map:
-            outputs.append(output_coverage_map_fn)
-        if self.output_injected_data:
-            outputs.append(output_injected_data_fn)
+        output_initial_decomp_fn = utils.join(self.destination, "initial_decomposition.fits")
+        if self.initial_decomposition_only:
+            outputs = [output_initial_decomp_fn]
+        else:
+            outputs = [output_result_fn]
+            if self.output_klip_final:
+                outputs.append(output_klip_final_fn)
+            if self.output_mean_image:
+                outputs.append(output_mean_image_fn)
+            if self.output_coverage_map:
+                outputs.append(output_coverage_map_fn)
+
         self.quit_if_outputs_exist(outputs)
 
-        specs = self._load_companions()
+        # specs = self._load_companions()
         aperture_diameter_px = self.aperture_diameter_px
         apertures_to_exclude = self.apertures_to_exclude
-        template_hdul = iofits.load_fits_from_path(self.template.path)
+        # template_hdul = iofits.load_fits_from_path(self.template.path)
 
-        dataset_path = self.input
-        template_scale_factors = iofits.load_fits_from_path(self.template.scale_factors_path)
+        # dataset_path = self.input
+        # if self.template.scale_factors_path is not None:
+        #     template_scale_factors_hdul = iofits.load_fits_from_path(self.template.scale_factors_path)
+        # else:
+        #     template_scale_factors_hdul = None
+
 
         # process like the klip command
-        klip_inputs, obs_method, derotation_angles, left_over_right_ratios = self._assemble_klip_inputs(dataset_path)
-        klip_params = self._assemble_klip_params(klip_inputs, derotation_angles)
-
-        log.info("Injecting signals")
-        if "vapp" in obs_method:
-            left_extname = obs_method["vapp"]["left"]
-            right_extname = obs_method["vapp"]["right"]
-            if left_extname not in template_hdul or right_extname not in template_hdul:
-                raise RuntimeError(
-                    f"Couldn't find matching template PSFs for extensions named {left_extname} and {right_extname}"
-                )
-            log.debug(f"vAPP {left_extname=} {right_extname=}")
-            klip_inputs[0].sci_arr, _ = characterization.inject_signals(
-                klip_inputs[0].sci_arr,
-                derotation_angles,
-                specs,
-                template_hdul[left_extname].data,
-                template_scale_factors[left_extname].data,
-                saturation_threshold=self.saturation_threshold
-            )
-            log.debug("Injected left")
-            klip_inputs[1].sci_arr, _ = characterization.inject_signals(
-                klip_inputs[1].sci_arr,
-                derotation_angles,
-                specs,
-                template_hdul[left_extname].data,
-                template_scale_factors[left_extname].data,
-                saturation_threshold=self.saturation_threshold
-            )
-            log.debug("Injected right")
-            if self.output_injected_data:
-                injected_data_hdul = iofits.DaskHDUList([
-                    iofits.DaskHDU(klip_inputs[0].sci_arr, name=left_extname),
-                    iofits.DaskHDU(klip_inputs[1].sci_arr, name=right_extname),
-                    iofits.DaskHDU(derotation_angles, name="ANGLES")
-                ])
-                iofits.write_fits(injected_data_hdul, output_injected_data_fn)
+        input_cube_hdul, obs_method = self._load_dataset(self.input)
+        klip_inputs, obs_method, derotation_angles, left_over_right_ratios = self._assemble_klip_inputs(input_cube_hdul, obs_method)
+        if self.initial_decomposition_path is not None:
+            initial_decomposition = self._load_initial_decomposition(self.initial_decomposition_path)
         else:
-            if "SCI" not in template_hdul and len(template_hdul[0].data.shape) == 0:
-                raise RuntimeError(
-                    f"No 'SCI' extension in {self.template_path} and no data in primary extension"
-                )
-            if "SCI" in template_hdul:
-                ext = "SCI"
-            else:
-                ext = 0
-            template_psf = template_hdul[ext].data
-            klip_inputs[0].sci_arr, _ = characterization.inject_signals(
-                klip_inputs[0].sci_arr, derotation_angles, specs, template_psf, template_scale_factors[ext].data,
-                saturation_threshold=self.saturation_threshold
-            )
+            initial_decomposition = None
+        klip_params = self._assemble_klip_params(klip_inputs, derotation_angles, initial_decomposition)
 
-        klip_inputs, derotation_angles = self._coadd_klip_inputs(klip_inputs, derotation_angles)
+        # log.info("Injecting signals")
+        # if "vapp" in obs_method:
+        #     left_extname = obs_method["vapp"]["left"]
+        #     right_extname = obs_method["vapp"]["right"]
+        #     if left_extname not in template_hdul or right_extname not in template_hdul:
+        #         raise RuntimeError(
+        #             f"Couldn't find matching template PSFs for extensions named {left_extname} and {right_extname}"
+        #         )
+        #     log.debug(f"vAPP {left_extname=} {right_extname=}")
+        #     if template_scale_factors_hdul is not None:
+        #         left_factors = template_scale_factors_hdul[left_extname].data
+        #         right_factors = template_scale_factors_hdul[right_extname].data
+        #     else:
+        #         left_factors = None
+        #         right_factors = None
+        #     klip_inputs[0].sci_arr, _ = characterization.inject_signals(
+        #         klip_inputs[0].sci_arr,
+        #         specs,
+        #         template_hdul[left_extname].data,
+        #         derotation_angles,
+        #         left_factors,
+        #         saturation_threshold=self.saturation_threshold
+        #     )
+        #     log.debug("Injected left")
+        #     klip_inputs[1].sci_arr, _ = characterization.inject_signals(
+        #         klip_inputs[1].sci_arr,
+        #         specs,
+        #         template_hdul[right_extname].data,
+        #         derotation_angles,
+        #         right_factors,
+        #         saturation_threshold=self.saturation_threshold
+        #     )
+        #     log.debug("Injected right")
+        #     if self.output_injected_data:
+        #         injected_data_hdul = iofits.DaskHDUList([
+        #             iofits.DaskHDU(klip_inputs[0].sci_arr, name=left_extname),
+        #             iofits.DaskHDU(klip_inputs[1].sci_arr, name=right_extname),
+        #             iofits.DaskHDU(derotation_angles, name="ANGLES")
+        #         ])
+        #         iofits.write_fits(injected_data_hdul, output_injected_data_fn)
+        # else:
+        #     if "SCI" not in template_hdul and len(template_hdul[0].data.shape) == 0:
+        #         raise RuntimeError(
+        #             f"No 'SCI' extension in {self.template_path} and no data in primary extension"
+        #         )
+        #     if "SCI" in template_hdul:
+        #         ext = "SCI"
+        #     else:
+        #         ext = 0
+        #     template_psf = template_hdul[ext].data
+        #     if template_scale_factors_hdul is not None:
+        #         template_scale_factors = template_scale_factors_hdul[ext].data
+        #     else:
+        #         template_scale_factors = None
+        #     klip_inputs[0].sci_arr, _ = characterization.inject_signals(
+        #         klip_inputs[0].sci_arr, specs, template_psf, derotation_angles, template_scale_factors,
+        #         saturation_threshold=self.saturation_threshold
+        #     )
 
         import time
         start = time.perf_counter()
-        outcubes, outmeans = self._klip(klip_inputs, klip_params, obs_method, left_over_right_ratios)
+        result = self._klip(klip_inputs, klip_params, obs_method, left_over_right_ratios)
+        if klip_params.warmup:
+            self._save_warmup(result, output_initial_decomp_fn)
+            return 0
+        else:
+            outcubes, outmeans = result
         out_image, mean_image, coverage_image = self._assemble_out_images(klip_inputs, obs_method, outcubes, outmeans, derotation_angles)
         elapsed = time.perf_counter() - start
         log.info(f"Computed in {elapsed} sec")
 
 
-        recovered_signals = characterization.recover_signals(
-            out_image, specs, aperture_diameter_px, apertures_to_exclude
-        )
+        # recovered_signals = characterization.recover_signals(
+        #     out_image, specs, aperture_diameter_px, apertures_to_exclude
+        # )
         if self.search.min_r_px is None:
             self.search.min_r_px = self.mask_min_r_px
         if self.search.max_r_px is None:
@@ -185,7 +209,7 @@ class EvalKlip(Klip):
         time_elapsed_sec = end - start
         log.info(f"Done in {time_elapsed_sec} sec")
         payload = xconf.asdict(self)
-        payload['recovered_signals'] = [dataclasses.asdict(x) for x in recovered_signals]
+        # payload['recovered_signals'] = [dataclasses.asdict(x) for x in recovered_signals]
         payload['candidates'] = [dataclasses.asdict(x) for x in all_candidates]
         payload['time_elapsed_sec'] = time_elapsed_sec
         payload['effective_working_angles'] = {'iwa_px': iwa_px, 'owa_px': owa_px}

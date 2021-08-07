@@ -54,7 +54,6 @@ class InitialDecomposition:
     mtx_u0 : np.ndarray
     diag_s0 : np.ndarray
     mtx_v0 : np.ndarray
-    image_vecs_meansub : np.ndarray
 
 @dataclass
 class KlipParams:
@@ -368,7 +367,8 @@ def klip_mtx_svd(image_vecs_meansub, params : KlipParams):
         mtx_u0 = diag_s0 = mtx_v0 = None
 
     if params.warmup:
-        return InitialDecomposition(mtx_u0, diag_s0, mtx_v0, image_vecs_meansub)
+        log.debug("Bailing out early to store decomposition")
+        return InitialDecomposition(mtx_u0, diag_s0, mtx_v0)
 
     exclusion_values, exclusion_deltas = _exclusions_to_arrays(params)
     log.info(f'Computing KLIPed vectors')

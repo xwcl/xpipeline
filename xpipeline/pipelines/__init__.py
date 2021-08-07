@@ -218,13 +218,13 @@ def klip_inputs_to_mtx_x(klip_inputs: List[KlipInput]):
 def klip_multi(klip_inputs: List[KlipInput], klip_params: KlipParams):
     log.debug("assembling klip_multi")
     mtx_x, subset_indices = klip_inputs_to_mtx_x(klip_inputs)
-    result = starlight_subtraction.klip_mtx(
+    result, mean_vec = starlight_subtraction.klip_mtx(
         mtx_x, klip_params
     )
     if klip_params.warmup:
         return result
     else:
-        subtracted_mtx, mean_vec = result
+        subtracted_mtx = result
     start_idx = 0
     cubes, mean_images = [], []
     for input_data, subset_idxs in zip(klip_inputs, subset_indices):
@@ -280,8 +280,12 @@ def klip_multi(klip_inputs: List[KlipInput], klip_params: KlipParams):
 
 
 def klip_one(klip_input: KlipInput, klip_params: KlipParams):
-    cubes, means = klip_multi([klip_input], klip_params)
-    return cubes[0], means[0]
+    result = klip_multi([klip_input], klip_params)
+    if klip_params.warmup:
+        return result
+    else:
+        cubes, means = result
+        return cubes[0], means[0]
 
 
 def klip_vapp_separately(
@@ -291,12 +295,16 @@ def klip_vapp_separately(
     vapp_symmetry_angle : float,
     left_over_right_ratios: float
 ):
-    left_cube, left_mean = klip_one(left_input, klip_params)
-    right_cube, right_mean = klip_one(right_input, klip_params)
-
-    final_cube = vapp_stitch(left_cube, right_cube, vapp_symmetry_angle, left_over_right_ratios)
-    final_mean = vapp_stitch(left_mean[np.newaxis,:], right_mean[np.newaxis,:], vapp_symmetry_angle, left_over_right_ratios)
-    return final_cube, final_mean
+    left_result = klip_one(left_input, klip_params)
+    right_result = klip_one(right_input, klip_params)
+    if klip_params.warmup:
+        return left_result, right_result
+    else:
+        left_cube, left_mean = left_result
+        right_cube, right_mean = right_result
+        final_cube = vapp_stitch(left_cube, right_cube, vapp_symmetry_angle, left_over_right_ratios)
+        final_mean = vapp_stitch(left_mean[np.newaxis,:], right_mean[np.newaxis,:], vapp_symmetry_angle, left_over_right_ratios)
+        return final_cube, final_mean
 
 def vapp_stitch(
     left_cube,
