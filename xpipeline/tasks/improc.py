@@ -235,7 +235,7 @@ def mask_arc(
     Parameters
     ----------
     center : tuple[float, float]
-        x, y pixel coordinates of the center of the grid
+        y, x pixel coordinates of the center of the grid
     data_shape : tuple[int, int]
         height, width shape (Python / NumPy order)
     from_radius : float

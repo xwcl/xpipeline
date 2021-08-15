@@ -2,7 +2,7 @@ import numpy as np
 from . import improc
 
 
-def make_dark_hole_masks(shape, owa_px, offset_px, psf_rotation_deg):
+def make_dark_hole_masks(shape, owa_px, offset_px, psf_rotation_deg, maximize_iwa=False):
     """Generate dark hole masks for a gvAPP-180 using OWA, center
     offset, and rotation
 
@@ -17,6 +17,9 @@ def make_dark_hole_masks(shape, owa_px, offset_px, psf_rotation_deg):
     psf_rotation_deg : float
         Amount by which the flat edges of the masks (and the offset
         from center) are rotated E of N (CCW when 0,0 at lower left)
+    maximize_iwa : bool
+        Whether included region should contain bright PSF structure
+        all the way to the `psf_rotation_deg` line dividing the image
 
     Returns
     -------
@@ -28,16 +31,14 @@ def make_dark_hole_masks(shape, owa_px, offset_px, psf_rotation_deg):
         side when `psf_rotation_deg` == 0
     """
     radius_px = owa_px + offset_px
+
     right_overall_rotation_radians = np.deg2rad(-psf_rotation_deg + 90)
     right_offset_theta = np.deg2rad(psf_rotation_deg)
-
-    left_overall_rotation_radians = np.deg2rad(-90 + -psf_rotation_deg)
-    left_offset_theta = np.deg2rad(-90 - psf_rotation_deg)
     ctr_x, ctr_y = (shape[1] - 1) / 2, (shape[0] - 1) / 2
     right_mask = improc.mask_arc(
         (
-            ctr_x + offset_px * np.cos(right_offset_theta),
             ctr_y + offset_px * np.sin(right_offset_theta),
+            ctr_x + offset_px * np.cos(right_offset_theta),
         ),
         shape,
         from_radius=0,
@@ -48,16 +49,22 @@ def make_dark_hole_masks(shape, owa_px, offset_px, psf_rotation_deg):
     )
     left_mask = improc.mask_arc(
         (
-            ctr_x + offset_px * np.cos(left_offset_theta),
-            ctr_y + offset_px * np.sin(left_offset_theta),
+            ctr_y - offset_px * np.sin(right_offset_theta),  # swap offset signs since it's left
+            ctr_x - offset_px * np.cos(right_offset_theta),
         ),
         shape,
         from_radius=0,
         to_radius=radius_px,
         from_radians=0,
         to_radians=np.pi,
-        overall_rotation_radians=left_overall_rotation_radians,
+        overall_rotation_radians=right_overall_rotation_radians + np.pi,
     )
+    if maximize_iwa:
+        bright_bar = improc.mask_box(shape, (ctr_x, ctr_y), (offset_px * 2, 2 * radius_px), -psf_rotation_deg)
+        left_half, right_half = mask_along_angle(shape, psf_rotation_deg)
+        left_mask = (left_mask | bright_bar) & left_half
+        right_mask = (right_mask | bright_bar) & right_half
+
     return left_mask, right_mask
 
 
