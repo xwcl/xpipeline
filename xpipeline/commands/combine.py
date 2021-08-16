@@ -1,7 +1,7 @@
 import logging
 from typing import Optional, Union
 import xconf
-from .. import utils, constants
+from .. import utils, constants, types
 from .base import InputCommand
 from .base import CompanionConfig, TemplateConfig, AngleRangeConfig, PixelRotationRangeConfig
 
@@ -9,7 +9,13 @@ log = logging.getLogger(__name__)
 
 @xconf.config
 class CombineFramesConfig:
-    n_frames : int = xconf.field(default=1, help="Minimum number of frames per chunk (final chunk may be smaller)")
+    n_frames : int = xconf.field(default=1, help="Maximum number of frames per chunk (final chunk may be smaller)")
+
+@xconf.config
+class CombineWallTimeConfig:
+    delta_t_sec : float = xconf.field(help="Interval of wall time (not open shutter time) to cover")
+    time_secs_col : str = xconf.field(default='DATE-OBS_TS', help="Observation table column containing time in seconds")
+
 
 @xconf.config
 class CombineAllConfig:
@@ -19,7 +25,7 @@ class CombineAllConfig:
 class CombineAnglesConfig:
     angle : Union[AngleRangeConfig,PixelRotationRangeConfig] = xconf.field(default=AngleRangeConfig(), help="Combine frames with derotation angles within range")
 
-CombineConfig = Union[CombineFramesConfig, CombineAnglesConfig, CombineAllConfig]
+CombineConfig = Union[CombineFramesConfig, CombineWallTimeConfig, CombineAnglesConfig, CombineAllConfig]
 
 @xconf.config
 class Combine(InputCommand):
@@ -32,27 +38,6 @@ class Combine(InputCommand):
         input_cube_hdul = iofits.load_fits_from_path(dataset_path)
         obs_method = utils.parse_obs_method(input_cube_hdul[0].header["OBSMETHD"])
         return input_cube_hdul, obs_method
-
-    def _get_derotation_angles(self, dataset_hdul, obs_method):
-        if "adi" in obs_method:
-            where_angles = obs_method["adi"]["derotation_angles"]
-            if '.' in where_angles:
-                tbl_ext, col_name = where_angles.split('.', 1)
-                derotation_angles = dataset_hdul[tbl_ext].data[col_name]
-            else:
-                derotation_angles = dataset_hdul[where_angles].data
-        else:
-            derotation_angles = None
-        return derotation_angles
-    
-    def _set_derotation_angles(self, dataset_hdul, obs_method, derotation_angles):
-        if "adi" in obs_method:
-            where_angles = obs_method["adi"]["derotation_angles"]
-            if '.' in where_angles:
-                tbl_ext, col_name = where_angles.split('.', 1)
-                dataset_hdul[tbl_ext].data[col_name] = derotation_angles
-            else:
-                dataset_hdul[where_angles].data = derotation_angles
 
     def _combine_obs(self, dataset_hdul, obs_method):
         import numpy as np
@@ -82,6 +67,8 @@ class Combine(InputCommand):
                 raise ValueError("Supply a range config or all = true")
             combine_all = True
             range_spec = improc.FrameIndexRangeSpec(n_frames=total_n_frames)
+        elif hasattr(self.combine, 'delta_t_sec'):
+            range_spec = improc.WallTimeRangeSpec(delta_t_sec=self.combine.delta_t_sec, time_secs_col=self.combine.time_secs_col)
         else:
             raise RuntimeError("self.combine isn't a CombineConfig")
         if range_spec == improc.FrameIndexRangeSpec(n_frames=1):
@@ -91,23 +78,19 @@ class Combine(InputCommand):
         
         # do combination
         if combine_all:
-            combined_angles = None
-            combined_metadata = None
             combined_obs = [improc.combine(obs, self.combine_input_by) for _, obs in obs_to_combine]
             for x in combined_obs:
                 x /= np.sum(x)
             log.info(f"Combined {total_n_frames} observations to make a normalized template")
         else:
-            combined_obs, combined_angles, combined_metadata = improc.combine_ranges(
+            combined_obs, combined_metadata = improc.combine_ranges(
                 [obs for _, obs in obs_to_combine],
-                self._get_derotation_angles(dataset_hdul, obs_method),
-                range_spec,
                 metadata,
+                range_spec,
                 operation=self.combine_input_by
             )
             if 'OBSTABLE' in dataset_hdul:
                 dataset_hdul['OBSTABLE'].data = combined_metadata
-            self._set_derotation_angles(dataset_hdul, obs_method, derotation_angles=combined_angles)
             log.info(f"Combined {total_n_frames} observations to get {combined_obs[0].shape[0]} observations")
         for new_idx, (old_idx, _) in enumerate(obs_to_combine):
             result = combined_obs[new_idx]
@@ -116,7 +99,7 @@ class Combine(InputCommand):
 
     def main(self):
         from ..tasks import iofits
-        output_combined_data_fn = utils.join(self.destination, "combined_dataset.fits")
+        output_combined_data_fn = utils.join(self.destination, "combine.fits")
         outputs = [output_combined_data_fn]
         destination = self.destination
         dest_fs = utils.get_fs(destination)

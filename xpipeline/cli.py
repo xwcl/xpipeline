@@ -22,6 +22,9 @@ from .commands import (
     inject,
     klip,
     eval_klip,
+    subtract_starlight,
+    stack,
+    evaluate,
 )
 
 log = logging.getLogger(__name__)
@@ -44,6 +47,9 @@ COMMANDS = {
     inject.Inject,
     klip.Klip,
     eval_klip.EvalKlip,
+    subtract_starlight.SubtractStarlight,
+    stack.Stack,
+    evaluate.Evaluate,
 }
 
 class Dispatcher(xconf.Dispatcher):

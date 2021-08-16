@@ -8,7 +8,7 @@ from .. import utils
 # from ..core import LazyPipelineCollection
 # from ..tasks import iofits, characterization
 
-from .base import CompanionConfig, TemplateConfig
+from .base import MeasurementConfig, TemplateConfig
 from .klip import Klip
 
 log = logging.getLogger(__name__)
@@ -22,8 +22,7 @@ class SearchConfig:
 @xconf.config
 class EvalKlip(Klip):
     "Inject and recover a companion in ADI data through KLIP"
-    # template : TemplateConfig = xconf.field(help="Paths for template image and scale factors")
-    # companions : Optional[list[CompanionConfig]] = xconf.field(help="Companions to inject (optionally) and measure SNR for")
+    measurements : Optional[list[MeasurementConfig]] = xconf.field(help="Locations (r_px, pa_deg) to measure SNR")
     aperture_diameter_px : float = xconf.field(help="Diameter of the SNR estimation aperture (~lambda/D) in pixels")
     apertures_to_exclude : int = xconf.field(default=1, help=utils.unwrap(
         """Number of apertures on *each side* of the specified target
@@ -44,17 +43,19 @@ class EvalKlip(Klip):
         template_psf = iofits.load_fits_from_path(self.template.path)[0].data
         return sci_arr, rot_arr, region_mask, template_psf
 
-    # def _load_companions(self):
-    #     from ..tasks import characterization
-    #     specs = []
-    #     for companion in self.companions:
-    #         specs.append(characterization.CompanionSpec(
-    #             scale=companion.scale,
-    #             r_px=companion.r_px,
-    #             pa_deg=companion.pa_deg
-    #         ))
-    #         log.debug(f'Companion: {specs[-1]}')
-    #     return specs
+    def _load_companions(self, dataset_hdul):
+        import numpy as np
+        from ..tasks import characterization
+        specs = []
+        if self.measurements is not None:
+            for mconfig in self.measurements:
+                specs.append(characterization.CompanionSpec(scale=np.nan, r_px=mconfig.r_px, pa_deg=mconfig.pa_deg))
+            log.debug(f"Measuring at locations {specs} specified in config")
+        if 'INJECTED' in dataset_hdul:
+            tbl = dataset_hdul['INJECTED'].data
+            specs.extend(characterization.table_to_specs(tbl, characterization.CompanionSpec))
+            log.debug(f'Loaded injected signal table: {specs}')
+        return specs
 
     def main(self):
         import fsspec.spec
@@ -88,7 +89,6 @@ class EvalKlip(Klip):
 
         self.quit_if_outputs_exist(outputs)
 
-        # specs = self._load_companions()
         aperture_diameter_px = self.aperture_diameter_px
         apertures_to_exclude = self.apertures_to_exclude
         # template_hdul = iofits.load_fits_from_path(self.template.path)
@@ -102,12 +102,13 @@ class EvalKlip(Klip):
 
         # process like the klip command
         input_cube_hdul, obs_method = self._load_dataset(self.input)
-        klip_inputs, obs_method, derotation_angles, left_over_right_ratios = self._assemble_klip_inputs(input_cube_hdul, obs_method)
+        specs = self._load_companions(input_cube_hdul)
         if self.initial_decomposition_path is not None:
-            initial_decomposition = self._load_initial_decomposition(self.initial_decomposition_path)
+            initial_decompositions = self._load_initial_decomposition(self.initial_decomposition_path)
         else:
-            initial_decomposition = None
-        klip_params = self._assemble_klip_params(klip_inputs, derotation_angles, initial_decomposition)
+            initial_decompositions = None
+        klip_inputs, obs_method, derotation_angles, left_over_right_ratios = self._assemble_klip_inputs(input_cube_hdul, obs_method, initial_decompositions)
+        klip_params = self._assemble_klip_params(klip_inputs, derotation_angles)
 
         # log.info("Injecting signals")
         # if "vapp" in obs_method:
@@ -171,7 +172,7 @@ class EvalKlip(Klip):
         import time
         start = time.perf_counter()
         result = self._klip(klip_inputs, klip_params, obs_method, left_over_right_ratios)
-        if klip_params.warmup:
+        if klip_params.initial_decomposition_only:
             self._save_warmup(result, output_initial_decomp_fn)
             return 0
         else:
@@ -181,9 +182,10 @@ class EvalKlip(Klip):
         log.info(f"Computed in {elapsed} sec")
 
 
-        # recovered_signals = characterization.recover_signals(
-        #     out_image, specs, aperture_diameter_px, apertures_to_exclude
-        # )
+        recovered_signals = characterization.recover_signals(
+            out_image, specs, aperture_diameter_px, apertures_to_exclude
+        )
+        print(recovered_signals)
         if self.search.min_r_px is None:
             self.search.min_r_px = self.mask_min_r_px
         if self.search.max_r_px is None:
@@ -194,7 +196,11 @@ class EvalKlip(Klip):
 
         if self.output_klip_final:
             iofits.write_fits(
-                iofits.DaskHDUList([iofits.DaskHDU(out_image)]), output_klip_final_fn
+                iofits.DaskHDUList([
+                    iofits.DaskHDU(out_image),
+                    iofits.DaskHDU(characterization.specs_to_table(recovered_signals, characterization.RecoveredSignal), name='RECOVERED', kind='bintable'),
+                    iofits.DaskHDU(characterization.specs_to_table(all_candidates, characterization.Detection), name='CANDIDATES', kind='bintable')
+                ]), output_klip_final_fn
             )
         if self.output_mean_image:
             iofits.write_fits(
@@ -208,13 +214,13 @@ class EvalKlip(Klip):
         end = time.perf_counter()
         time_elapsed_sec = end - start
         log.info(f"Done in {time_elapsed_sec} sec")
-        payload = xconf.asdict(self)
-        # payload['recovered_signals'] = [dataclasses.asdict(x) for x in recovered_signals]
+        payload = {}
+        payload['config'] = xconf.asdict(self)
+        payload['recovered_signals'] = [dataclasses.asdict(x) for x in recovered_signals]
         payload['candidates'] = [dataclasses.asdict(x) for x in all_candidates]
         payload['time_elapsed_sec'] = time_elapsed_sec
         payload['effective_working_angles'] = {'iwa_px': iwa_px, 'owa_px': owa_px}
         log.info(f"Result of KLIP + ADI signal injection and recovery:")
-        log.info(pformat(payload))
 
         with fsspec.open(output_result_fn, "wb") as fh:
             payload_str = orjson.dumps(
@@ -222,5 +228,4 @@ class EvalKlip(Klip):
             )
             fh.write(payload_str)
             fh.write(b"\n")
-
-        return output_result_fn
+            log.info(payload_str.decode('utf8'))

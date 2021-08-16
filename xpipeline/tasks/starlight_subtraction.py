@@ -26,12 +26,24 @@ def _count_max_excluded(values, delta_excluded):
         max_excluded = excluded_for_val1 if excluded_for_val1 > max_excluded else max_excluded
     return max_excluded
 
+@dataclass
+class InitialDecomposition:
+    mtx_u0 : np.ndarray
+    diag_s0 : np.ndarray
+    mtx_v0 : np.ndarray
+
+    def __repr__(self):
+        mtx_u0, diag_s0, mtx_v0 = self.mtx_u0, self.diag_s0, self.mtx_v0
+        return f"InitialDecomposition<{mtx_u0.shape=}, {diag_s0.shape=}, {mtx_v0.shape=}>"
+
 
 @dataclass
 class KlipInput:
-    sci_arr: da.core.Array
+    sci_arr: np.ndarray
+    obstable: np.ndarray
     estimation_mask: np.ndarray
-    combination_mask: Union[np.ndarray, None]
+    signal_arr : Optional[np.ndarray]
+
 distributed.protocol.register_generic(KlipInput)
 
 @dataclass
@@ -50,12 +62,6 @@ distributed.protocol.register_generic(ExclusionValues)
 
 
 @dataclass
-class InitialDecomposition:
-    mtx_u0 : np.ndarray
-    diag_s0 : np.ndarray
-    mtx_v0 : np.ndarray
-
-@dataclass
 class KlipParams:
     k_klip: int
     exclusions : list[ExclusionValues]
@@ -65,7 +71,7 @@ class KlipParams:
     missing_data_value: float = np.nan
     strategy : constants.KlipStrategy = constants.KlipStrategy.DOWNDATE_SVD
     initial_decomposition : Optional[InitialDecomposition] = None
-    warmup : bool = False
+    initial_decomposition_only : bool = False
 
     def __post_init__(self):
         if self.initial_decomposer is None:
@@ -363,10 +369,14 @@ def klip_mtx_svd(image_vecs_meansub, params : KlipParams):
             mtx_u0 = np.ascontiguousarray(initial_decomposition.mtx_u0[:, :initial_k])
             diag_s0 = np.ascontiguousarray(initial_decomposition.diag_s0[:initial_k])
             mtx_v0 = np.ascontiguousarray(initial_decomposition.mtx_v0[:, :initial_k])
+            if mtx_u0.shape[0] != image_vecs_meansub.shape[0]:
+                raise ValueError(f"Initial decomposition has {mtx_u0.shape=} but {image_vecs_meansub.shape=}. Mask changed?")
+            if mtx_v0.shape[0] != image_vecs_meansub.shape[1]:
+                raise ValueError(f"Initial decomposition has {mtx_v0.shape=} but {image_vecs_meansub.shape=}. Combination parameters changed?")
     else:
         mtx_u0 = diag_s0 = mtx_v0 = None
 
-    if params.warmup:
+    if params.initial_decomposition_only:
         log.debug("Bailing out early to store decomposition")
         return InitialDecomposition(mtx_u0, diag_s0, mtx_v0)
 

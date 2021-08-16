@@ -221,7 +221,7 @@ def klip_multi(klip_inputs: List[KlipInput], klip_params: KlipParams):
     result, mean_vec = starlight_subtraction.klip_mtx(
         mtx_x, klip_params
     )
-    if klip_params.warmup:
+    if klip_params.initial_decomposition_only:
         return result
     else:
         subtracted_mtx = result
@@ -231,47 +231,22 @@ def klip_multi(klip_inputs: List[KlipInput], klip_params: KlipParams):
         # first axis selects "which axis", second axis has an entry per retained pixel
         n_features = subset_idxs.shape[1]
         end_idx = start_idx + n_features
-        if input_data.combination_mask is not None:
-            # slice out the range of rows in the combined matrix that correspond to this input
-            submatrix = subtracted_mtx[start_idx:end_idx]
-            sub_mean_vec = mean_vec[start_idx:end_idx]
-            # log.debug(f"{submatrix=}")
-            cube = improc.wrap_matrix(
-                submatrix,
-                input_data.sci_arr.shape,
-                subset_idxs,
-                fill_value=klip_params.missing_data_value,
-            )
-            mean_image = improc.wrap_vector(
-                sub_mean_vec,
-                input_data.sci_arr.shape[1:],
-                subset_idxs,
-                fill_value=klip_params.missing_data_value
-            )
-            # log.debug(
-            #     f"after slicing submatrix and rewrapping with indices from estimation mask: {cube=}"
-            # )
-            # TODO is there a better way?
-            re_unwrapped_cube, subset_idxs = improc.unwrap_cube(
-                cube, input_data.combination_mask
-            )
-            re_unwrapped_mean_image, im_idxs = improc.unwrap_image(mean_image, input_data.combination_mask)
-            # log.debug(f"{unwrapped=} {subset_idxs.shape=}")
-            cube = improc.wrap_matrix(
-                re_unwrapped_cube,
-                cube.shape,
-                subset_idxs,
-                fill_value=klip_params.missing_data_value,
-            )
-            mean_image = improc.wrap_vector(
-                re_unwrapped_mean_image,
-                cube.shape[1:],
-                subset_idxs,
-                fill_value=klip_params.missing_data_value,
-            )
-            # log.debug(f"after rewrapping with combination mask indices: {cube=}")
-        else:
-            cube = None
+        # slice out the range of rows in the combined matrix that correspond to this input
+        submatrix = subtracted_mtx[start_idx:end_idx]
+        sub_mean_vec = mean_vec[start_idx:end_idx]
+        # log.debug(f"{submatrix=}")
+        cube = improc.wrap_matrix(
+            submatrix,
+            input_data.sci_arr.shape,
+            subset_idxs,
+            fill_value=klip_params.missing_data_value,
+        )
+        mean_image = improc.wrap_vector(
+            sub_mean_vec,
+            input_data.sci_arr.shape[1:],
+            subset_idxs,
+            fill_value=klip_params.missing_data_value
+        )
         cubes.append(cube)
         mean_images.append(mean_image)
         start_idx += n_features
@@ -281,7 +256,7 @@ def klip_multi(klip_inputs: List[KlipInput], klip_params: KlipParams):
 
 def klip_one(klip_input: KlipInput, klip_params: KlipParams):
     result = klip_multi([klip_input], klip_params)
-    if klip_params.warmup:
+    if klip_params.initial_decomposition_only:
         return result
     else:
         cubes, means = result
@@ -297,7 +272,7 @@ def klip_vapp_separately(
 ):
     left_result = klip_one(left_input, klip_params)
     right_result = klip_one(right_input, klip_params)
-    if klip_params.warmup:
+    if klip_params.initial_decomposition_only:
         return left_result, right_result
     else:
         left_cube, left_mean = left_result

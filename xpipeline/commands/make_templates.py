@@ -46,10 +46,7 @@ class MakeTemplates(InputCommand):
         for idx, hdu in enumerate(dataset_hdul):
             if hdu.kind != "bintable" and hdu.data is not None and len(hdu.data.shape) >= 1:
                 obs_to_combine.append((idx, hdu.data))
-        if 'OBSTABLE' in dataset_hdul:
-            metadata = dataset_hdul['OBSTABLE'].data
-        else:
-            metadata = None
+        obs_table = dataset_hdul['OBSTABLE'].data
         
         # create range spec
         total_n_frames = obs_to_combine[0][1].shape[0]
@@ -76,9 +73,8 @@ class MakeTemplates(InputCommand):
         # do combination
         combined_obs, combined_angles, combined_metadata = improc.combine_ranges(
             [obs for _, obs in obs_to_combine],
-            self._get_derotation_angles(dataset_hdul, obs_method),
+            obs_table,
             range_spec,
-            metadata,
             operation=self.combine_input_by
         )
         for new_idx, (old_idx, _) in enumerate(obs_to_combine):

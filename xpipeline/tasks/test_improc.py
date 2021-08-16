@@ -257,22 +257,16 @@ def test_combine_ranges():
     angles = np.zeros(6)
 
     data[0,0,0] = 1
-    angles[0] = 90
     data[1,0,0] = 1
-    angles[1] = 60
     data[2,0,0] = 1
-    angles[2] = 30
 
     data[3,1,0] = 1
-    angles[3] = 0
     data[4,1,0] = 1
-    angles[4] = -30
     data[5,1,0] = 1
-    angles[5] = -60
 
     idxspec = improc.FrameIndexRangeSpec(n_frames=3)
-    anglespec = improc.AngleRangeSpec(delta_deg=90)
-    rpxspec = improc.PixelRotationRangeSpec(np.pi / 2, r_px=1)
+    anglespec = improc.AngleRangeSpec(delta_deg=90, angle_deg_column_name="meta3")
+    rpxspec = improc.PixelRotationRangeSpec(delta_px=np.pi / 2, r_px=1, angle_deg_column_name="meta3")
     metadata = np.array([
         ("A", 1, 90.0),
         ("B", 2, 60.0),
@@ -283,8 +277,9 @@ def test_combine_ranges():
     ], dtype=[("meta1", "S1"), ("meta2", np.int32), ("meta3", np.float32),])
     for spec in (idxspec, anglespec, rpxspec):
         print(f'{spec=}')
-        final_seqs, final_angles, final_metadata = improc.combine_ranges([data, data], angles, spec, metadata=metadata)
+        final_seqs, final_metadata = improc.combine_ranges([data, data], metadata, spec)
         for final_cube in final_seqs:
+            final_angles = final_metadata['meta3']
             print(f"{final_cube=}")
             print(f"{final_metadata=}")
             assert final_cube.shape[0] == 2

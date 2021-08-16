@@ -937,7 +937,8 @@ def get_or_fill(arr, y, x, fill_value):
     be out of bounds, in which case returns `fill_value`"""
     ny, nx = arr.shape
     if y < ny and y >= 0 and x < nx and x >= 0:
-        return arr[y,x]
+        val = arr[y,x]
+        return val if not np.isnan(val) else fill_value
     else:
         return fill_value
 
@@ -1085,26 +1086,40 @@ def _make_monotonic_angles_deg(angles_deg):
     return angles_deg
 
 @dataclass
-class PixelRotationRangeSpec:
+class BaseAngularRangeSpec:
+    angle_deg_column_name : str
+    def to_values_and_delta(self, obs_table):
+        derotation_angles = _make_monotonic_angles_deg(obs_table[self.angle_deg_column_name])
+        return self.angles_to_values_and_delta(derotation_angles)
+
+@dataclass
+class PixelRotationRangeSpec(BaseAngularRangeSpec):
     delta_px : float
     r_px : float
-    def to_values_and_delta(self, derotation_angles):
-        derotation_angles = _make_monotonic_angles_deg(derotation_angles)
+    def angles_to_values_and_delta(self, derotation_angles):
         values = np.deg2rad(derotation_angles) * self.r_px
         return values, self.delta_px
 @dataclass
-class AngleRangeSpec:
+class AngleRangeSpec(BaseAngularRangeSpec):
     delta_deg : float
-    def to_values_and_delta(self, derotation_angles):
-        derotation_angles = _make_monotonic_angles_deg(derotation_angles)
+    def angles_to_values_and_delta(self, derotation_angles):
         return derotation_angles, self.delta_deg
 @dataclass
 class FrameIndexRangeSpec:
     n_frames : int
-    def to_values_and_delta(self, derotation_angles):
-        return np.arange(derotation_angles.shape[0]), self.n_frames
+    def to_values_and_delta(self, obs_table):
+        return np.arange(len(obs_table)), self.n_frames
 
-RotationRange = Union[PixelRotationRangeSpec, AngleRangeSpec, FrameIndexRangeSpec]
+@dataclass
+class WallTimeRangeSpec:
+    delta_t_sec : float
+    time_secs_col : str
+
+    def to_values_and_delta(self, obs_table):
+        return obs_table[self.time_secs_col], self.delta_t_sec
+
+
+RotationRange = Union[PixelRotationRangeSpec, AngleRangeSpec, FrameIndexRangeSpec, WallTimeRangeSpec]
 
 def combine(cube : np.ndarray, operation: constants.CombineOperation):
     if operation is constants.CombineOperation.MEAN:
@@ -1117,7 +1132,7 @@ def combine(cube : np.ndarray, operation: constants.CombineOperation):
         raise ValueError("Supported operations: average, sum")
     return out_image
 
-def combine_ranges(obs_sequences, derotation_angles, range_spec, metadata=None, operation: constants.CombineOperation = constants.CombineOperation.MEAN):
+def combine_ranges(obs_sequences, obs_table, range_spec, operation: constants.CombineOperation = constants.CombineOperation.MEAN):
     """Using derotation angles and a range specified as `range_spec`, combine chunks of
     adjacent frames from `data_cube` and return summed data and averaged derotation angles
     corresponding to the new frames
@@ -1131,32 +1146,30 @@ def combine_ranges(obs_sequences, derotation_angles, range_spec, metadata=None, 
     out_metadata : Optional[np.ndarray]
         If metadata is a record array, new metadata for the output sequences
     """
-    values, delta = range_spec.to_values_and_delta(derotation_angles)
-    outangles = np.zeros_like(derotation_angles)
+    values, delta = range_spec.to_values_and_delta(obs_table)
     target_idx = 0
     chunk_start_idx = 0
     out_seqs = [np.zeros_like(seq) for seq in obs_sequences]
     n_data_cubes = len(obs_sequences)
     n_obs = obs_sequences[0].shape[0]
 
-    if metadata is not None:
-        out_metadata = np.zeros_like(metadata)
+    if obs_table is not None:
+        out_metadata = np.zeros_like(obs_table)
     else:
         out_metadata = None
     def _do_chunk(chunk):
-        if metadata is not None:
-            for field in metadata.dtype.fields:
-                field_dtype = metadata.dtype[field]
+        if obs_table is not None:
+            for field in obs_table.dtype.fields:
+                field_dtype = obs_table.dtype[field]
                 if np.issubdtype(field_dtype, np.floating) or np.issubdtype(field_dtype, np.integer):
-                    out_metadata[target_idx][field] = combine(metadata[chunk][field], operation)
+                    out_metadata[target_idx][field] = combine(obs_table[chunk][field], operation)
                 else:
                     # take first value from chunk since we don't know how to interpolate
                     # unknown types
-                    out_metadata[target_idx][field] = metadata[chunk_start_idx][field]
+                    out_metadata[target_idx][field] = obs_table[chunk_start_idx][field]
         for i in range(n_data_cubes):
             if operation is constants.CombineOperation.MEAN:
                 out_seqs[i][target_idx] = obs_sequences[i][chunk].mean(axis=0)
-        outangles[target_idx] = derotation_angles[chunk].mean()
 
     for frame_idx in range(n_obs):
         if values[frame_idx] - values[chunk_start_idx] >= delta:
@@ -1168,12 +1181,10 @@ def combine_ranges(obs_sequences, derotation_angles, range_spec, metadata=None, 
     # handle the last of the observations
     if n_obs - chunk_start_idx > 0:
         _do_chunk(slice(chunk_start_idx, None))
-        outangles[target_idx] = derotation_angles[chunk_start_idx:].mean()
 
     out_seqs = [np.copy(outcube[:target_idx+1]) for outcube in out_seqs]
-    outangles = outangles[:target_idx+1]
     out_metadata = out_metadata[:target_idx+1]
-    return out_seqs, outangles, out_metadata
+    return out_seqs, out_metadata
 
 
 @njit(cache=True)

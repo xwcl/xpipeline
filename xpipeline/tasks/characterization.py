@@ -1,3 +1,4 @@
+import dataclasses
 import logging
 import warnings
 import numpy as np
@@ -100,6 +101,25 @@ def inject_signals(
         signal_only_cube = np.clip(signal_only_cube, a_min=None, a_max=saturation_threshold)
     return outcube, signal_only_cube
 
+def specs_to_table(specs, spec_type, value_type=np.float32):
+    fields = dataclasses.fields(spec_type)
+    dtype = [
+        (field.name, value_type)
+        for field in fields
+    ]
+    tbl = np.zeros(len(specs), dtype=dtype)
+    for idx, spec in enumerate(specs):
+        for fld in fields:
+            tbl[idx][fld.name] = getattr(spec, fld.name)
+    return tbl
+
+
+def table_to_specs(table, spec_type):
+    specs = []
+    fields = dataclasses.fields(spec_type)
+    for row in table:
+        specs.append(spec_type(**{fld.name: row[fld.name] for fld in fields}))
+    return specs
 
 def recover_signals(
     image: np.ndarray,
@@ -424,7 +444,7 @@ def locate_snr_peaks(image, aperture_diameter_px, data_min_r_px, data_max_r_px, 
             Detection(r_px=r_px, pa_deg=pa_deg, snr=snr)
         ))
     maxima.sort()
-    return [x[1] for x in maxima[::-1]], (iwa_px, owa_px)
+    return [x[1] for x in maxima[::-1]], (iwa_px, owa_px), snr_image
 
 @numba.stencil(neighborhood=((-2, 2), (-2, 2)))
 def local_maxima(image) -> np.ndarray:

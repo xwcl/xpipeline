@@ -105,4 +105,6 @@ class Inject(InputCommand):
             )
             log.debug(f"Injected {extname}")
             dataset_hdul.append(iofits.DaskHDU(signal_only, name=f"{extname}_SIGNAL"))
+        tbl = characterization.specs_to_table(companion_specs, characterization.CompanionSpec)
+        dataset_hdul.append(iofits.DaskHDU(tbl, name="INJECTED", kind="bintable"))
         return dataset_hdul

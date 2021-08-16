@@ -34,9 +34,23 @@ class DaskConfig:
 
 @xconf.config
 class BaseCommand(xconf.Command):
+    destination : str = xconf.field(help="Output directory")
     dask : DaskConfig = xconf.field(default_factory=lambda: DaskConfig(), help="Configure Dask executor")
     random_state : int = xconf.field(default=0, help="Initialize NumPy's random number generator with this seed")
     cpus : int = xconf.field(default=utils.available_cpus(), help="Number of CPUs free for use")
+
+    def check_for_outputs(self, output_paths):
+        dest_fs = utils.get_fs(self.destination)
+        for op in output_paths:
+            if dest_fs.exists(op):
+                return True
+        return False
+
+    def quit_if_outputs_exist(self, output_paths):
+        if self.check_for_outputs(output_paths):
+            log.info(f"Outputs exist at {output_paths}")
+            log.info(f"Remove to re-run")
+            sys.exit(0)
 
     def __post_init__(self):
         numpy.random.seed(self.random_state)
@@ -78,20 +92,6 @@ class BaseCommand(xconf.Command):
 @xconf.config
 class InputCommand(BaseCommand):
     input : str = xconf.field(help="Input file path")
-    destination : str = xconf.field(help="Output directory")
-
-    def check_for_outputs(self, output_paths):
-        dest_fs = utils.get_fs(self.destination)
-        for op in output_paths:
-            if dest_fs.exists(op):
-                return True
-        return False
-
-    def quit_if_outputs_exist(self, output_paths):
-        if self.check_for_outputs(output_paths):
-            log.info(f"Outputs exist at {output_paths}")
-            log.info(f"Remove to re-run")
-            sys.exit(0)
 
 
 @xconf.config
@@ -122,16 +122,18 @@ class MultiInputCommand(InputCommand):
                 all_inputs = [self.input]
         return list(sorted(all_inputs))[::self.sample_every_n]
 
+@xconf.config
+class MeasurementConfig:
+    r_px : float = xconf.field(help="Radius of companion")
+    pa_deg : float = xconf.field(help="Position angle of companion in degrees East of North")
 
 
 @xconf.config
-class CompanionConfig:
+class CompanionConfig(MeasurementConfig):
     scale : float = xconf.field(help=utils.unwrap(
         """Scale factor multiplied by template (and optional template
         per-frame scale factor) to give companion image,
         i.e., contrast ratio. Can be negative or zero."""))
-    r_px : float = xconf.field(help="Radius of companion")
-    pa_deg : float = xconf.field(help="Position angle of companion in degrees East of North")
 
 @xconf.config
 class TemplateConfig:
@@ -164,3 +166,23 @@ class PixelRotationRangeConfig:
 @xconf.config
 class AngleRangeConfig:
     delta_deg : float = xconf.field(default=0, help="Maximum difference between target frame value and matching frames")
+
+@xconf.config
+class FitsConfig:
+    path : str = xconf.field(help="Path from which to load the containing FITS file")
+    ext : typing.Union[int,str] = xconf.field(default=0, help="Extension from which to load")
+
+    def load(self):
+        from ..tasks import iofits
+        hdul = iofits.load_fits_from_path(self.path)
+        return hdul[self.ext].data
+
+@xconf.config
+class FitsTableColumnConfig(FitsConfig):
+    table_column : str = xconf.field(help="Path from which to load the containing FITS file")
+    ext : typing.Union[int,str] = xconf.field(default="OBSTABLE", help="Extension from which to load")
+
+    def load(self):
+        from ..tasks import iofits
+        hdul = iofits.load_fits_from_path(self.path)
+        return hdul[self.ext].data[self.table_column]
