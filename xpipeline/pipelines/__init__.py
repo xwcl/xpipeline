@@ -349,10 +349,9 @@ def evaluate_starlight_subtraction(
         template_scale_factors=template_scale_factors,
         saturation_threshold=saturation_threshold
     )
+    klip_input.sci_arr = injected_sci_arr
     outcube, mean_image = klip_one(
-        KlipInput(
-            injected_sci_arr, klip_input.estimation_mask, klip_input.combination_mask
-        ),
+        klip_input,
         klip_params,
     )
     out_image = adi(outcube, derotation_angles, adi_combine_by)

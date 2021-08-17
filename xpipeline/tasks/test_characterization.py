@@ -136,7 +136,7 @@ def test_end_to_end(strategy, reuse, snr_threshold, decomposer):
 
     # can we get the same SNR from the image?
     data_min_r_px, data_max_r_px = 7, 47
-    detections, (iwa_px, owa_px) = characterization.locate_snr_peaks(output_image, fwhm_naco, data_min_r_px, data_max_r_px, exclude_nearest=1, snr_threshold=snr_threshold)
+    detections, (iwa_px, owa_px), snr_image = characterization.locate_snr_peaks(output_image, fwhm_naco, data_min_r_px, data_max_r_px, exclude_nearest=1, snr_threshold=snr_threshold)
     log.info(f'{detections=}')
     peak = detections[0]
     # n.b. not the same as the VIP tutorial quotes, but this is here to make sure

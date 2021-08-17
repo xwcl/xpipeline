@@ -42,7 +42,7 @@ class KlipInput:
     sci_arr: np.ndarray
     obstable: np.ndarray
     estimation_mask: np.ndarray
-    signal_arr : Optional[np.ndarray]
+    signal_arr : Optional[np.ndarray] = None
 
 distributed.protocol.register_generic(KlipInput)
 
