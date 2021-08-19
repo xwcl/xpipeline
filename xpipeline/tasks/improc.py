@@ -219,10 +219,10 @@ def wrap_vector(image_vec, shape, subset_idxs, fill_value=np.nan):
 def mask_arc(
     center: Tuple[float, float],
     data_shape: Tuple[int, int],
-    from_radius: float,
-    to_radius: float,
-    from_radians: float,
-    to_radians: float,
+    from_radius: float = 0,
+    to_radius: float = None,
+    from_radians: float = 0,
+    to_radians: float = 0,
     overall_rotation_radians: float = 0,
 ) -> np.ndarray:
     """Mask an arc beginning ``from_radius`` pixels from ``center``
@@ -240,28 +240,29 @@ def mask_arc(
         height, width shape (Python / NumPy order)
     from_radius : float
         pixel distance from center where mask `True` region
-        should start
-    to_radius : float
+        should start (default: 0)
+    to_radius : float or None
         pixel distance from center where mask `True` region
-        should end
+        should end (default: None, goes to edges of array)
     from_radians : float
         angle in radians from +X where mask `True` region
-        should start
+        should start (default: 0)
     to_radians : float
         angle in radians from +X where mask `True` region
-        should end
+        should end (default: 0)
     overall_rotation_radians : float (default: 0)
         amount to rotate coordinate grid from +X
     """
     rho, phi = polar_coords(center, data_shape)
     phi = (phi + overall_rotation_radians) % (2 * np.pi)
-    mask = (from_radius <= rho) & (rho <= to_radius)
+    mask = (from_radius <= rho)
+    if to_radius is not None:
+        mask &= (rho <= to_radius)
     from_radians %= 2 * np.pi
     to_radians %= 2 * np.pi
     if from_radians != to_radians:
         mask &= (from_radians <= phi) & (phi <= to_radians)
     return mask
-
 
 def cartesian_coords(
     center: Tuple[float, float], data_shape: Tuple[int, int]
