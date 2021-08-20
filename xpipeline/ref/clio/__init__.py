@@ -70,7 +70,15 @@ def _interpolation_endpoints(all_headers, varying_numeric_kw):
     for hdr_1, hdr_2 in zip(all_headers, all_headers[1:]):
         these_endpoints = {}
         for kw in varying_numeric_kw:
-            these_endpoints[kw] = hdr_1[kw], hdr_2[kw]
+            if kw in hdr_1:
+                fallback = hdr_1[kw]
+            elif kw in hdr_2:
+                fallback = hdr_2[kw]
+            else:
+                raise ValueError(f"Keyword {kw} missing in both headers, interpolation will be meaningless")
+            epstart = hdr_1[kw] if kw in hdr_1 else fallback
+            epend = hdr_2[kw] if kw in hdr_2 else fallback
+            these_endpoints[kw] = epstart, epend
         endpoints.append(these_endpoints)
     # special case last as linear extrapolation
     prev = endpoints[-1]
@@ -134,7 +142,11 @@ def serial_split_frames_cube(all_hduls, filenames, ext=0):
             new_hdul[0].header["DATE-OBS"] = current_time.isoformat()
             for kw in varying_numeric_kw:
                 # construct new card with same comment (if any) and new value
-                card = hdul[ext].header.cards[kw]
+                try:
+                    card = hdul[ext].header.cards[kw]
+                except KeyError:
+                    adjacent_hdul = all_hduls[hdu_idx - 1] if hdu_idx > 0 else all_hduls[hdu_idx + 1]
+                    card = adjacent_hdul[ext].header.cards[kw]
                 new_hdul[0].header[kw] = (interps[kw][i], card.comment)
             new_hdul[0].header["ORIGFILE"] = filename
             new_hdul[0].header[constants.HEADER_KW_INTERPOLATED] = i != 0, "Are varying numeric header values interpolated?"
