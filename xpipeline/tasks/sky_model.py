@@ -121,11 +121,20 @@ def generate_background_mask(
     iterations: int,
     n_sigma: float = None,
     science_arr: np.ndarray = None,
-    exclude: Union[List[improc.BBox], None] = None,
 ):
     """Detects pixels that are not reliable for background level sensing
     using heuristics based on background pixel statistics, bad pixel mask,
     and science frame intensity (if given)
+
+    Parameters
+    ----------
+    std_bg_arr
+    mean_bg_arr
+    badpix_arr
+        True (1) where pixels should be excluded
+    iterations
+    n_sigma
+    science_arr
 
     Returns
     -------
@@ -134,8 +143,7 @@ def generate_background_mask(
     """
     percentile_threshold = np.percentile(std_bg_arr, 90)
     median_bg_std = np.median(std_bg_arr)
-    bad_bg_pix_mask = badpix_arr != 0
-    bad_bg_pix_mask = (badpix_arr != 0) | bad_bg_pix_mask
+    bad_bg_pix_mask = (badpix_arr != 0)
     bad_bg_pix_mask = (std_bg_arr > percentile_threshold) | bad_bg_pix_mask
     if science_arr is not None:
         if n_sigma is None:
@@ -146,10 +154,6 @@ def generate_background_mask(
     bad_bg_pix_mask = scipy.ndimage.binary_dilation(
         bad_bg_pix_mask, iterations=iterations
     )
-    if exclude is not None:
-        for bbox in exclude:
-            yslice, xslice = bbox.slices
-            bad_bg_pix_mask[yslice, xslice] = True
     assert np.count_nonzero(~bad_bg_pix_mask) >= 0.05 * std_bg_arr.size, f"{np.count_nonzero(~bad_bg_pix_mask)} pixels marked good, but {std_bg_arr.size=}"
     return bad_bg_pix_mask
 
@@ -178,24 +182,23 @@ def background_subtract(
     sky_model: SkyModel,
     mask_dilate_iters: int,
     n_sigma: float,
-    exclude: Union[List[improc.BBox], None],
     ext,
-    dq_ext
+    dq_ext,
+    excluded_pixels_mask: np.ndarray = None,
 ):
     log.info(
         f"Subtracting sky background from {hdul[ext].data.shape} {hdul[ext].data.dtype} array"
     )
     sci_arr = hdul[ext].data
     dq_arr = hdul[dq_ext].data
-    badpix_arr = dq_arr != 0
+    badpix_arr = (dq_arr != 0) | (excluded_pixels_mask != 0)
     bad_bg_pix = generate_background_mask(
         sky_model.stddev_sky,
         sky_model.mean_sky,
         badpix_arr,
         mask_dilate_iters,
         n_sigma=n_sigma,
-        science_arr=sci_arr,
-        exclude=exclude,
+        science_arr=sci_arr
     )
     bg_estimate = reconstruct_masked(
         sci_arr, sky_model.components, sky_model.mean_sky, bad_bg_pix

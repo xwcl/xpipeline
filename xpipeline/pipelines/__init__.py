@@ -120,18 +120,18 @@ def sky_subtract(
     model_sky: sky_model.SkyModel,
     mask_dilate_iters: int,
     n_sigma: float,
-    exclude: Union[List[improc.BBox], None],
     ext=0,
-    dq_ext='DQ'
+    dq_ext='DQ',
+    excluded_pixels_mask: Optional[np.ndarray] = None,
 ):
     coll = input_coll.map(
         sky_model.background_subtract,
         model_sky,
         mask_dilate_iters,
         n_sigma=n_sigma,
-        exclude=exclude,
         ext=ext,
         dq_ext=dq_ext,
+        excluded_pixels_mask=excluded_pixels_mask,
     )
     return coll
 
