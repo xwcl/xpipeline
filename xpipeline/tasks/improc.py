@@ -379,18 +379,32 @@ def ft_shift2(image: np.ndarray, dy: float, dx: float, flux_tol: Union[None, flo
     return new_image
 
 
-def mask_box(shape, center, size, rotation=0):
+def mask_box(center: tuple[float, float], shape: tuple[int,int], size: tuple[float,float], rotation_deg:float=0):
+    '''
+    Parameters
+    ----------
+    center : tuple
+        Center coordinates in y, x order
+    shape : tuple
+        Shape in y, x order
+    size : tuple, float
+        Size of box in height, width order or single value for
+        width = height = size
+    rotation_deg : float
+
+    '''
     try:
-        width, height = size
+        height, width = size
     except TypeError:
         width = height = size
     y, x = np.indices(shape)
-    center_x, center_y = center
+    center_y, center_x = center
+    rotation = np.deg2rad(rotation_deg)
     if rotation != 0:
         r = np.hypot(x - center_x, y - center_y)
         phi = np.arctan2(y - center_y, x - center_x)
-        y = r * np.sin(phi + np.deg2rad(rotation)) + center_y
-        x = r * np.cos(phi + np.deg2rad(rotation)) + center_x
+        y = r * np.sin(phi + rotation) + center_y
+        x = r * np.cos(phi + rotation) + center_x
     return (
         (y >= center_y - height / 2)
         & (y <= center_y + height / 2)

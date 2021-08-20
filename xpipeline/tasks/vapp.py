@@ -60,7 +60,7 @@ def make_dark_hole_masks(shape, owa_px, offset_px, psf_rotation_deg, maximize_iw
         overall_rotation_radians=right_overall_rotation_radians + np.pi,
     )
     if maximize_iwa:
-        bright_bar = improc.mask_box(shape, (ctr_x, ctr_y), (offset_px * 2, 2 * radius_px), -psf_rotation_deg)
+        bright_bar = improc.mask_box((ctr_y, ctr_x), shape, (2 * radius_px, offset_px * 2), -psf_rotation_deg)
         left_half, right_half = mask_along_angle(shape, psf_rotation_deg)
         left_mask = (left_mask | bright_bar) & left_half
         right_mask = (right_mask | bright_bar) & right_half
