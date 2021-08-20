@@ -1,18 +1,12 @@
 import sys
+from typing import Optional
 from xpipeline.core import LazyPipelineCollection
 import logging
 import xconf
 
-from .base import MultiInputCommand
+from .base import MultiInputCommand, FileConfig
 
 log = logging.getLogger(__name__)
-
-@xconf.config
-class ExcludedRegion:
-    origin_x : int = xconf.field(help="Origin X pixel")
-    origin_y : int = xconf.field(help="Origin Y pixel")
-    width : int = xconf.field(help="Width of region")
-    height : int = xconf.field(help="Height of region")
 
 @xconf.config
 class SkySubtract(MultiInputCommand):
@@ -20,14 +14,14 @@ class SkySubtract(MultiInputCommand):
     sky_model_path : str = xconf.field(help="Path to FITS file with sky model basis")
     mask_dilate_iters : int = xconf.field(default=2, help="Number of times to grow mask regions before selecting estimation pixels")
     n_sigma : float = xconf.field(default=3, help="Number of sigma (standard deviations of the background model input frames) beyond which pixel is considered illuminated and excluded from background estimation")
-    excluded_regions : dict[str, ExcludedRegion] = xconf.field(default_factory=dict, help="Regions presumed illuminated to be excluded from background estimation")
+    excluded_regions : Optional[FileConfig] = xconf.field(default_factory=list, help="Regions presumed illuminated to be excluded from background estimation, stored as DS9 region file (reg format)")
 
     def main(self):
         import fsspec.spec
         from .. import utils
         from .. import pipelines
         from ..ref import clio
-        from ..tasks import iofits, sky_model, improc
+        from ..tasks import iofits, sky_model, regions
 
         destination = self.destination
         dest_fs = utils.get_fs(destination)
@@ -40,17 +34,15 @@ class SkySubtract(MultiInputCommand):
         output_filepaths = [utils.join(destination, f"sky_subtract_{i:04}.fits") for i in range(n_output_files)]
         self.quit_if_outputs_exist(output_filepaths)
 
-        excluded_bboxes = []
-        for _, er in self.excluded_regions.items():
-            excluded_bboxes.append(improc.BBox(
-                origin=improc.Pixel(y=er.origin_y, x=er.origin_x),
-                extent=improc.PixelExtent(height=er.height, width=er.width)
-            ))
-
+        if isinstance(self.excluded_regions, FileConfig):
+            with self.excluded_regions.open() as fh:
+                excluded_regions = regions.load_file(fh)
         coll = LazyPipelineCollection(all_inputs).map(iofits.load_fits_from_path)
         hdul = iofits.load_fits_from_path(self.sky_model_path)
         model_sky = sky_model.SkyModel.from_hdulist(hdul)
-        output_coll = pipelines.sky_subtract(coll, model_sky, self.mask_dilate_iters, self.n_sigma, excluded_bboxes)
+        excluded_pixels_mask = regions.make_mask(excluded_regions, model_sky.mean_sky.shape)
+
+        output_coll = pipelines.sky_subtract(coll, model_sky, self.mask_dilate_iters, self.n_sigma, excluded_pixels_mask=excluded_pixels_mask)
         result = output_coll.zip_map(iofits.write_fits, output_filepaths, overwrite=True).compute()
         log.info(result)
 

@@ -168,6 +168,15 @@ class AngleRangeConfig:
     delta_deg : float = xconf.field(default=0, help="Maximum difference between target frame value and matching frames")
 
 @xconf.config
+class FileConfig:
+    path : str = xconf.field(help="File path")
+
+    def open(self, mode='r'):
+        from ..utils import get_fs
+        fs = get_fs(self.path)
+        return fs.open(self.path, mode)
+
+@xconf.config
 class FitsConfig:
     path : str = xconf.field(help="Path from which to load the containing FITS file")
     ext : typing.Union[int,str] = xconf.field(default=0, help="Extension from which to load")
