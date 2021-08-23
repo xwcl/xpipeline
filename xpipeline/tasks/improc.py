@@ -599,48 +599,15 @@ def aligned_cutout(
         moving_image=interp_cutout,
         upsample_factor=upsample_factor,
     )
-    # cut out with slicing, FT interpolate for fractional part of shift, pad for rest
-    shift_y, shift_x = shifts
-    shift_y_int = math.floor(shift_y)
-    shift_y_frac = shift_y - shift_y_int
-    shift_x_int = math.floor(shift_x)
-    shift_x_frac = shift_x - shift_x_int
-    subarr = sci_arr
 
-    # to shift the center of subarr in +Y, we start the slice earlier, so *subtract* shift_y_int
-    slice_y_start = spec.search_box.origin.y - shift_y_int
-    slice_y_end = spec.search_box.origin.y + spec.template.shape[0] - shift_y_int
-    pad_y_start, pad_y_end = 0, 0
-
-    if slice_y_start < 0:
-        pad_y_start = abs(slice_y_start)
-        slice_y_start = 0
-    if slice_y_end >= sci_arr.shape[0]:
-        pad_y_end = slice_y_end - sci_arr.shape[0]
-        slice_y_end = sci_arr.shape[0]
-    assert slice_y_start >= 0
-    assert slice_y_end <= sci_arr.shape[0]
-
-
-    # similarly, subtract shift_x_int
-    slice_x_start = spec.search_box.origin.x - shift_x_int
-    slice_x_end = spec.search_box.origin.x + spec.template.shape[1] - shift_x_int
-    pad_x_start, pad_x_end = 0, 0
-
-    if slice_x_start < 0:
-        pad_x_start = abs(slice_x_start)
-        slice_x_start = 0
-    if slice_x_end >= sci_arr.shape[1]:
-        pad_x_end = slice_x_end - sci_arr.shape[1]
-        slice_x_end = sci_arr.shape[1]
-    assert slice_x_start >= 0
-    assert slice_x_end <= sci_arr.shape[1]
-
-    subarr = sci_arr[slice_y_start:slice_y_end,slice_x_start:slice_x_end]
-    subarr = np.pad(subarr, [(pad_y_start, pad_y_end), (pad_x_start, pad_x_end)])
-
-    subarr = interpolate_nonfinite(subarr)
-    subpix_subarr = ft_shift2(subarr, shift_y_frac, shift_x_frac, flux_tol=2e-14)
+    subarr = interpolate_nonfinite(sci_arr)
+    subpix_subarr = shift2(
+        subarr,
+        shifts[1] - spec.search_box.origin.x,
+        shifts[0] - spec.search_box.origin.y,
+        output_shape=spec.template.shape,
+        anchor_to_center=False  # we're interpolating and cropping at the same time
+    )
     assert subpix_subarr.shape == spec.template.shape
     return subpix_subarr
 
@@ -1203,13 +1170,14 @@ def combine_ranges(obs_sequences, obs_table, range_spec, operation: constants.Co
 
 
 @njit(cache=True)
-def shift2(image, dx, dy, output_shape=None, fill_value=0.0):
+def shift2(image, dx, dy, output_shape=None, fill_value=0.0, anchor_to_center=True):
     """Shift image by dx, dy with bicubic interpolation
     Direction convention: feature at (0, 0) moves to (dx, dy)
     If ``output_shape`` is larger than ``image.shape``, image will be drawn into the center
-    of an array of ``output_shape``
+    of an array of ``output_shape`` when anchor is 'center', or the lower left when anchor
+    is not 'center'
     """
-    if output_shape is not None:
+    if output_shape is not None and anchor_to_center:
         # compute center-to-center displacement such that
         # supplying dx == dy == 0.0 will be a no-op (aside
         # from changing shape)
