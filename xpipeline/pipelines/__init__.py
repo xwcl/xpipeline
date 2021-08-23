@@ -148,7 +148,7 @@ def align_to_templates(
     d_hdus_for_cutouts = []
     for cspec in cutout_specs:
         d_hdus = (input_coll
-                  .map(data_quality.get_masked_data, ext=ext, dq_ext=dq_ext)
+                  .map(data_quality.get_masked_data, ext=ext, dq_ext=dq_ext, permitted_flags=const.DQ_SATURATED)
                   .map(improc.aligned_cutout, cspec, upsample_factor=upsample_factor)
                   .map(iofits.DaskHDU, header={'EXTNAME': cspec.name})
                   .items
@@ -177,12 +177,15 @@ def compute_sky_model(
     n_components,
     mask_dilate_iters,
     ext: Union[int, str] = 0,
-    dq_ext: Union[int, str] = 'DQ'
+    dq_ext: Union[int, str] = 'DQ',
+    excluded_pixels_mask : Optional[np.ndarray] = None,
 ):
     log.debug("Assembling compute_sky_model pipeline...")
     sky_cube = iofits.hdulists_to_dask_cube(inputs_collection.items, plane_shape, ext=ext)
     dq_cube = iofits.hdulists_to_dask_cube(inputs_collection.items, plane_shape, ext=dq_ext, dtype=int)
     badpix_arr = reduce_bitwise_or(dq_cube)
+    if excluded_pixels_mask is not None:
+        badpix_arr = badpix_arr | excluded_pixels_mask
     sky_cube_train, sky_cube_test = learning.train_test_split(
         sky_cube, test_fraction, random_state=random_state
     )
