@@ -463,6 +463,10 @@ class Pixel:
     y : int
     x : int
 
+    def __post_init__(self):
+        self.y = int(self.y)
+        self.x = int(self.x)
+
 distributed.protocol.register_generic(Pixel)
 
 @dataclass
@@ -478,6 +482,10 @@ distributed.protocol.register_generic(Point)
 class PixelExtent:
     height : int
     width : int
+
+    def __post_init__(self):
+        self.height = int(self.height)
+        self.width = int(self.width)
 
 distributed.protocol.register_generic(PixelExtent)
 
@@ -522,15 +530,7 @@ class BBox:
         oy, ox = self.origin.y, self.origin.x
         dy, dx = self.extent.height, self.extent.width
         start_y, end_y = oy, oy + dy
-        if int(start_y) != start_y or int(end_y) != end_y:
-            warnings.warn(
-                f"Coercing {start_y=} to {int(start_y)}, {end_y=} to {int(end_y)}"
-            )
         start_x, end_x = ox, ox + dx
-        if int(start_x) != start_x or int(end_x) != end_x:
-            warnings.warn(
-                f"Coercing {start_x=} to {int(start_x)}, {end_x=} to {int(end_x)}"
-            )
         return slice(start_y, end_y), slice(start_x, end_x)
 
 
