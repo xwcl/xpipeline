@@ -608,6 +608,7 @@ def aligned_cutout(
         shifts[1] - spec.search_box.origin.x,
         shifts[0] - spec.search_box.origin.y,
         output_shape=spec.template.shape,
+        fill_value=np.nan,
         anchor_to_center=False  # we're interpolating and cropping at the same time
     )
     assert subpix_subarr.shape == spec.template.shape
