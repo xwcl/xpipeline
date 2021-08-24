@@ -639,9 +639,7 @@ def radial_stds_cube(cube):
     sum_along_ys = cube.sum(axis=1)
     sum_along_xs = cube.sum(axis=2)
     x_stds = np.apply_along_axis(partial(histogram_std, bin_centers=x_bin_centers), 1, sum_along_ys)
-    print(x_stds)
     y_stds = np.apply_along_axis(partial(histogram_std, bin_centers=y_bin_centers), 1, sum_along_xs)
-    print(y_stds)
     r_stds = np.sqrt(x_stds**2 + y_stds**2)
     return r_stds
 
