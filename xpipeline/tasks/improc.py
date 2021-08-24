@@ -7,6 +7,8 @@ import logging
 from numba import njit, jit, float64, int64
 import numba
 from numpy.core.numeric import count_nonzero
+from scipy import interpolate
+
 from scipy.ndimage import binary_dilation
 import skimage.transform
 import skimage.registration
@@ -611,8 +613,37 @@ def aligned_cutout(
     assert subpix_subarr.shape == spec.template.shape
     return subpix_subarr
 
+def histogram_std(hist, bin_centers=None):
+    '''Given a histogram of values and optionally coordinates
+    for bin centers (if not, assume pixel centers centered at zero)
+    approximate the standard deviation'''
+    if bin_centers is None:
+        bin_centers = pixel_centers(len(hist))
+    mean = np.average(bin_centers, weights=hist)
+    var = np.average((bin_centers - mean)**2, weights=hist)
+    return np.sqrt(var)
 
-from scipy import interpolate
+def pixel_centers(length):
+    '''Returns sequence of length `length` containing pixel
+    center indices centered at 0'''
+    return np.arange(length) - (length - 1)/ 2
+
+def radial_stds_cube(cube):
+    '''Given a data cube, compute the standard deviation
+    in X and Y for each frame and combine to get a single
+    radial sigma value per frame
+    '''
+    y_bin_centers = pixel_centers(cube.shape[1])
+    x_bin_centers = pixel_centers(cube.shape[2])
+    sum_along_ys = cube.sum(axis=1)
+    sum_along_xs = cube.sum(axis=2)
+    x_stds = np.apply_along_axis(partial(histogram_std, bin_centers=x_bin_centers), 1, sum_along_ys)
+    print(x_stds)
+    y_stds = np.apply_along_axis(partial(histogram_std, bin_centers=y_bin_centers), 1, sum_along_xs)
+    print(y_stds)
+    r_stds = np.sqrt(x_stds**2 + y_stds**2)
+    return r_stds
+
 
 
 def make_grid(

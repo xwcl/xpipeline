@@ -291,3 +291,22 @@ def test_combine_ranges():
             assert np.isclose(final_angles[1], -30)
             assert final_metadata['meta1'][1] == b'D'
             assert np.isclose(final_metadata['meta3'][1], -30)
+
+def test_histogram_std():
+    xs = improc.pixel_centers(100)
+    sigma = 10
+    ys = 1/(sigma * np.sqrt(2 * np.pi)) * np.exp(-xs**2 / (2 * sigma**2))
+    est_std = improc.histogram_std(ys)
+    assert (est_std - sigma) < 0.005
+
+def test_radial_stds_cube():
+    N = 100
+    cube = np.zeros((3, N, N))
+    frame_shape = cube[0].shape
+    cube[0] = improc.gauss2d(frame_shape, improc.arr_center(frame_shape), (5, 2))
+    cube[1] = improc.gauss2d(frame_shape, improc.arr_center(frame_shape), (2, 5))
+    cube[2] = improc.gauss2d(frame_shape, improc.arr_center(frame_shape), (1, 1))
+    radial_stds = improc.radial_stds_cube(cube)
+    assert np.isclose(radial_stds[0], radial_stds[1]), "y,x and x,y sigmas giving different answers"
+    assert np.isclose(radial_stds[1], np.sqrt(29))
+    assert np.isclose(radial_stds[2], np.sqrt(2))
