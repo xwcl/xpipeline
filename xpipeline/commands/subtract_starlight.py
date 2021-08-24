@@ -127,8 +127,10 @@ class SubtractStarlight(BaseCommand):
         
         if self.initial_decomposition_path is not None:
             initial_decomposition = self._load_initial_decomposition(self.initial_decomposition_path)
+        else:
+            initial_decomposition = None
         
-        klip_params = self._assemble_klip_params(obstable)
+        klip_params = self._assemble_klip_params(obstable, initial_decomposition)
         import time
         start = time.perf_counter()
 
@@ -179,7 +181,7 @@ class SubtractStarlight(BaseCommand):
             pass  # not an error to have delta of zero, just don't exclude based on rotation
         return exclusions
 
-    def _assemble_klip_params(self, obstable):
+    def _assemble_klip_params(self, obstable, initial_decomposition):
         import numpy as np
         from ..tasks import starlight_subtraction
         exclusions = self._make_exclusions(self.exclude, obstable)
@@ -189,7 +191,8 @@ class SubtractStarlight(BaseCommand):
             decomposer=starlight_subtraction.DEFAULT_DECOMPOSERS[self.strategy],
             strategy=self.strategy,
             reuse=self.reuse_eigenimages,
-            initial_decomposition_only=self.initial_decomposition_only
+            initial_decomposition_only=self.initial_decomposition_only,
+            initial_decomposition=initial_decomposition
         )
         log.debug(klip_params)
         return klip_params
