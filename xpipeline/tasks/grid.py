@@ -63,7 +63,10 @@ def flow_to_dict(flow):
 
 
 def save_flow(flow, dest_file):
-    payload_bytes = orjson.dumps(flow_to_dict(flow))
+    payload_bytes = orjson.dumps(
+        flow_to_dict(flow),
+        option=orjson.OPT_APPEND_NEWLINE | orjson.OPT_INDENT_2
+    )
     with open(dest_file, 'wb') as f:
         f.write(payload_bytes)
         f.write(b'\n')
