@@ -22,8 +22,8 @@ class KlipInputConfig:
     sci_arr: FitsConfig
     signal_arr: Optional[FitsConfig]
     estimation_mask: Optional[FitsConfig]
-    mask_min_r_px : Union[int,float] = xconf.field(default=0, help="Apply radial mask excluding pixels < mask_min_r_px from center")
-    mask_max_r_px : Union[int,float,None] = xconf.field(default=None, help="Apply radial mask excluding pixels > mask_max_r_px from center")
+    mask_min_r_px : float = xconf.field(default=0, help="Apply radial mask excluding pixels < mask_min_r_px from center")
+    mask_max_r_px : Optional[float] = xconf.field(default=None, help="Apply radial mask excluding pixels > mask_max_r_px from center")
 
 @xconf.config
 class SubtractStarlight(BaseCommand):
