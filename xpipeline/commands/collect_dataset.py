@@ -140,6 +140,8 @@ class CollectDataset(MultiInputCommand):
                 "derotation_angles"
             ] = f"{obs_table_name}.derotation_angle_deg"
 
+        
+
         # handle paired vAPP cubes if requested
         if hasattr(self.obs, 'vapp_left_ext'):
             left_extname = self.obs.vapp_left_ext

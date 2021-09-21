@@ -26,7 +26,7 @@ def gaussian_smooth(data, kernel_stddev_px):
 
 
 def arr_center(arr_or_shape):
-    """Center coordinates for a 2D image (or shape) using the
+    """Center coordinates in (y, x) order for a 2D image (or shape) using the
     convention that indices are the coordinates of the centers
     of pixels, which run from (idx - 0.5) to (idx + 0.5)
     """

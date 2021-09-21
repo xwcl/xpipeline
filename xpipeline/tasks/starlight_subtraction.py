@@ -168,20 +168,21 @@ def klip_to_modes(image_vecs, decomp_class, n_modes, exclude_nearest=0):
     return output
 
 
-def klip_mtx(image_vecs, params : KlipParams):
+def klip_mtx(image_vecs, params : KlipParams, signal_vecs):
     image_vecs_meansub, mean_vec = mean_subtract_vecs(image_vecs)
     # since the klip implementation is going column-wise
     # this will make each column contiguous
     image_vecs_meansub = np.asfortranarray(image_vecs_meansub)
+    signal_vecs = np.asfortranarray(signal_vecs - mean_vec)
     if params.strategy in (constants.KlipStrategy.DOWNDATE_SVD, constants.KlipStrategy.SVD):
-        return klip_mtx_svd(image_vecs_meansub, params), mean_vec
+        return klip_mtx_svd(image_vecs_meansub, params, signal_vecs), mean_vec
     elif params.strategy is constants.KlipStrategy.COVARIANCE:
-        return klip_mtx_covariance(image_vecs_meansub, params), mean_vec
+        return klip_mtx_covariance(image_vecs_meansub, params, signal_vecs), mean_vec
     else:
         raise ValueError(f"Unknown strategy value in {params=}")
 
 
-def klip_mtx_covariance(image_vecs_meansub : np.ndarray, params : KlipParams):
+def klip_mtx_covariance(image_vecs_meansub : np.ndarray, params : KlipParams, signal_vecs : np.ndarray):
     '''Apply KLIP to mean-subtracted image column vectors
 
     Parameters
@@ -194,6 +195,7 @@ def klip_mtx_covariance(image_vecs_meansub : np.ndarray, params : KlipParams):
     k_klip = params.k_klip
 
     output = np.zeros_like(image_vecs_meansub)
+    output_model = np.zeros_like(image_vecs_meansub)
     mtx_e_all = image_vecs_meansub.T @ image_vecs_meansub
     n_images = image_vecs_meansub.shape[1]
     exclusion_values, exclusion_deltas = _exclusions_to_arrays(params)
@@ -220,7 +222,9 @@ def klip_mtx_covariance(image_vecs_meansub : np.ndarray, params : KlipParams):
 
         meansub_target = image_vecs_meansub[:,i]
         output[:,i] = meansub_target - eigenimages @ (eigenimages.T @ meansub_target)
-    return output
+        model_target = signal_vecs[:,i]
+        output_model[:,i] = model_target - eigenimages @ (eigenimages.T @ model_target)
+    return output, output_model
 
 @njit(cache=True)
 def get_excluded_mask(values, exclude_within_delta, current_value=None):

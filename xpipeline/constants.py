@@ -19,3 +19,11 @@ class ValueFilter(Enum):
 class CombineOperation(Enum):
     MEAN = 'mean'
     SUM = 'sum'
+
+class CompareOperation(Enum):
+    GT = 'gt'
+    GE = 'ge'
+    EQ = 'eq'
+    LE = 'le'
+    LT = 'lt'
+    NE = 'ne'

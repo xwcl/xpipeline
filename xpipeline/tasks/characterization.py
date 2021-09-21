@@ -148,36 +148,8 @@ def recover_signals(
         ))
     return signals
 
-
-def simple_aperture_locations_r_theta(
-    r_px, pa_deg, resolution_element_px, exclude_nearest=0, exclude_planet=False
-):
-    """Aperture centers (x, y) in a ring of radius `r_px` and starting
-    at angle `pa_deg` E of N. Unless `exclude_planet` is True,
-    the first (x, y) pair gives the planet location (signal aperture).
-
-    Specifying `exclude_nearest` > 0 will skip that many apertures
-    from either side of the signal aperture's location"""
-    circumference = 2 * r_px * np.pi
-    aperture_pixel_diameter = resolution_element_px
-    n_apertures = int(circumference / aperture_pixel_diameter)
-    start_theta = np.deg2rad(pa_deg + 90)
-    delta_theta = np.deg2rad(360 / n_apertures)
-    idxs = np.arange(1 + exclude_nearest, n_apertures - exclude_nearest)
-    if not exclude_planet:
-        idxs = np.concatenate(
-            (
-                [
-                    0,
-                ],
-                idxs,
-            )
-        )
-    return np.stack((np.repeat(r_px, n_apertures), start_theta + idxs * delta_theta), axis=-1)
-
-
 @njit(cache=True)
-def _simple_aperture_locations(r_px, pa_deg, resolution_element_px, xcenter=0, ycenter=0):
+def _simple_aperture_locations(r_px, pa_deg, resolution_element_px, xcenter=0, ycenter=0, good_pixel_mask=None):
     circumference = 2 * r_px * np.pi
     aperture_pixel_diameter = resolution_element_px
     n_apertures = int(circumference / aperture_pixel_diameter)
@@ -187,16 +159,27 @@ def _simple_aperture_locations(r_px, pa_deg, resolution_element_px, xcenter=0, y
     thetas = start_theta + idxs * delta_theta
     offset_x = r_px * np.cos(thetas)
     offset_y = r_px * np.sin(thetas)
-
-    return np.stack((offset_x + xcenter, offset_y + ycenter), axis=-1)
+    good_offsets = np.zeros(n_apertures, dtype=np.bool8)
+    if good_pixel_mask is not None:
+        mask_center = (good_pixel_mask.shape[0] - 1) / 2, (good_pixel_mask.shape[1] - 1) / 2
+        for idx in idxs:
+            maskpixy, maskpixx = int(offset_y[idx] + ycenter + mask_center[0]), int(offset_x[idx] + xcenter + mask_center[1])
+            mask_pixel = good_pixel_mask[maskpixy, maskpixx]
+            if not mask_pixel:
+                continue
+            else:
+                good_offsets[idx] = True
+    else:
+        good_offsets[:] = True
+    return np.stack((offset_x[good_offsets] + xcenter, offset_y[good_offsets] + ycenter), axis=-1)
 
 
 def simple_aperture_locations(r_px, pa_deg, resolution_element_px, exclude_nearest=0,
-                              exclude_planet=False, xcenter=0, ycenter=0):
+                              exclude_planet=False, xcenter=0, ycenter=0, good_pixel_mask=None):
     """Returns (x_center, y_center) for apertures in a ring of
     radius `r_px` starting at angle `pa_deg` E of N. The first (x, y)
     pair gives the planet location (signal aperture)."""
-    locs = _simple_aperture_locations(r_px, pa_deg, resolution_element_px, xcenter, ycenter)
+    locs = _simple_aperture_locations(r_px, pa_deg, resolution_element_px, xcenter, ycenter, good_pixel_mask)
     if exclude_nearest != 0:
         locs = np.concatenate([locs[0][np.newaxis, :], locs[1 + exclude_nearest:-exclude_nearest]])
     if exclude_planet:
@@ -307,12 +290,13 @@ def reduce_apertures(
     operation,
     exclude_nearest=0,
     exclude_planet=False,
+    good_pixel_mask=None,
 ):
     """apply `operation` to the pixels within radius `resolution_element_px`/2 of the centers
     of the simple aperture locations for a planet at `r_px` and `starting_pa_deg`, returning
     the locations and the results as a tuple with the first location and result corresponding
     to the planet aperture"""
-    center = (image.shape[0] - 1) / 2, (image.shape[0] - 1) / 2
+    center = (image.shape[0] - 1) / 2, (image.shape[1] - 1) / 2
     yy, xx = improc.cartesian_coords(center, image.shape)
     locations = list(
         simple_aperture_locations(
@@ -321,11 +305,13 @@ def reduce_apertures(
             resolution_element_px,
             exclude_nearest=exclude_nearest,
             exclude_planet=exclude_planet,
+            good_pixel_mask=good_pixel_mask
         )
     )
     simple_aperture_radius = resolution_element_px / 2
     results = []
     for offset_x, offset_y in locations:
+        
         dist = np.sqrt((xx - offset_x) ** 2 + (yy - offset_y) ** 2)
         mask = dist <= simple_aperture_radius
         results.append(
@@ -334,7 +320,7 @@ def reduce_apertures(
     return locations, results
 
 
-def calculate_snr(image, r_px, pa_deg, resolution_element_px, exclude_nearest):
+def calculate_snr(image, r_px, pa_deg, resolution_element_px, exclude_nearest, good_pixel_mask=None):
     _, results = reduce_apertures(
         image,
         r_px,
@@ -342,6 +328,7 @@ def calculate_snr(image, r_px, pa_deg, resolution_element_px, exclude_nearest):
         resolution_element_px,
         np.sum,
         exclude_nearest=exclude_nearest,
+        good_pixel_mask=good_pixel_mask
     )
     return calc_snr_mawet(results[0], results[1:])
 

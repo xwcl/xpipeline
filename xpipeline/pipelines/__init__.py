@@ -203,27 +203,37 @@ def compute_sky_model(
 
 def klip_inputs_to_mtx_x(klip_inputs: List[KlipInput]):
     matrices = []
+    signal_matrices = []
     subset_indices = []
     xp = core.get_array_module(klip_inputs[0].sci_arr)
     for idx, input_data in enumerate(klip_inputs):
         mtx_x, subset_idxs = improc.unwrap_cube(
             input_data.sci_arr, input_data.estimation_mask
         )
+        mtx_x_signal_only, _ = improc.unwrap_cube(
+            input_data.signal_arr, input_data.estimation_mask
+        )
         log.debug(
             f"klip input {idx} has {mtx_x.shape=} from {input_data.sci_arr.shape=} and {np.count_nonzero(input_data.estimation_mask)=} giving {subset_idxs.shape=}"
         )
         matrices.append(mtx_x)
+        signal_matrices.append(mtx_x_signal_only)
         subset_indices.append(subset_idxs)
 
     mtx_x = xp.vstack(matrices)
-    return mtx_x, subset_indices
+    mtx_x_signal_only = xp.vstack(signal_matrices)
+    return mtx_x, mtx_x_signal_only, subset_indices
 
 def klip_multi(klip_inputs: List[KlipInput], klip_params: KlipParams):
     log.debug("assembling klip_multi")
-    mtx_x, subset_indices = klip_inputs_to_mtx_x(klip_inputs)
+    mtx_x, mtx_x_signal_only, subset_indices = klip_inputs_to_mtx_x(klip_inputs)
+    
+    # where the klipping happens
     result, mean_vec = starlight_subtraction.klip_mtx(
-        mtx_x, klip_params
+        mtx_x, klip_params, mtx_x_signal_only
     )
+    # ... blink and you'll miss it
+
     if klip_params.initial_decomposition_only:
         return result
     else:

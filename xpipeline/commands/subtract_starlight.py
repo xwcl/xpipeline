@@ -7,7 +7,7 @@ import numpy as np
 
 from .. import utils, constants
 
-from .base import BaseCommand, AngleRangeConfig, PixelRotationRangeConfig, FitsConfig
+from .base import BaseCommand, AngleRangeConfig, PixelRotationRangeConfig, FitsConfig, FitsTableColumnConfig
 
 log = logging.getLogger(__name__)
 
@@ -26,17 +26,42 @@ class KlipInputConfig:
     mask_max_r_px : Optional[float] = xconf.field(default=None, help="Apply radial mask excluding pixels > mask_max_r_px from center")
 
 @xconf.config
+class ExcludeFramesConfig:
+    values : Union[FitsConfig, FitsTableColumnConfig] = xconf.field(help="")
+    op : constants.CompareOperation = xconf.field(help="")
+    compare_to : Union[float,str] = xconf.field(help="")
+
+@xconf.config
 class SubtractStarlight(BaseCommand):
     "Subtract starlight with KLIP"
     inputs : list[KlipInputConfig] = xconf.field(help="Input data to simultaneously reduce")
     destination : str = xconf.field(help="Destination path to save results")
     obstable : FitsConfig = xconf.field(help="Metadata table in FITS")
     k_klip : int = xconf.field(default=10, help="Number of modes to subtract in starlight subtraction")
-    exclude : ExcludeRangeConfig = xconf.field(default=ExcludeRangeConfig(), help="How to exclude frames from reference sample")
+    exclude_ranges : ExcludeRangeConfig = xconf.field(default=ExcludeRangeConfig(), help="How to exclude frames from reference sample")
+    exclude_frames : Optional[ExcludeFramesConfig] = xconf.field(default=None, help="How to select frames to drop from the inputs")
     strategy : constants.KlipStrategy = xconf.field(default=constants.KlipStrategy.DOWNDATE_SVD, help="Implementation of KLIP to use")
     reuse_eigenimages : bool = xconf.field(default=False, help="Apply KLIP without adjusting the eigenimages at each step (much faster, less powerful)")
     initial_decomposition_only : bool = xconf.field(default=False, help="Whether to output initial decomposition and exit")
     initial_decomposition_path : Optional[str] = xconf.field(default=None, help="Initial decomposition as FITS file")
+
+    def _exclude_frames_mask(self, config : ExcludeFramesConfig):
+        values = config.values.load()
+        if config.op is constants.CompareOperation.GT:
+            return values > config.compare_to
+        elif config.op is constants.CompareOperation.GE:
+            return values >= config.compare_to
+        elif config.op is constants.CompareOperation.EQ:
+            return values == config.compare_to
+        elif config.op is constants.CompareOperation.LE:
+            return values <= config.compare_to
+        elif config.op is constants.CompareOperation.LT:
+            return values < config.compare_to
+        elif config.op is constants.CompareOperation.NE:
+            return values != config.compare_to
+        else:
+            raise ValueError(f"{config.op=} unknown")
+
 
     def _load_obstable(self):
         from ..tasks import iofits
@@ -184,7 +209,7 @@ class SubtractStarlight(BaseCommand):
     def _assemble_klip_params(self, obstable, initial_decomposition):
         import numpy as np
         from ..tasks import starlight_subtraction
-        exclusions = self._make_exclusions(self.exclude, obstable)
+        exclusions = self._make_exclusions(self.exclude_ranges, obstable)
         klip_params = starlight_subtraction.KlipParams(
             self.k_klip,
             exclusions,
