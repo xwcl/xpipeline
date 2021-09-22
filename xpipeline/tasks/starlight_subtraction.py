@@ -168,12 +168,13 @@ def klip_to_modes(image_vecs, decomp_class, n_modes, exclude_nearest=0):
     return output
 
 
-def klip_mtx(image_vecs, params : KlipParams, signal_vecs):
+def klip_mtx(image_vecs, params : KlipParams, signal_vecs=None):
     image_vecs_meansub, mean_vec = mean_subtract_vecs(image_vecs)
     # since the klip implementation is going column-wise
     # this will make each column contiguous
     image_vecs_meansub = np.asfortranarray(image_vecs_meansub)
-    signal_vecs = np.asfortranarray(signal_vecs - mean_vec)
+    if signal_vecs is not None:
+        signal_vecs = np.asfortranarray(signal_vecs - mean_vec)
     if params.strategy in (constants.KlipStrategy.DOWNDATE_SVD, constants.KlipStrategy.SVD):
         return klip_mtx_svd(image_vecs_meansub, params, signal_vecs), mean_vec
     elif params.strategy is constants.KlipStrategy.COVARIANCE:
@@ -195,7 +196,10 @@ def klip_mtx_covariance(image_vecs_meansub : np.ndarray, params : KlipParams, si
     k_klip = params.k_klip
 
     output = np.zeros_like(image_vecs_meansub)
-    output_model = np.zeros_like(image_vecs_meansub)
+    if signal_vecs is not None:
+        output_model = np.zeros_like(image_vecs_meansub)
+    else:
+        output_model = None
     mtx_e_all = image_vecs_meansub.T @ image_vecs_meansub
     n_images = image_vecs_meansub.shape[1]
     exclusion_values, exclusion_deltas = _exclusions_to_arrays(params)
@@ -222,8 +226,9 @@ def klip_mtx_covariance(image_vecs_meansub : np.ndarray, params : KlipParams, si
 
         meansub_target = image_vecs_meansub[:,i]
         output[:,i] = meansub_target - eigenimages @ (eigenimages.T @ meansub_target)
-        model_target = signal_vecs[:,i]
-        output_model[:,i] = model_target - eigenimages @ (eigenimages.T @ model_target)
+        if signal_vecs is not None:
+            model_target = signal_vecs[:,i]
+            output_model[:,i] = model_target - eigenimages @ (eigenimages.T @ model_target)
     return output, output_model
 
 @njit(cache=True)
@@ -286,10 +291,14 @@ def exclusions_to_range(n_images, current_idx, exclusion_values, exclusion_delta
 )
 def klip_chunk_svd(
     image_vecs_meansub, n_images, mtx_u0, diag_s0, mtx_v0, k_klip, reuse, strategy,
-    exclusion_values, exclusion_deltas
+    exclusion_values, exclusion_deltas, signal_vecs
 ):
     n_frames = image_vecs_meansub.shape[1]
     output = np.zeros_like(image_vecs_meansub)
+    if signal_vecs is not None:
+        output_model = np.zeros_like(signal_vecs)
+    else:
+        output_model = None
     print('klip_chunk_svd running with', numba.get_num_threads(), 'threads on', n_frames, 'frames')
     for i in numba.prange(n_frames):
         if not reuse:
@@ -327,7 +336,7 @@ def klip_chunk_svd(
         # and silences the NumbaPerformanceWarning
         eigenimages = np.ascontiguousarray(eigenimages)
         output[:, i] = meansub_target - eigenimages @ (eigenimages.T @ meansub_target)
-    return output
+    return output, output_model
 
 def _exclusions_to_arrays(params):
     if not params.reuse and len(params.exclusions) > 0:
@@ -337,9 +346,8 @@ def _exclusions_to_arrays(params):
         exclusion_values = exclusion_deltas = None
     return exclusion_values, exclusion_deltas
 
-def klip_mtx_svd(image_vecs_meansub, params : KlipParams):
+def klip_mtx_svd(image_vecs_meansub, params : KlipParams, signal_vecs):
     k_klip = params.k_klip
-    output = np.zeros_like(image_vecs_meansub)
     total_n_frames = image_vecs_meansub.shape[1]
     if not params.reuse and params.strategy is constants.KlipStrategy.DOWNDATE_SVD:
         extra_modes = max([1,] + [excl.num_excluded_max for excl in params.exclusions])
@@ -387,7 +395,7 @@ def klip_mtx_svd(image_vecs_meansub, params : KlipParams):
     exclusion_values, exclusion_deltas = _exclusions_to_arrays(params)
     log.info(f'Computing KLIPed vectors')
     start = time.perf_counter()
-    output = klip_chunk_svd(
+    output, output_model = klip_chunk_svd(
         image_vecs_meansub,
         total_n_frames,
         mtx_u0,
@@ -397,11 +405,12 @@ def klip_mtx_svd(image_vecs_meansub, params : KlipParams):
         params.reuse,
         params.strategy,
         exclusion_values,
-        exclusion_deltas
+        exclusion_deltas,
+        signal_vecs
     )
     end = time.perf_counter()
     log.info(f"Finished KLIPing in {end - start}")
-    return output
+    return output, output_model
 
 
 def make_good_pix_mask(

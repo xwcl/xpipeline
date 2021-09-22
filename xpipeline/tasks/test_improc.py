@@ -190,7 +190,7 @@ def test_aligned_cutout_oversized_template():
         name="primary"
     )
     res = improc.aligned_cutout(sci_arr, spec)
-    assert np.average((res - psfim)[15:100,20:90]) < 1e-5
+    assert np.nanmean((res - psfim)[15:100,20:90]) < 1e-5
 
 def test_aligned_cutout_undersized_template():
     picshape = 128, 128
@@ -202,7 +202,7 @@ def test_aligned_cutout_undersized_template():
         name="primary"
     )
     res = improc.aligned_cutout(sci_arr, spec)
-    assert np.average((res - psfim[5:-5,5:-5])) < 1e-5
+    assert np.nanmean((res - psfim[5:-5,5:-5])) < 1e-5
 
 def test_rotate():
     # cpu

@@ -75,7 +75,7 @@ def test_klip_mtx(strategy, decomposer):
         initial_decomposer=None,
         strategy=strategy,
     )
-    starlight_subtracted, mean_vec = starlight_subtraction.klip_mtx(image_vecs, params)
+    (starlight_subtracted, _), mean_vec = starlight_subtraction.klip_mtx(image_vecs, params)
 
     outcube = improc.wrap_matrix(starlight_subtracted, cube.shape, subset_idxs)
     final_cube = improc.derotate_cube(outcube, data["angles"])

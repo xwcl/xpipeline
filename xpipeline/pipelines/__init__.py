@@ -210,9 +210,12 @@ def klip_inputs_to_mtx_x(klip_inputs: List[KlipInput]):
         mtx_x, subset_idxs = improc.unwrap_cube(
             input_data.sci_arr, input_data.estimation_mask
         )
-        mtx_x_signal_only, _ = improc.unwrap_cube(
-            input_data.signal_arr, input_data.estimation_mask
-        )
+        if input_data.signal_arr is not None:
+            mtx_x_signal_only, _ = improc.unwrap_cube(
+                input_data.signal_arr, input_data.estimation_mask
+            )
+        else:
+            mtx_x_signal_only = None
         log.debug(
             f"klip input {idx} has {mtx_x.shape=} from {input_data.sci_arr.shape=} and {np.count_nonzero(input_data.estimation_mask)=} giving {subset_idxs.shape=}"
         )
@@ -221,7 +224,12 @@ def klip_inputs_to_mtx_x(klip_inputs: List[KlipInput]):
         subset_indices.append(subset_idxs)
 
     mtx_x = xp.vstack(matrices)
-    mtx_x_signal_only = xp.vstack(signal_matrices)
+    if all([ki.signal_arr is not None for ki in klip_inputs]):
+        mtx_x_signal_only = xp.vstack(signal_matrices)
+    elif any([ki.signal_arr is not None for ki in klip_inputs]):
+        raise ValueError("Some inputs have signal arrays, some don't")
+    else:
+        mtx_x_signal_only = None
     return mtx_x, mtx_x_signal_only, subset_indices
 
 def klip_multi(klip_inputs: List[KlipInput], klip_params: KlipParams):
@@ -237,9 +245,9 @@ def klip_multi(klip_inputs: List[KlipInput], klip_params: KlipParams):
     if klip_params.initial_decomposition_only:
         return result
     else:
-        subtracted_mtx = result
+        subtracted_mtx, signal_mtx = result
     start_idx = 0
-    cubes, mean_images = [], []
+    cubes, signal_arrs, mean_images = [], [], []
     for input_data, subset_idxs in zip(klip_inputs, subset_indices):
         # first axis selects "which axis", second axis has an entry per retained pixel
         n_features = subset_idxs.shape[1]
@@ -254,6 +262,16 @@ def klip_multi(klip_inputs: List[KlipInput], klip_params: KlipParams):
             subset_idxs,
             fill_value=klip_params.missing_data_value,
         )
+        if signal_mtx is not None:
+            signal = improc.wrap_matrix(
+                signal_mtx[start_idx:end_idx],
+                input_data.sci_arr.shape,
+                subset_idxs,
+                fill_value=klip_params.missing_data_value,
+            )
+        else:
+            signal = None
+
         mean_image = improc.wrap_vector(
             sub_mean_vec,
             input_data.sci_arr.shape[1:],
@@ -262,9 +280,10 @@ def klip_multi(klip_inputs: List[KlipInput], klip_params: KlipParams):
         )
         cubes.append(cube)
         mean_images.append(mean_image)
+        signal_arrs.append(signal)
         start_idx += n_features
 
-    return cubes, mean_images
+    return cubes, mean_images, signal_arrs
 
 
 def klip_one(klip_input: KlipInput, klip_params: KlipParams):
@@ -272,8 +291,8 @@ def klip_one(klip_input: KlipInput, klip_params: KlipParams):
     if klip_params.initial_decomposition_only:
         return result
     else:
-        cubes, means = result
-        return cubes[0], means[0]
+        cubes, means, signals = result
+        return cubes[0], means[0], signals[0]
 
 
 def klip_vapp_separately(
@@ -363,7 +382,7 @@ def evaluate_starlight_subtraction(
         saturation_threshold=saturation_threshold
     )
     klip_input.sci_arr = injected_sci_arr
-    outcube, mean_image = klip_one(
+    outcube, mean_image, signals = klip_one(
         klip_input,
         klip_params,
     )

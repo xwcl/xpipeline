@@ -118,7 +118,7 @@ def test_end_to_end(strategy, reuse, snr_threshold, decomposer):
         strategy=strategy
     )
 
-    outcube, mean_image = pipelines.klip_one(pristine_input, klip_params)
+    outcube, mean_image, signal = pipelines.klip_one(pristine_input, klip_params)
     output_image = pipelines.adi(outcube, rot_arr, operation=constants.CombineOperation.MEAN)
     r_px, pa_deg = 18.4, -42.8
     fwhm_naco = data["fwhm"]
