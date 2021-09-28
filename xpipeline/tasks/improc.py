@@ -1141,7 +1141,7 @@ def combine(cube : np.ndarray, operation: constants.CombineOperation):
     elif operation is constants.CombineOperation.MEDIAN:
         return np.median(cube, axis=0)
     else:
-        raise ValueError("Supported operations: average, sum")
+        raise ValueError("Supported operations: sum, mean, median")
     return out_image
 
 def combine_ranges(obs_sequences, obs_table, range_spec, operation: constants.CombineOperation = constants.CombineOperation.MEAN):
@@ -1222,13 +1222,13 @@ def shift2(image, dx, dy, output_shape=None, fill_value=0.0, anchor_to_center=Tr
     return output
 
 @njit(parallel=True)
-def _derotate_cube(cube, derotation_angles, output):
+def _derotate_cube(cube, derotation_angles, output, fill_value):
     for idx in numba.prange(cube.shape[0]):
         transform_mtx = make_rotation_about_center(cube[idx].shape, derotation_angles[idx])
-        matrix_transform_image(cube[idx], transform_mtx, output[idx], fill_value=0.0)
+        matrix_transform_image(cube[idx], transform_mtx, output[idx], fill_value=fill_value)
     return output
 
-def derotate_cube(cube, derotation_angles):
+def derotate_cube(cube, derotation_angles, fill_value=np.nan):
     """Rotate each plane of `cube` by the corresponding entry
     in `derotation_angles`, interpreted as deg E of N when N +Y and
     E +X (CCW when 0, 0 at lower left)
@@ -1250,5 +1250,5 @@ def derotate_cube(cube, derotation_angles):
         cube = cube.astype(np.float32)
 
     output = np.zeros_like(cube)
-    _derotate_cube(cube, derotation_angles, output)
+    _derotate_cube(cube, derotation_angles, output, fill_value)
     return output

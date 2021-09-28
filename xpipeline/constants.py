@@ -19,6 +19,7 @@ class ValueFilter(Enum):
 class CombineOperation(Enum):
     MEAN = 'mean'
     SUM = 'sum'
+    MEDIAN = 'median'
 
 class CompareOperation(Enum):
     GT = 'gt'
