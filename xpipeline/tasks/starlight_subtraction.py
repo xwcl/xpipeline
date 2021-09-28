@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from typing import Union, Optional
 from collections.abc import Callable
 import numpy as np
+from scipy import sparse
+import pylops
 import dask.array as da
 import distributed.protocol
 from numba import njit
@@ -440,3 +442,43 @@ DEFAULT_DECOMPOSERS = {
     constants.KlipStrategy.SVD: learning.generic_svd,
     constants.KlipStrategy.COVARIANCE: learning.eigh_top_k,
 }
+
+@dataclass
+class TrapParams:
+    modes : int
+    model_trim_threshold : float = 0.4
+    model_pix_threshold : float = 0.01
+    basis_vectors : Optional[np.ndarray] = None
+    decomposer : Callable = learning.cpu_top_k_svd_arpack
+
+def trap_mtx(image_vecs, model_vecs, trap_params):
+    model_threshold = trap_params.model_trim_threshold
+    pix_below_threshold = model_vecs / np.max(model_vecs, axis=0) < model_threshold
+    model_vecs = model_vecs.copy()
+    model_vecs[pix_below_threshold] = 0
+    # dd.imshow(tasks.improc.wrap_vector(model_vecs[:,50], signal_only[0].shape, indices))
+    planet_signal_threshold = trap_params.model_pix_threshold
+    pix_with_planet_signal = np.any(model_vecs / np.max(model_vecs, axis=0),axis=1) > planet_signal_threshold
+    # pix_with_planet_signal.shape
+    median_timeseries = np.median(image_vecs, axis=0)
+    image_vecs_medsub = image_vecs - median_timeseries
+    k_modes = trap_params.modes
+    ref_vecs = image_vecs_medsub[~pix_with_planet_signal]
+    log.debug(f"Using {np.count_nonzero(~pix_with_planet_signal)} pixel time series for {k_modes} TRAP basis")
+
+    # Using the std of each pixel's timeseries to scale it before decomposition reduces the weight of the brightest pixels
+    ref_vecs_std = np.std(ref_vecs, axis=1)
+    mtx_u, diag_s, mtx_v = learning.generic_svd(ref_vecs / ref_vecs_std[:,np.newaxis], k_modes)
+    temporal_basis = mtx_v  # shape = (nframes, ncomponents)
+    operator_block_diag = [temporal_basis.T] * image_vecs.shape[0]
+    flat_model_vecs = model_vecs.flatten()
+    op = pylops.VStack([pylops.BlockDiag(operator_block_diag), flat_model_vecs[np.newaxis, :]]).transpose()
+    log.debug(f"TRAP operator: {op}")
+
+    image_megavec = image_vecs_medsub.flatten()
+    soln = sparse.linalg.lsqr(op, image_megavec)
+    solnvec = soln[0].copy()
+    solnvec[-1] = 0  # zero planet model contribution
+    estimate_vecs = op.dot(solnvec).reshape(image_vecs_medsub.shape)
+    resid_vecs = image_vecs_medsub - estimate_vecs
+    return resid_vecs
