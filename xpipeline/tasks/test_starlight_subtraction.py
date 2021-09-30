@@ -89,3 +89,52 @@ def test_klip_mtx(strategy, decomposer):
     )
     snr = characterization.calc_snr_mawet(results[0], results[1:])
     assert snr > ABSIL_GOOD_SNR_THRESHOLD
+
+
+def test_trap_mtx():
+    res_handle = resources.open_binary(
+        "xpipeline.ref", "naco_betapic_preproc_absil2013_gonzalez2017.npz"
+    )
+    data = np.load(res_handle)
+
+    threshold = 2200  # fake, just to test masking
+    good_pix_mask = np.average(data["cube"], axis=0) < threshold
+    cube = data["cube"]
+    image_vecs, subset_idxs = improc.unwrap_cube(cube, good_pix_mask)
+
+    params = starlight_subtraction.TrapParams()
+    r_px, pa_deg = 18.4, -42.8
+    psf = data["psf"]
+    psf /= np.max(psf)
+    scale_factors = np.max(cube, axis=(1, 2))
+    angles = data["angles"]
+    spec = characterization.CompanionSpec(r_px=r_px, pa_deg=pa_deg, scale=1.0)
+    _, signal_only = characterization.inject_signals(cube, [spec], psf, angles, scale_factors)
+    model_vecs, _ = improc.unwrap_cube(signal_only, good_pix_mask)
+    resid_vecs, coeff = starlight_subtraction.trap_mtx(image_vecs, model_vecs, params)
+
+    outcube = improc.wrap_matrix(resid_vecs, cube.shape, subset_idxs)
+    final_cube = improc.derotate_cube(outcube, angles)
+    final_image = np.nansum(final_cube, axis=0)
+
+    fwhm_naco = 4
+
+    _, results = characterization.reduce_apertures(
+        final_image, r_px, pa_deg, fwhm_naco, np.sum
+    )
+    snr = characterization.calc_snr_mawet(results[0], results[1:])
+    assert snr > ABSIL_GOOD_SNR_THRESHOLD
+
+    contrast = -0.0135  # not real, just empirically what cancels the planet signal
+    image_vecs_2, _ = improc.unwrap_cube(cube + contrast * signal_only, good_pix_mask)
+    resid_vecs_2, coeff_2 = starlight_subtraction.trap_mtx(image_vecs_2, model_vecs, params)
+
+    outcube_2 = improc.wrap_matrix(resid_vecs_2, cube.shape, subset_idxs)
+    final_cube_2 = improc.derotate_cube(outcube_2, angles)
+    final_image_2 = np.nansum(final_cube_2, axis=0)
+
+    _, results_2 = characterization.reduce_apertures(
+        final_image_2, r_px, pa_deg, fwhm_naco, np.sum
+    )
+    snr = characterization.calc_snr_mawet(results_2[0], results_2[1:])
+    assert snr < 2

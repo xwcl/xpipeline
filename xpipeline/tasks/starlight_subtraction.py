@@ -445,8 +445,8 @@ DEFAULT_DECOMPOSERS = {
 
 @dataclass
 class TrapParams:
-    modes : int
-    model_trim_threshold : float = 0.4
+    modes_frac : float = 0.3
+    model_trim_threshold : float = 0.2
     model_pix_threshold : float = 0.01
     basis_vectors : Optional[np.ndarray] = None
     decomposer : Callable = learning.cpu_top_k_svd_arpack
@@ -456,29 +456,39 @@ def trap_mtx(image_vecs, model_vecs, trap_params):
     pix_below_threshold = model_vecs / np.max(model_vecs, axis=0) < model_threshold
     model_vecs = model_vecs.copy()
     model_vecs[pix_below_threshold] = 0
-    # dd.imshow(tasks.improc.wrap_vector(model_vecs[:,50], signal_only[0].shape, indices))
     planet_signal_threshold = trap_params.model_pix_threshold
     pix_with_planet_signal = np.any(model_vecs / np.max(model_vecs, axis=0),axis=1) > planet_signal_threshold
-    # pix_with_planet_signal.shape
+    assert 0 < np.count_nonzero(pix_with_planet_signal) < model_vecs.shape[0]
     median_timeseries = np.median(image_vecs, axis=0)
     image_vecs_medsub = image_vecs - median_timeseries
-    k_modes = trap_params.modes
     ref_vecs = image_vecs_medsub[~pix_with_planet_signal]
-    log.debug(f"Using {np.count_nonzero(~pix_with_planet_signal)} pixel time series for {k_modes} TRAP basis")
+    k_modes = int(min(image_vecs_medsub.shape) * trap_params.modes_frac)
+    log.debug(f"Using {np.count_nonzero(~pix_with_planet_signal)} pixel time series for TRAP basis with {k_modes} modes")
 
     # Using the std of each pixel's timeseries to scale it before decomposition reduces the weight of the brightest pixels
     ref_vecs_std = np.std(ref_vecs, axis=1)
+    log.debug(f"Begin SVD...")
     mtx_u, diag_s, mtx_v = learning.generic_svd(ref_vecs / ref_vecs_std[:,np.newaxis], k_modes)
+    log.debug(f"SVD complete, constructing operator")
     temporal_basis = mtx_v  # shape = (nframes, ncomponents)
     operator_block_diag = [temporal_basis.T] * image_vecs.shape[0]
     flat_model_vecs = model_vecs.flatten()
-    op = pylops.VStack([pylops.BlockDiag(operator_block_diag), flat_model_vecs[np.newaxis, :]]).transpose()
+    flat_model_vecs /= np.std(flat_model_vecs)
+    op = pylops.VStack([
+        pylops.BlockDiag(operator_block_diag),
+        flat_model_vecs[np.newaxis, :]
+    ]).transpose()
     log.debug(f"TRAP operator: {op}")
 
     image_megavec = image_vecs_medsub.flatten()
-    soln = sparse.linalg.lsqr(op, image_megavec)
+    log.debug(f"Performing lsqr on A.shape={op.shape} and b={image_megavec.shape}")
+    start = time.perf_counter()
+    soln = sparse.linalg.lsqr(op, image_megavec, damp=1e-8)
+    log.debug(f"Finished lsqr in {time.perf_counter() - start} sec")
     solnvec = soln[0].copy()
     solnvec[-1] = 0  # zero planet model contribution
+    log.debug(f"Constructing starlight estimate from fit vector")
     estimate_vecs = op.dot(solnvec).reshape(image_vecs_medsub.shape)
     resid_vecs = image_vecs_medsub - estimate_vecs
-    return resid_vecs
+    log.debug(f"Starlight subtracted")
+    return resid_vecs, soln[0][-1]
