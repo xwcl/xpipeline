@@ -314,9 +314,9 @@ def reduce_apertures(
         
         dist = np.sqrt((xx - offset_x) ** 2 + (yy - offset_y) ** 2)
         mask = dist <= simple_aperture_radius
-        results.append(
-            operation(image[mask] / np.count_nonzero(mask & np.isfinite(image)))
-        )
+        result = operation(image[mask] / np.count_nonzero(mask & np.isfinite(image)))
+        if not np.isnan(result):
+            results.append(result)
     return locations, results
 
 
@@ -326,7 +326,7 @@ def calculate_snr(image, r_px, pa_deg, resolution_element_px, exclude_nearest, g
         r_px,
         pa_deg,
         resolution_element_px,
-        np.sum,
+        np.nansum,
         exclude_nearest=exclude_nearest,
         good_pixel_mask=good_pixel_mask
     )
