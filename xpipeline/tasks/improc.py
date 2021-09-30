@@ -320,6 +320,34 @@ def polar_coords(
     phi = np.arctan2(yy, xx)
     return np.stack([rho, phi])
 
+def pa_coords(
+    center: Tuple[float, float], data_shape: Tuple[int, int]
+) -> np.ndarray:
+    """center in y,x order; data_shape in (h, w); returns coord arrays rho, pa of data_shape
+    where pa == 0 is aligned with the +Y direction, increasing CCW when 0,0 at lower left"""
+    rho, phi = polar_coords(center, data_shape)
+    return rho, np.rad2deg((phi + 3 * np.pi / 2) % (2 * np.pi))
+
+def downsampled_grid_r_pa(mask, downsample):
+    '''Given a boolean mask and downsampling factor,
+    return the r_px, pa_deg, x, y arrays with coordinates corresponding
+    to every `downsample`th pixel, filtered to pixels where
+    `mask` is True
+
+
+    '''
+    yc, xc = arr_center(mask)
+    rho, pa_deg = pa_coords((yc, xc), mask.shape)
+    rho[~mask] = np.nan
+    pa_deg[~mask] = np.nan
+    yy, xx = np.indices(mask.shape)
+    yy -= yc
+    xx -= xc
+    yy_downsamp = yy[::downsample, ::downsample]
+    xx_downsamp = xx[::downsample, ::downsample]
+    rho_downsamp, pa_deg_downsamp = rho[yy_downsamp, xx_downsamp], pa_deg[yy_downsamp, xx_downsamp]
+    notnan = ~np.isnan(rho_downsamp)
+    return rho_downsamp[notnan], pa_deg_downsamp[notnan], yy_downsamp[notnan], xx_downsamp[notnan]
 
 def max_radius(center: Tuple[float, float], data_shape: Tuple[int, int]) -> float:
     """Given an (x, y) center location and a data shape of
@@ -332,6 +360,14 @@ def max_radius(center: Tuple[float, float], data_shape: Tuple[int, int]) -> floa
     odx, ody = data_width - dx, data_height - dy
     return min(dx, dy, odx, ody)
 
+def min_radius(center: Tuple[float, float], data_shape: Tuple[int, int], data: np.ndarray) -> float:
+    max_radius_int = max_radius(center, data_shape)
+    rho, _ = polar_coords(center, data_shape)
+    for i in range(max_radius_int):
+        mask = i - 0.5 < rho < i + 0.5
+        if np.all(np.isfinite(data[mask])):
+            return i
+    raise ValueError("At no radius is there a 1 pixel ring of finite values")
 
 def ft_shift2(image: np.ndarray, dy: float, dx: float, flux_tol: Union[None, float] = 1e-15, output_shape=None):
     """
@@ -1230,8 +1266,9 @@ def _derotate_cube(cube, derotation_angles, output, fill_value):
 
 def derotate_cube(cube, derotation_angles, fill_value=np.nan):
     """Rotate each plane of `cube` by the corresponding entry
-    in `derotation_angles`, interpreted as deg E of N when N +Y and
-    E +X (CCW when 0, 0 at lower left)
+    in `derotation_angles`, with positive angle interpreted as
+    deg to rotate E of N when N +Y and E +X (which is CCW
+    when 0, 0 at lower left)
 
     Parameters
     ----------
