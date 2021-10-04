@@ -123,7 +123,7 @@ def test_trap_mtx():
         final_image, r_px, pa_deg, fwhm_naco, np.sum
     )
     snr = characterization.calc_snr_mawet(results[0], results[1:])
-    assert snr > ABSIL_GOOD_SNR_THRESHOLD
+    assert snr > 36, "snr did not meet threshold based on performance when test was written to prevent regressions"
 
     contrast = -0.0135  # not real, just empirically what cancels the planet signal
     image_vecs_2, _ = improc.unwrap_cube(cube + contrast * signal_only, good_pix_mask)
@@ -137,4 +137,4 @@ def test_trap_mtx():
         final_image_2, r_px, pa_deg, fwhm_naco, np.sum
     )
     snr = characterization.calc_snr_mawet(results_2[0], results_2[1:])
-    assert snr < 2
+    assert snr < 1, "snr for signal-free cube too high"
