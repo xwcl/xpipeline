@@ -27,7 +27,12 @@ except ImportError:
     def mkl_set_num_threads(n):
         log.debug('Ignoring call to mkl_set_num_threads')
 
-
+try:
+    import cupy as cp
+    HAVE_CUPY = True
+except ImportError:
+    HAVE_CUPY = False
+    cp = YellingProxy("cupy")
 
 def determine_max_threads():
     count = os.cpu_count()
@@ -64,6 +69,8 @@ def get_array_module(arr):
     """
     if isinstance(arr, da.Array):
         return da
+    if HAVE_CUPY and isinstance(arr, cp.ndarray):
+        return cp
     elif isinstance(arr, numpy.ndarray):
         return numpy
     else:

@@ -11,6 +11,7 @@ import distributed.protocol
 from numba import njit
 import numba
 import time
+from ..core import get_array_module, cp
 from .. import core, utils, constants
 from . import learning, improc
 
@@ -481,14 +482,23 @@ def trap_mtx(image_vecs, model_vecs, trap_params):
     log.debug(f"TRAP operator: {op}")
 
     image_megavec = image_vecs_medsub.flatten()
-    log.debug(f"Performing lsqr on A.shape={op.shape} and b={image_megavec.shape}")
+    log.debug(f"Performing inversion on A.shape={op.shape} and b={image_megavec.shape}")
+    if get_array_module(image_vecs) is cp:
+        solver_kwargs = dict(damp=1e-8, tol=1e-8)
+    else:
+        solver_kwargs = dict(damp=1e-8)
     start = time.perf_counter()
-    soln = sparse.linalg.lsqr(op, image_megavec, damp=1e-8)
-    log.debug(f"Finished lsqr in {time.perf_counter() - start} sec")
-    solnvec = soln[0].copy()
+    xinv = pylops.optimization.leastsquares.RegularizedInversion(
+        op,
+        [],
+        image_megavec,
+        **solver_kwargs
+    )
+    log.debug(f"Finished RegularizedInversion in {time.perf_counter() - start} sec")
+    solnvec = xinv.copy()
     solnvec[-1] = 0  # zero planet model contribution
     log.debug(f"Constructing starlight estimate from fit vector")
     estimate_vecs = op.dot(solnvec).reshape(image_vecs_medsub.shape)
     resid_vecs = image_vecs_medsub - estimate_vecs
     log.debug(f"Starlight subtracted")
-    return resid_vecs, soln[0][-1]
+    return resid_vecs, xinv[-1]
