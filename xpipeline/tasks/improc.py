@@ -333,16 +333,12 @@ def downsampled_grid_r_pa(mask, downsample):
     return the r_px, pa_deg, x, y arrays with coordinates corresponding
     to every `downsample`th pixel, filtered to pixels where
     `mask` is True
-
-
     '''
     yc, xc = arr_center(mask)
     rho, pa_deg = pa_coords((yc, xc), mask.shape)
     rho[~mask] = np.nan
     pa_deg[~mask] = np.nan
     yy, xx = np.indices(mask.shape)
-    yy -= yc
-    xx -= xc
     yy_downsamp = yy[::downsample, ::downsample]
     xx_downsamp = xx[::downsample, ::downsample]
     rho_downsamp, pa_deg_downsamp = rho[yy_downsamp, xx_downsamp], pa_deg[yy_downsamp, xx_downsamp]
@@ -1170,14 +1166,16 @@ class WallTimeRangeSpec:
 RotationRange = Union[PixelRotationRangeSpec, AngleRangeSpec, FrameIndexRangeSpec, WallTimeRangeSpec]
 
 def combine(cube : np.ndarray, operation: constants.CombineOperation):
-    if operation is constants.CombineOperation.MEAN:
-        out_image = np.nanmean(cube, axis=0)
-    elif operation is constants.CombineOperation.SUM:
-        out_image = np.nansum(cube, axis=0)
-    elif operation is constants.CombineOperation.MEDIAN:
-        return np.median(cube, axis=0)
-    else:
-        raise ValueError("Supported operations: sum, mean, median")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        if operation is constants.CombineOperation.MEAN:
+            out_image = np.nanmean(cube, axis=0)
+        elif operation is constants.CombineOperation.SUM:
+            out_image = np.nansum(cube, axis=0)
+        elif operation is constants.CombineOperation.MEDIAN:
+            out_image = np.nanmedian(cube, axis=0)
+        else:
+            raise ValueError("Supported operations: sum, mean, median")
     return out_image
 
 def combine_ranges(obs_sequences, obs_table, range_spec, operation: constants.CombineOperation = constants.CombineOperation.MEAN):
@@ -1274,6 +1272,7 @@ def derotate_cube(cube, derotation_angles, fill_value=np.nan):
     ----------
     cube : array (planes, xpix, ypix)
     derotation_angles : array (planes,)
+    fill_value : float
 
     Returns
     -------
