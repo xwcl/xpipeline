@@ -28,11 +28,18 @@ except ImportError:
         log.debug('Ignoring call to mkl_set_num_threads')
 
 try:
-    import cupy as cp
+    import cupy
     HAVE_CUPY = True
 except ImportError:
     HAVE_CUPY = False
-    cp = YellingProxy("cupy")
+    cupy = YellingProxy("cupy")
+
+try:
+    import torch
+    HAVE_TORCH = True
+except ImportError:
+    HAVE_TORCH = False
+    torch = YellingProxy('torch (PyTorch)')
 
 def determine_max_threads():
     count = os.cpu_count()
@@ -69,8 +76,8 @@ def get_array_module(arr):
     """
     if isinstance(arr, da.Array):
         return da
-    if HAVE_CUPY and isinstance(arr, cp.ndarray):
-        return cp
+    if HAVE_CUPY and isinstance(arr, cupy.ndarray):
+        return cupy
     elif isinstance(arr, numpy.ndarray):
         return numpy
     else:

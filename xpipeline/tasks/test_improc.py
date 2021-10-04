@@ -176,7 +176,7 @@ def test_derotate_cube():
     data[2, 1, 2] = 1
     data = np.asarray(data)
     angles = np.asarray([-90, 0, 90])
-    out_cube = improc.derotate_cube(data, angles)
+    out_cube = improc.derotate_cube(data, angles, fill_value=0)
     assert np.all(out_cube[:, 2, 1] > 0.99)
 
 

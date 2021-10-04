@@ -11,7 +11,8 @@ import distributed.protocol
 from numba import njit
 import numba
 import time
-from ..core import get_array_module, cp
+from ..core import get_array_module
+from ..core import cupy as cp
 from .. import core, utils, constants
 from . import learning, improc
 

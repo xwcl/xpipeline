@@ -4,7 +4,7 @@ import math
 from functools import partial
 import numpy as np
 import logging
-from numba import njit, jit, float64, int64
+from numba import njit, jit
 import numba
 from numpy.core.numeric import count_nonzero
 from scipy import interpolate
@@ -893,7 +893,7 @@ def encircled_energy_and_profile(
         profile_value_at_rho,
     )
 
-@njit(numba.float64[:,:](numba.float64, numba.float64), cache=True, inline='always')
+@numba.njit(numba.float64[:,:](numba.float64, numba.float64), cache=True, inline='always')
 def translation_matrix(dx, dy):
     """Affine transform matrix for displacement dx, dy"""
     xform = np.zeros((3, 3))
@@ -909,7 +909,7 @@ def translation_matrix(dx, dy):
     # ]
     return xform
 
-@njit(numba.float64[:,:](numba.float64), cache=True, inline='always')
+@numba.njit(numba.float64[:,:](numba.float64), cache=True, inline='always')
 def rotation_matrix(theta):
     # return np.array([
     #     [np.cos(theta), -np.sin(theta), 0],
@@ -924,7 +924,7 @@ def rotation_matrix(theta):
     xform[2,2] = 1
     return xform
 
-@njit
+@numba.njit
 def make_rotation_about_center(image_shape, rotation_deg):
     '''Construct transformation matrix that maps
     (u, v) final image coordinates to (x, y) source
@@ -952,7 +952,7 @@ def make_rotation_about_center(image_shape, rotation_deg):
     else:
         return np.eye(3)
 
-@jit((float64, float64, float64, float64, float64), nopython=True, cache=True)
+@numba.jit(nopython=True, cache=True)
 def cpu_cubic1d(t, f_minus1, f_0, f_1, f_2):
     a = 2 * f_0
     b = -1 * f_minus1 + f_1
@@ -960,7 +960,7 @@ def cpu_cubic1d(t, f_minus1, f_0, f_1, f_2):
     d = -1 * f_minus1 + 3 * f_0 - 3 * f_1 + f_2
     return 0.5 * (a + t * b + t ** 2 * c + t ** 3 * d)
 
-@jit(float64(float64, float64, float64[:, :]), nopython=True, cache=True)
+@numba.jit(nopython=True, cache=True)
 def cpu_bicubic(dx, dy, region):
     # Perform 4 1D interpolations by dx along the rows of region
     b_minus1 = cpu_cubic1d(dx, region[0, 0], region[0, 1], region[0, 2], region[0, 3])
@@ -971,11 +971,7 @@ def cpu_bicubic(dx, dy, region):
     interpolated_value = cpu_cubic1d(dy, b_minus1, b_0, b_1, b_2)
     return interpolated_value
 
-
-@jit([
-    some_float(some_float[:, :], int64, int64, some_float)
-    for some_float in (numba.float32, numba.float64)
-], nopython=True, cache=True)
+@numba.jit(nopython=True, cache=True)
 def get_or_fill(arr, y, x, fill_value):
     """Returns arr[y, x] unless that would
     be out of bounds, in which case returns `fill_value`"""
@@ -986,7 +982,7 @@ def get_or_fill(arr, y, x, fill_value):
     else:
         return fill_value
 
-@jit(float64[:, :](float64[:, :], float64[:, :]), nopython=True, cache=True)
+@numba.jit(nopython=True, cache=True)
 def _interpolate_nonfinite(source_image, dest_image):
     for dest_y in range(dest_image.shape[0]):
         for dest_x in range(dest_image.shape[1]):
@@ -1021,7 +1017,7 @@ def interpolate_nonfinite(source_image, dest_image=None):
         dest_image = np.zeros_like(source_image)
     return _interpolate_nonfinite(source_image, dest_image)
 
-@jit(nopython=True, cache=True)
+@numba.jit(nopython=True, cache=True)
 def matrix_transform_image(source_image, transform_mtx, dest_image, fill_value):
     transform_mtx = np.ascontiguousarray(transform_mtx)  # should be a no-op but silences NumbaPerformanceWarning
     for dest_y in range(dest_image.shape[0]):
@@ -1044,7 +1040,7 @@ def matrix_transform_image(source_image, transform_mtx, dest_image, fill_value):
             dest_image[dest_y, dest_x] = cpu_bicubic(x_frac, y_frac, cutout)
     return dest_image
 
-@njit(parallel=True, cache=True)
+@numba.njit(parallel=True, cache=True)
 def matrix_transform_cube(data_cube, transform_mtxes, dest_cube, fill_value):
     for i in numba.prange(data_cube.shape[0]):
         matrix_transform_image(data_cube[i], transform_mtxes[i], dest_cube[i], fill_value)
@@ -1233,7 +1229,7 @@ def combine_ranges(obs_sequences, obs_table, range_spec, operation: constants.Co
     return out_seqs, out_metadata
 
 
-@njit(cache=True)
+@numba.njit(cache=True)
 def shift2(image, dx, dy, output_shape=None, fill_value=0.0, anchor_to_center=True):
     """Shift image by dx, dy with bicubic interpolation
     Direction convention: feature at (0, 0) moves to (dx, dy)
@@ -1255,7 +1251,7 @@ def shift2(image, dx, dy, output_shape=None, fill_value=0.0, anchor_to_center=Tr
     matrix_transform_image(image, xform, output, fill_value)
     return output
 
-@njit(parallel=True)
+@numba.njit(parallel=True)
 def _derotate_cube(cube, derotation_angles, output, fill_value):
     for idx in numba.prange(cube.shape[0]):
         transform_mtx = make_rotation_about_center(cube[idx].shape, derotation_angles[idx])
