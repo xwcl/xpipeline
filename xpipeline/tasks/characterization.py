@@ -197,7 +197,7 @@ def x_y_to_r_pa(x, y, xcenter, ycenter):
     dy = y - ycenter
     pa_deg = np.rad2deg(np.arctan2(dy, dx)) - 90
     r_px = np.sqrt(dx**2 + dy**2)
-    if pa_deg < 0:
+    if np.any(pa_deg < 0):
         pa_deg = 360 + pa_deg
     return r_px, pa_deg
 

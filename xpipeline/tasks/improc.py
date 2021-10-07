@@ -343,7 +343,7 @@ def downsampled_grid_r_pa(mask, downsample):
     xx_downsamp = xx[::downsample, ::downsample]
     rho_downsamp, pa_deg_downsamp = rho[yy_downsamp, xx_downsamp], pa_deg[yy_downsamp, xx_downsamp]
     notnan = ~np.isnan(rho_downsamp)
-    return rho_downsamp[notnan], pa_deg_downsamp[notnan], yy_downsamp[notnan], xx_downsamp[notnan]
+    return rho_downsamp[notnan], pa_deg_downsamp[notnan], xx_downsamp[notnan], yy_downsamp[notnan]
 
 def max_radius(center: Tuple[float, float], data_shape: Tuple[int, int]) -> float:
     """Given an (x, y) center location and a data shape of

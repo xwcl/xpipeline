@@ -20,7 +20,6 @@ class ComponentConfig(FitsConfig):
 
 @xconf.config
 class Stack(BaseCommand):
-    destination : str = xconf.field(help="Path to save result")
     stack_by : constants.CombineOperation = xconf.field(default=constants.CombineOperation.SUM, help="Operation used to stack final derotated data")
     components : list[ComponentConfig] = xconf.field()
 
