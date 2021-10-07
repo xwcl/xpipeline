@@ -1,3 +1,4 @@
+import gc
 from enum import Enum
 import dask
 from dataclasses import dataclass
@@ -14,7 +15,7 @@ import time
 from ..core import get_array_module
 from ..core import cupy as cp
 from .. import core, utils, constants
-from . import learning, improc
+from . import learning, improc, characterization
 
 @njit(cache=True)
 def _count_max_excluded(values, delta_excluded):
@@ -449,7 +450,7 @@ DEFAULT_DECOMPOSERS = {
 class TrapParams:
     modes_frac : float = 0.3
     model_trim_threshold : float = 0.2
-    model_pix_threshold : float = 0.01
+    model_pix_threshold : float = 0.3
     basis_vectors : Optional[np.ndarray] = None
     decomposer : Callable = learning.cpu_top_k_svd_arpack
 
@@ -503,3 +504,57 @@ def trap_mtx(image_vecs, model_vecs, trap_params):
     resid_vecs = image_vecs_medsub - estimate_vecs
     log.debug(f"Starlight subtracted")
     return resid_vecs, xinv[-1]
+
+
+def trap_evaluate_point(
+    r_px,
+    pa_deg,
+    data_cube,
+    mask,
+    psf,
+    scale_factors,
+    angles,
+    inject=False,
+    scale=1,
+    modes_frac=0.3,
+    use_gpu=False,
+):
+    all_start = start = time.perf_counter()
+    log.debug("Injecting signals")
+    scale_free_spec = characterization.CompanionSpec(r_px=r_px, pa_deg=pa_deg, scale=1)
+    _discard_, signal_cube = characterization.inject_signals(
+        data_cube, [scale_free_spec], psf, angles, scale_factors
+    )
+    del _discard_
+    gc.collect()
+    injected = data_cube + scale * signal_cube
+    if inject and scale == 1:
+        raise ValueError("!")
+    log.debug(f"Injection done in {time.perf_counter() - start}")
+
+    log.debug("Unwrapping cubes with mask")
+    start = time.perf_counter()
+    if inject:
+        image_vecs, indices = improc.unwrap_cube(injected, mask)
+    else:
+        image_vecs, indices = improc.unwrap_cube(data_cube, mask)
+    del indices
+    model_vecs, indices = improc.unwrap_cube(signal_cube, mask)
+    del indices
+    log.debug(f"Unwrapping done in {time.perf_counter() - start}")
+
+    log.debug("TRAP++ing...")
+    start = time.perf_counter()
+    params = TrapParams(modes_frac=modes_frac)
+    if use_gpu:
+        gpu_image_vecs, gpu_model_vecs = cp.asarray(image_vecs), cp.asarray(model_vecs)
+        del image_vecs, model_vecs
+        image_vecs, model_vecs = gpu_image_vecs, gpu_model_vecs
+    resid_vecs, model_coeff = trap_mtx(
+        image_vecs, model_vecs, params
+    )
+    log.debug(f"TRAP++ing done in {time.perf_counter() - start}")
+    del resid_vecs, image_vecs, model_vecs
+    gc.collect()
+    log.debug(f"Evaluated point in {time.perf_counter() - all_start}")
+    return model_coeff
