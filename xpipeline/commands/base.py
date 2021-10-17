@@ -134,6 +134,9 @@ class CompanionConfig(MeasurementConfig):
         """Scale factor multiplied by template (and optional template
         per-frame scale factor) to give companion image,
         i.e., contrast ratio. Can be negative or zero."""))
+    def to_companionspec(self):
+        from xpipeline.tasks.characterization import CompanionSpec
+        return CompanionSpec(self.r_px, self.pa_deg, self.scale)
 
 @xconf.config
 class TemplateConfig:

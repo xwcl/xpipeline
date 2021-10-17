@@ -2,6 +2,7 @@ import logging
 import random
 import numpy as np
 from .. import core
+cp = core.cupy
 from scipy import linalg
 
 from scipy.sparse.linalg import aslinearoperator, svds
@@ -97,6 +98,8 @@ def generic_svd(mtx_x, n_modes=None, full_matrices=False):
     if core.HAVE_TORCH:
         mtx_u, diag_s, mtx_v = torch_svd(mtx_x, n_modes=n_modes, full_matrices=full_matrices)
     else:
+        if xp is cp:
+            log.warn("Computing SVD on GPU without MAGMA/PyTorch is inefficient")
         mtx_u, diag_s, mtx_vt = xp.linalg.svd(mtx_x, full_matrices=full_matrices)
         mtx_v = mtx_vt.T
     return (

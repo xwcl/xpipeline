@@ -25,6 +25,7 @@ from .commands import (
     subtract_starlight,
     stack,
     evaluate,
+    vapp_trap,
 )
 
 log = logging.getLogger(__name__)
@@ -50,6 +51,7 @@ COMMANDS = {
     subtract_starlight.SubtractStarlight,
     stack.Stack,
     evaluate.Evaluate,
+    vapp_trap.VappTrap
 }
 
 class Dispatcher(xconf.Dispatcher):

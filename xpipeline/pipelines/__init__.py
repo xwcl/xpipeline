@@ -317,7 +317,7 @@ def vapp_stitch(
     left_cube,
     right_cube,
     vapp_symmetry_angle: float,
-    left_over_right_ratios: float
+    left_over_right_ratios: float=1.0
 ):
     log.debug("begin vapp_stitch")
     if right_cube.shape != left_cube.shape:

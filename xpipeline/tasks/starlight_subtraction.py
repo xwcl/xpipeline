@@ -448,11 +448,11 @@ DEFAULT_DECOMPOSERS = {
 
 @dataclass
 class TrapParams:
-    modes_frac : float = 0.3
+    # modes_frac : float = 0.3
+    k_modes : int
     model_trim_threshold : float = 0.2
     model_pix_threshold : float = 0.3
-    basis_vectors : Optional[np.ndarray] = None
-    decomposer : Callable = learning.cpu_top_k_svd_arpack
+    compute_residuals : bool = True
 
 def trap_mtx(image_vecs, model_vecs, trap_params):
     model_threshold = trap_params.model_trim_threshold
@@ -465,7 +465,8 @@ def trap_mtx(image_vecs, model_vecs, trap_params):
     median_timeseries = np.median(image_vecs, axis=0)
     image_vecs_medsub = image_vecs - median_timeseries
     ref_vecs = image_vecs_medsub[~pix_with_planet_signal]
-    k_modes = int(min(image_vecs_medsub.shape) * trap_params.modes_frac)
+    # k_modes = int(min(image_vecs_medsub.shape) * trap_params.modes_frac)
+    k_modes = trap_params.k_modes
     log.debug(f"Using {np.count_nonzero(~pix_with_planet_signal)} pixel time series for TRAP basis with {k_modes} modes")
 
     # Using the std of each pixel's timeseries to scale it before decomposition reduces the weight of the brightest pixels
@@ -497,13 +498,17 @@ def trap_mtx(image_vecs, model_vecs, trap_params):
         **solver_kwargs
     )
     log.debug(f"Finished RegularizedInversion in {time.perf_counter() - start} sec")
-    solnvec = xinv.copy()
-    solnvec[-1] = 0  # zero planet model contribution
-    log.debug(f"Constructing starlight estimate from fit vector")
-    estimate_vecs = op.dot(solnvec).reshape(image_vecs_medsub.shape)
-    resid_vecs = image_vecs_medsub - estimate_vecs
-    log.debug(f"Starlight subtracted")
-    return resid_vecs, xinv[-1]
+    model_coeff = float(xinv[-1])
+    if trap_params.compute_residuals:
+        solnvec = xinv
+        solnvec[-1] = 0  # zero planet model contribution
+        log.debug(f"Constructing starlight estimate from fit vector")
+        estimate_vecs = op.dot(solnvec).reshape(image_vecs_medsub.shape)
+        resid_vecs = image_vecs_medsub - estimate_vecs
+        log.debug(f"Starlight subtracted")
+        return resid_vecs, model_coeff
+    else:
+        return model_coeff
 
 
 def trap_evaluate_point(
