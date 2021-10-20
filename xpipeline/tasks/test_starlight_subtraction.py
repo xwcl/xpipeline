@@ -102,7 +102,7 @@ def test_trap_mtx():
     cube = data["cube"]
     image_vecs, subset_idxs = improc.unwrap_cube(cube, good_pix_mask)
 
-    params = starlight_subtraction.TrapParams()
+    params = starlight_subtraction.TrapParams(k_modes=17)
     r_px, pa_deg = 18.4, -42.8
     psf = data["psf"]
     psf /= np.max(psf)
@@ -111,7 +111,7 @@ def test_trap_mtx():
     spec = characterization.CompanionSpec(r_px=r_px, pa_deg=pa_deg, scale=1.0)
     _, signal_only = characterization.inject_signals(cube, [spec], psf, angles, scale_factors)
     model_vecs, _ = improc.unwrap_cube(signal_only, good_pix_mask)
-    resid_vecs, coeff = starlight_subtraction.trap_mtx(image_vecs, model_vecs, params)
+    coeff, timers, pix_used, resid_vecs = starlight_subtraction.trap_mtx(image_vecs, model_vecs, params)
 
     outcube = improc.wrap_matrix(resid_vecs, cube.shape, subset_idxs)
     final_cube = improc.derotate_cube(outcube, angles)
@@ -123,11 +123,11 @@ def test_trap_mtx():
         final_image, r_px, pa_deg, fwhm_naco, np.sum
     )
     snr = characterization.calc_snr_mawet(results[0], results[1:])
-    assert snr > 36, "snr did not meet threshold based on performance when test was written to prevent regressions"
+    assert snr > 35, "snr did not meet threshold based on performance when test was written to prevent regressions"
 
-    contrast = -0.0135  # not real, just empirically what cancels the planet signal
+    contrast = -0.02  # not real, just empirically what cancels the planet signal
     image_vecs_2, _ = improc.unwrap_cube(cube + contrast * signal_only, good_pix_mask)
-    resid_vecs_2, coeff_2 = starlight_subtraction.trap_mtx(image_vecs_2, model_vecs, params)
+    coeff_2, timers_2, pix_used_2, resid_vecs_2 = starlight_subtraction.trap_mtx(image_vecs_2, model_vecs, params)
 
     outcube_2 = improc.wrap_matrix(resid_vecs_2, cube.shape, subset_idxs)
     final_cube_2 = improc.derotate_cube(outcube_2, angles)

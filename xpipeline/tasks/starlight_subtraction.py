@@ -453,62 +453,89 @@ class TrapParams:
     model_trim_threshold : float = 0.2
     model_pix_threshold : float = 0.3
     compute_residuals : bool = True
+    decomposer : callable = learning.generic_svd
+    force_gpu_decomposition : bool = False
+    force_gpu_inversion : bool = False
 
 def trap_mtx(image_vecs, model_vecs, trap_params):
+    xp = core.get_array_module(image_vecs)
+    was_gpu_array = xp is cp
+    timers = {}
     model_threshold = trap_params.model_trim_threshold
-    pix_below_threshold = model_vecs / np.max(model_vecs, axis=0) < model_threshold
+    pix_below_threshold = model_vecs / xp.max(model_vecs, axis=0) < model_threshold
     model_vecs = model_vecs.copy()
     model_vecs[pix_below_threshold] = 0
     planet_signal_threshold = trap_params.model_pix_threshold
-    pix_with_planet_signal = np.any(model_vecs / np.max(model_vecs, axis=0),axis=1) > planet_signal_threshold
-    assert 0 < np.count_nonzero(pix_with_planet_signal) < model_vecs.shape[0]
-    median_timeseries = np.median(image_vecs, axis=0)
+    pix_with_planet_signal = xp.any(model_vecs / xp.max(model_vecs, axis=0),axis=1) > planet_signal_threshold
+    assert 0 < xp.count_nonzero(pix_with_planet_signal) < model_vecs.shape[0]
+    median_timeseries = xp.median(image_vecs, axis=0)
     image_vecs_medsub = image_vecs - median_timeseries
     ref_vecs = image_vecs_medsub[~pix_with_planet_signal]
     # k_modes = int(min(image_vecs_medsub.shape) * trap_params.modes_frac)
     k_modes = trap_params.k_modes
-    log.debug(f"Using {np.count_nonzero(~pix_with_planet_signal)} pixel time series for TRAP basis with {k_modes} modes")
+    pix_used = np.count_nonzero(~pix_with_planet_signal)
+    log.debug(f"Using {pix_used} pixel time series for TRAP basis with {k_modes} modes")
 
     # Using the std of each pixel's timeseries to scale it before decomposition reduces the weight of the brightest pixels
-    ref_vecs_std = np.std(ref_vecs, axis=1)
-    log.debug(f"Begin SVD...")
-    mtx_u, diag_s, mtx_v = learning.generic_svd(ref_vecs / ref_vecs_std[:,np.newaxis], k_modes)
-    log.debug(f"SVD complete, constructing operator")
+    ref_vecs_std = xp.std(ref_vecs, axis=1)
+    scaled_ref_vecs = ref_vecs / ref_vecs_std[:,np.newaxis]
+    if trap_params.force_gpu_decomposition:
+        scaled_ref_vecs = cp.asarray(scaled_ref_vecs)
+        xp = core.cupy
+    log.debug(f"Begin SVD with {trap_params.decomposer=}...")
+    timers['svd'] = time.perf_counter()
+    _, _, mtx_v = trap_params.decomposer(scaled_ref_vecs, k_modes)
+    timers['svd'] = time.perf_counter() - timers['svd']
+    log.debug(f"SVD complete in {timers['svd']} sec, constructing operator")
     temporal_basis = mtx_v  # shape = (nframes, ncomponents)
-    operator_block_diag = [temporal_basis.T] * image_vecs.shape[0]
     flat_model_vecs = model_vecs.flatten()
-    flat_model_vecs /= np.std(flat_model_vecs)
+    flat_model_vecs /= xp.std(flat_model_vecs)
+    if trap_params.force_gpu_inversion:
+        temporal_basis = cp.asarray(temporal_basis)
+        flat_model_vecs = cp.asarray(flat_model_vecs)
+    operator_block_diag = [temporal_basis.T] * image_vecs.shape[0]
     op = pylops.VStack([
         pylops.BlockDiag(operator_block_diag),
-        flat_model_vecs[np.newaxis, :]
+        flat_model_vecs[xp.newaxis, :]
     ]).transpose()
     log.debug(f"TRAP operator: {op}")
 
     image_megavec = image_vecs_medsub.flatten()
-    log.debug(f"Performing inversion on A.shape={op.shape} and b={image_megavec.shape}")
-    if get_array_module(image_vecs) is cp:
+    if trap_params.force_gpu_inversion or xp is cp:
+        image_megavec = cp.asarray(image_megavec)
         solver_kwargs = dict(damp=1e-8, tol=1e-8)
     else:
         solver_kwargs = dict(damp=1e-8)
-    start = time.perf_counter()
+    log.debug(f"Performing inversion on A.shape={op.shape} and b={image_megavec.shape}")
+    timers['invert'] = time.perf_counter()
     xinv = pylops.optimization.leastsquares.RegularizedInversion(
         op,
         [],
         image_megavec,
         **solver_kwargs
     )
-    log.debug(f"Finished RegularizedInversion in {time.perf_counter() - start} sec")
-    model_coeff = float(xinv[-1])
+    timers['invert'] = time.perf_counter() - timers['invert']
+    log.debug(f"Finished RegularizedInversion in {timers['invert']} sec")
+    if core.get_array_module(xinv) is cp:
+        model_coeff = float(xinv.get()[-1])
+    else:
+        model_coeff = float(xinv[-1])
     if trap_params.compute_residuals:
         solnvec = xinv
         solnvec[-1] = 0  # zero planet model contribution
         log.debug(f"Constructing starlight estimate from fit vector")
+        timers['subtract'] = time.perf_counter()
         estimate_vecs = op.dot(solnvec).reshape(image_vecs_medsub.shape)
+        if core.get_array_module(image_vecs_medsub) is not core.get_array_module(estimate_vecs):
+            image_vecs_medsub = core.get_array_module(estimate_vecs).asarray(image_vecs_medsub)
         resid_vecs = image_vecs_medsub - estimate_vecs
-        log.debug(f"Starlight subtracted")
-        return resid_vecs, model_coeff
+        if core.get_array_module(resid_vecs) is cp and not was_gpu_array:
+            resid_vecs = resid_vecs.get()
+        timers['subtract'] = time.perf_counter() - timers['subtract']
+        log.debug(f"Starlight subtracted in {timers['subtract']} sec")
+        return model_coeff, timers, pix_used, resid_vecs
     else:
-        return model_coeff
+        return model_coeff, timers, pix_used, None
 
 
 def trap_evaluate_point(

@@ -61,10 +61,10 @@ class TemplateSignal:
     scale_factors : Union[np.ndarray,float]
 
 @njit(parallel=True, cache=True)
-def _inject_signals(shape, angles, spec_scales, spec_r_pxs, spec_pa_degs, template, template_scale_factors):
-    frame_shape = shape[1:]
-    outcube = np.zeros(shape)
-    for frame_idx in numba.prange(shape[0]):
+def _inject_signals(nz, ny, nx, angles, spec_scales, spec_r_pxs, spec_pa_degs, template, template_scale_factors):
+    frame_shape = (ny, nx)
+    outcube = np.zeros((nz, ny, nx))
+    for frame_idx in numba.prange(nz):
         for spec_idx in range(spec_scales.size):
             if spec_scales[spec_idx] == 0:
                 continue
@@ -75,26 +75,58 @@ def _inject_signals(shape, angles, spec_scales, spec_r_pxs, spec_pa_degs, templa
             outcube[frame_idx] = result
     return outcube
 
+# def generate_signals(
+#     shape: tuple,
+#     specs: List[CompanionSpec],
+#     template: np.ndarray,
+#     angles: np.ndarray = None,
+#     template_scale_factors: Optional[Union[np.ndarray,float]] = None,
+# ):
+#     n_obs = shape[0]
+#     if template_scale_factors is None:
+#         template_scale_factors = np.ones(n_obs)
+#     if np.isscalar(template_scale_factors):
+#         template_scale_factors = np.repeat(np.array([template_scale_factors]), n_obs)
+#     if angles is None:
+#         angles = np.zeros(n_obs)
+#     spec_scales = np.array([spec.scale for spec in specs])
+#     spec_r_pxs = np.array([spec.r_px for spec in specs])
+#     spec_pa_degs = np.array([spec.pa_deg for spec in specs])
+
+#     nz, ny, nx = shape
+#     signal_only_cube = _inject_signals(nz, ny, nx, angles, spec_scales, spec_r_pxs, spec_pa_degs, template, template_scale_factors)
+#     return signal_only_cube
+
 def generate_signals(
     shape: tuple,
-    specs: List[CompanionSpec],
+    specs: list[CompanionSpec],
     template: np.ndarray,
     angles: np.ndarray = None,
     template_scale_factors: Optional[Union[np.ndarray,float]] = None,
 ):
+    outcube = np.zeros(shape, dtype=template.dtype)
     n_obs = shape[0]
+    template = improc.shift2(template, 0, 0, output_shape=shape[1:])
+    ft_template = np.fft.fft2(template)
+    ft_template = ft_template[np.newaxis,:,:]
+    xfreqs = np.fft.fftfreq(shape[2])
+    yfreqs = np.fft.fftfreq(shape[1])
     if template_scale_factors is None:
         template_scale_factors = np.ones(n_obs)
     if np.isscalar(template_scale_factors):
         template_scale_factors = np.repeat(np.array([template_scale_factors]), n_obs)
     if angles is None:
         angles = np.zeros(n_obs)
-    spec_scales = np.array([spec.scale for spec in specs])
-    spec_r_pxs = np.array([spec.r_px for spec in specs])
-    spec_pa_degs = np.array([spec.pa_deg for spec in specs])
-
-    signal_only_cube = _inject_signals(cube, angles, spec_scales, spec_r_pxs, spec_pa_degs, template, template_scale_factors)
-    return signal_only_cube
+    for spec in specs:
+        theta = np.deg2rad(90 + spec.pa_deg - angles)
+        dx = (spec.r_px * np.cos(theta))[:,np.newaxis,np.newaxis]
+        dy = (spec.r_px * np.sin(theta))[:,np.newaxis,np.newaxis]
+        shifter = np.exp(2j * np.pi * ((-dx * xfreqs[np.newaxis, np.newaxis, :]) + (-dy * yfreqs[np.newaxis, :, np.newaxis])))
+        cube_contribution = np.fft.ifft2(ft_template * shifter).real
+        cube_contribution *= spec.scale * template_scale_factors[:,np.newaxis,np.newaxis]
+        outcube += cube_contribution
+        del cube_contribution
+    return outcube
 
 def inject_signals(
     cube: np.ndarray,
@@ -104,7 +136,7 @@ def inject_signals(
     template_scale_factors: Optional[Union[np.ndarray,float]] = None,
     saturation_threshold: Optional[float] = None,
 ):
-    signal_only_cube = generate_signals(specs, template, angles, template_scale_factors)
+    signal_only_cube = generate_signals(cube.shape, specs, template, angles, template_scale_factors)
     outcube = cube + signal_only_cube
     if saturation_threshold is not None:
         outcube = np.clip(outcube, a_min=None, a_max=saturation_threshold)

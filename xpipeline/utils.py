@@ -8,6 +8,7 @@ import fsspec
 import threading
 import logging
 import numba
+import psutil
 
 log = logging.getLogger(__name__)
 
@@ -149,3 +150,17 @@ def drop_idx_range_cols(arr, min_excluded_idx, max_excluded_idx):
 def str_to_sha1sum(string):
     hasher = hashlib.sha1(string.encode('utf8'))
     return hasher.hexdigest()
+
+def num_cpus():
+    '''Return number of CPUs reported by the OS, or the
+    number available based on CPU affinity, if smaller'''
+    count = os.cpu_count()
+    try:
+        cpus_affinity = len(psutil.Process().cpu_affinity())
+        if cpus_affinity > 0:
+            count = min(count, cpus_affinity)
+    except Exception:
+        pass
+    return count
+
+CPU_COUNT = num_cpus()

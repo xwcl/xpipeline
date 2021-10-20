@@ -95,13 +95,8 @@ def generic_svd(mtx_x, n_modes=None, full_matrices=False):
     mtx_v
     """
     xp = core.get_array_module(mtx_x)
-    if core.HAVE_TORCH:
-        mtx_u, diag_s, mtx_v = torch_svd(mtx_x, n_modes=n_modes, full_matrices=full_matrices)
-    else:
-        if xp is cp:
-            log.warn("Computing SVD on GPU without MAGMA/PyTorch is inefficient")
-        mtx_u, diag_s, mtx_vt = xp.linalg.svd(mtx_x, full_matrices=full_matrices)
-        mtx_v = mtx_vt.T
+    mtx_u, diag_s, mtx_vt = xp.linalg.svd(mtx_x, full_matrices=full_matrices)
+    mtx_v = mtx_vt.T
     return (
         xp.ascontiguousarray(mtx_u[:, :n_modes]),
         xp.ascontiguousarray(diag_s[:n_modes]),
