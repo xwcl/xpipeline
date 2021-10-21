@@ -463,6 +463,9 @@ class TrapParams:
     # arguments to pylops.optimization.solver.cgls
     damp : float = 1e-8
     tol : float = 1e-8
+    # make it possible to pass in basis
+    return_basis : bool = False
+    precomputed_temporal_basis : Optional[np.ndarray] = None
 
 
 def trap_mtx(image_vecs, model_vecs, trap_params):
@@ -471,18 +474,33 @@ def trap_mtx(image_vecs, model_vecs, trap_params):
     timers = {}
     model_threshold = trap_params.model_trim_threshold
     pix_below_threshold = model_vecs / xp.max(model_vecs, axis=0) < model_threshold
-    model_vecs = model_vecs.copy()
-    model_vecs[pix_below_threshold] = 0
+    trimmed_model_vecs = model_vecs.copy()
+    trimmed_model_vecs[pix_below_threshold] = 0
     planet_signal_threshold = trap_params.model_pix_threshold
-    pix_with_planet_signal = xp.any(model_vecs / xp.max(model_vecs, axis=0),axis=1) > planet_signal_threshold
-    assert 0 < xp.count_nonzero(pix_with_planet_signal) < model_vecs.shape[0]
+    pix_with_planet_signal = xp.any(trimmed_model_vecs / xp.max(trimmed_model_vecs, axis=0),axis=1) > planet_signal_threshold
+    assert 0 < xp.count_nonzero(pix_with_planet_signal) < trimmed_model_vecs.shape[0]
     median_timeseries = xp.median(image_vecs, axis=0)
     image_vecs_medsub = image_vecs - median_timeseries
     ref_vecs = image_vecs_medsub[~pix_with_planet_signal]
+    pix_used = np.count_nonzero(~pix_with_planet_signal)
+    log.debug(f"Using {pix_used} pixel time series for TRAP basis with {trap_params.k_modes} modes")
+    temporal_basis, phase_1_timers = trap_phase_1(ref_vecs, trap_params)
+    if trap_params.return_basis:
+        return temporal_basis
+    timers.update(phase_1_timers)
+    model_coeff, inv_timers, maybe_resid_vecs = trap_phase_2(image_vecs_medsub, trimmed_model_vecs, temporal_basis, trap_params)
+    timers.update(inv_timers)
+    return model_coeff, timers, pix_used, maybe_resid_vecs
+
+def trap_phase_1(ref_vecs, trap_params):
+    xp = core.get_array_module(ref_vecs)
+    timers = {}
+    if trap_params.precomputed_temporal_basis is not None:
+        temporal_basis = trap_params.precomputed_temporal_basis
+        timers['svd'] = 0
+        return temporal_basis, timers
     # k_modes = int(min(image_vecs_medsub.shape) * trap_params.modes_frac)
     k_modes = trap_params.k_modes
-    pix_used = np.count_nonzero(~pix_with_planet_signal)
-    log.debug(f"Using {pix_used} pixel time series for TRAP basis with {k_modes} modes")
 
     # Using the std of each pixel's timeseries to scale it before decomposition reduces the weight of the brightest pixels
     if trap_params.scale_ref_std:
@@ -499,6 +517,12 @@ def trap_mtx(image_vecs, model_vecs, trap_params):
     timers['svd'] = time.perf_counter() - timers['svd']
     log.debug(f"SVD complete in {timers['svd']} sec, constructing operator")
     temporal_basis = mtx_v  # shape = (nframes, ncomponents)
+    return temporal_basis, timers
+
+def trap_phase_2(image_vecs_medsub, model_vecs, temporal_basis, trap_params):
+    xp = core.get_array_module(image_vecs_medsub)
+    was_gpu_array = xp is cp
+    timers = {}
     flat_model_vecs = model_vecs.flatten()
     if trap_params.scale_model_std:
         model_coeff_scale = xp.std(flat_model_vecs)
@@ -508,7 +532,7 @@ def trap_mtx(image_vecs, model_vecs, trap_params):
     if trap_params.force_gpu_inversion:
         temporal_basis = cp.asarray(temporal_basis)
         flat_model_vecs = cp.asarray(flat_model_vecs)
-    operator_block_diag = [temporal_basis.T] * image_vecs.shape[0]
+    operator_block_diag = [temporal_basis.T] * image_vecs_medsub.shape[0]
     opstack = [
         pylops.BlockDiag(operator_block_diag),
     ]
@@ -548,6 +572,7 @@ def trap_mtx(image_vecs, model_vecs, trap_params):
         model_coeff = float(xinv[-1])
     model_coeff = model_coeff / model_coeff_scale
     print(f"{model_coeff=}")
+    # return model_coeff, timers
     if trap_params.compute_residuals:
         solnvec = xinv
         solnvec[-1] = 0  # zero planet model contribution
@@ -561,9 +586,9 @@ def trap_mtx(image_vecs, model_vecs, trap_params):
             resid_vecs = resid_vecs.get()
         timers['subtract'] = time.perf_counter() - timers['subtract']
         log.debug(f"Starlight subtracted in {timers['subtract']} sec")
-        return model_coeff, timers, pix_used, resid_vecs
+        return model_coeff, timers, resid_vecs
     else:
-        return model_coeff, timers, pix_used, None
+        return model_coeff, timers, None
 
 
 def trap_evaluate_point(

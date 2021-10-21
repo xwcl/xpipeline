@@ -138,3 +138,44 @@ def test_trap_mtx():
     )
     snr = characterization.calc_snr_mawet(results_2[0], results_2[1:])
     assert snr < 1, "snr for signal-free cube too high"
+
+
+
+def test_trap_mtx_reuse_basis():
+    res_handle = resources.open_binary(
+        "xpipeline.ref", "naco_betapic_preproc_absil2013_gonzalez2017.npz"
+    )
+    data = np.load(res_handle)
+
+    threshold = 2200  # fake, just to test masking
+    good_pix_mask = np.average(data["cube"], axis=0) < threshold
+    cube = data["cube"]
+    image_vecs, subset_idxs = improc.unwrap_cube(cube, good_pix_mask)
+
+    r_px, pa_deg = 18.4, -42.8
+    psf = data["psf"]
+    psf /= np.max(psf)
+    scale_factors = np.max(cube, axis=(1, 2))
+    angles = data["angles"]
+    spec = characterization.CompanionSpec(r_px=r_px, pa_deg=pa_deg, scale=1.0)
+    _, signal_only = characterization.inject_signals(cube, [spec], psf, angles, scale_factors)
+    model_vecs, _ = improc.unwrap_cube(signal_only, good_pix_mask)
+    # compute basis only first
+    params = starlight_subtraction.TrapParams(k_modes=17, return_basis=True)
+    basis = starlight_subtraction.trap_mtx(image_vecs, model_vecs, params)
+    # pass it back in for real
+    params.precomputed_temporal_basis = basis
+    params.return_basis = False
+    coeff, timers, pix_used, resid_vecs = starlight_subtraction.trap_mtx(image_vecs, model_vecs, params)
+
+    outcube = improc.wrap_matrix(resid_vecs, cube.shape, subset_idxs)
+    final_cube = improc.derotate_cube(outcube, angles)
+    final_image = np.nansum(final_cube, axis=0)
+
+    fwhm_naco = 4
+
+    _, results = characterization.reduce_apertures(
+        final_image, r_px, pa_deg, fwhm_naco, np.sum
+    )
+    snr = characterization.calc_snr_mawet(results[0], results[1:])
+    assert snr > 35, "snr did not meet threshold based on performance when test was written to prevent regressions"
