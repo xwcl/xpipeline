@@ -56,10 +56,16 @@ COMMANDS = {
 
 class Dispatcher(xconf.Dispatcher):
     def configure_logging(self, level):
-        for name in ["xpipeline", "irods_fsspec"]:
-            logger = logging.getLogger(name)
-            coloredlogs.install(level="DEBUG", logger=logger)
-            logger.setLevel(level)
+        # remove existing handlers
+        root_logger = logging.getLogger()
+        for h in root_logger.handlers:
+            root_logger.removeHandler(h)
+        # apply verbosity
+        pkglog = logging.getLogger('xpipeline')
+        pkglog.setLevel(level)
+        # add colors (if a tty)
+        coloredlogs.install(level=level, logger=pkglog)
+
 
 def main():
     d = Dispatcher(COMMANDS)

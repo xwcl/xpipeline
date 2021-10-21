@@ -37,7 +37,7 @@ def grid_generate(k_modes_vals, covered_pix_mask, every_n_pix, companions):
         ('time_svd', float),
         ('time_invert', float),
     ])
-    for idx, (k_modes, companion, inner_idx) in enumerate(itertools.product(k_modes_vals, companions, range(len(rhos)))):
+    for idx, (companion, k_modes, inner_idx) in enumerate(itertools.product(companions, k_modes_vals, range(len(rhos)))):
         grid[idx]['k_modes'] = k_modes
         grid[idx]['inject_r_px'] = companion.r_px
         grid[idx]['inject_pa_deg'] = companion.pa_deg
@@ -58,6 +58,8 @@ def worker_init(num_cpus):
     from xpipeline.core import torch, HAVE_TORCH
     if HAVE_TORCH:
         torch.set_num_threads(num_cpus)
+    from xpipeline.cli import Dispatcher
+    Dispatcher.configure_logging(None, 'INFO')
 
 def evaluate_grid_point(idx, cube, grid_point, left_template, right_template,
                         left_scales, right_scales, mask, angles, force_gpu_decomposition, force_gpu_inversion):
@@ -84,7 +86,19 @@ def evaluate_grid_point(idx, cube, grid_point, left_template, right_template,
     grid_point['time_total_sec'] = time.perf_counter() - start
     grid_point['time_svd'] = timers['svd']
     grid_point['time_invert'] = timers['invert']
+    log.info(f"Evaluated {idx=} in {grid_point['time_total_sec']} sec")
     return idx, grid_point
+
+def evaluate_many_grid_points(indices, grid_slice, cube, left_template, right_template, left_scales, right_scales, mask, angles, force_gpu_decomposition, force_gpu_inversion):
+    outslice = grid_slice.copy()  # since it's r/o from Ray
+    for slice_idx in len(outslice):
+        _, result = evaluate_grid_point(
+            indices[slice_idx], cube, outslice[slice_idx],
+            left_template, right_template, left_scales, right_scales, mask, angles,
+            force_gpu_decomposition, force_gpu_inversion
+        )
+        outslice[slice_idx] = result
+    return indices, outslice
 
 evaluate_grid_point_remote = ray.remote(evaluate_grid_point)
 
@@ -131,6 +145,7 @@ class VappTrap(xconf.Command):
     benchmark_trials : int = xconf.field(default=2, help="")
     # ray_url : Optional[str] = xconf.field(help="")
     checkpoint_every_x : int = xconf.field(default=10, help="Write current state of grid to disk every X iterations")
+    # max_jobs_chunk_size : int = xconf.field(default=1, help="Number of grid points to submit as single Ray task")
 
     def main(self):
         hdul = iofits.load_fits_from_path(self.dataset)
@@ -213,9 +228,36 @@ class VappTrap(xconf.Command):
                     hdu = fits.BinTableHDU(grid, name='grid')
                     hdu.writeto('./grid.fits')
         
-        last_companion = None
-        out_cube_ref = None
+        # companion_injected_cubes = {}
+        # for companion_spec in self.companions:
+        #     if companion_spec.scale == 0:
+        #         inject_left_cube = left_cube
+        #         inject_right_cube = right_cube
+        #     else:
+        #         # inject
+        #         inject_left_cube = inject(left_cube, left_template, angles, left_scales, companion_spec)
+        #         inject_right_cube = inject(right_cube, right_template, angles, right_scales, companion_spec)
+
+        #     # stitch
+        #     out_cube = pipelines.vapp_stitch(inject_left_cube, inject_right_cube, clio.VAPP_PSF_ROTATION_DEG)
+        #     out_cube_ref = ray.put(out_cube)
+
+        #     # store
+        #     companion_injected_cubes[companion_spec] = out_cube_ref
+
         result_refs = []
+        # chunk_size = self.max_jobs_chunk_size
+        # chunks = len(grid) // chunk_size
+        # for i in range(chunks):
+        #     idx_from, idx_to = i*chunk_size, (i+1)*chunk_size
+        #     this_chunk = grid[idx_from, idx_to]
+        #     result_refs.append(do_chunk(idx_from, idx_to, this_chunk))
+        # # handle any not-evenly-chunk-sized remainder
+        # if len(grid[i*chunk_size:]):
+        #     result_refs.append(do_chunk(grid[i*chunk_size:]))
+        
+        last_companion = None
+
         for idx, grid_point in enumerate(grid):
             if grid_point['time_total_sec'] != 0:
                 continue
@@ -227,11 +269,11 @@ class VappTrap(xconf.Command):
             if last_companion != companion_spec:
                 last_companion = companion_spec
                 # inject
-                left_cube = inject(left_cube, left_template, angles, left_scales, companion_spec)
-                right_cube = inject(right_cube, right_template, angles, right_scales, companion_spec)
+                inject_left_cube = inject(left_cube, left_template, angles, left_scales, companion_spec)
+                inject_right_cube = inject(right_cube, right_template, angles, right_scales, companion_spec)
 
                 # stitch
-                out_cube = pipelines.vapp_stitch(left_cube, right_cube, clio.VAPP_PSF_ROTATION_DEG)
+                out_cube = pipelines.vapp_stitch(inject_left_cube, inject_right_cube, clio.VAPP_PSF_ROTATION_DEG)
                 out_cube_ref = ray.put(out_cube)
         
             result_ref = evaluate_grid_point_remote.options(**options).remote(
@@ -262,15 +304,14 @@ class VappTrap(xconf.Command):
         total = len(result_refs)
         n_complete = 0
         while pending:
-            complete, pending = ray.wait(pending, timeout=5)
-            for ref in complete:
-                idx, result = ray.get(ref)
+            complete, pending = ray.wait(pending, timeout=5, num_returns=min(self.checkpoint_every_x, len(pending)))
+            for (idx, result) in ray.get(complete):
                 grid[idx] = result
-                n_complete += 1
-                # every X points, write checkpoint
-                if n_complete % self.checkpoint_every_x == 0:
-                    log.debug(f"{n_complete=} / {total=}")
-                    with open("./grid.checkpoint.fits", 'wb') as fh:
-                        hdu = fits.BinTableHDU(grid, name='grid')
-                        hdu.writeto(fh)
-                        shutil.move("./grid.checkpoint.fits", "./grid.fits")
+            if len(complete):
+                n_complete += len(complete)
+                log.debug(f"{n_complete=} / {total=}")
+                with open("./grid.fits~", 'wb') as fh:
+                    hdu = fits.BinTableHDU(grid, name='grid')
+                    hdu.writeto(fh)
+                    shutil.move("./grid.fits~", "./grid.fits")
+        ray.shutdown()
