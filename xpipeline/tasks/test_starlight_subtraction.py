@@ -10,6 +10,13 @@ from . import starlight_subtraction, improc, characterization, learning
 
 ABSIL_GOOD_SNR_THRESHOLD = 8.36
 
+@pytest.fixture
+def naco_betapic_data():
+    res_handle = resources.open_binary(
+        "xpipeline.ref", "naco_betapic_preproc_absil2013_gonzalez2017.npz"
+    )
+    data = np.load(res_handle)
+    return data
 
 @pytest.mark.parametrize(
     "xp,decomposer,snr_threshold",
@@ -21,11 +28,8 @@ ABSIL_GOOD_SNR_THRESHOLD = 8.36
         )
     ],
 )
-def test_downdate_end_to_end(xp, decomposer, snr_threshold):
-    res_handle = resources.open_binary(
-        "xpipeline.ref", "naco_betapic_preproc_absil2013_gonzalez2017.npz"
-    )
-    data = np.load(res_handle)
+def test_downdate_end_to_end(xp, decomposer, snr_threshold, naco_betapic_data):
+    data = naco_betapic_data
     n_modes = 50
     threshold = 2200  # fake, just to test masking
     good_pix_mask = xp.asarray(np.average(data["cube"], axis=0) < threshold)
@@ -56,11 +60,8 @@ def test_downdate_end_to_end(xp, decomposer, snr_threshold):
     (constants.KlipStrategy.SVD, learning.generic_svd),
     (constants.KlipStrategy.COVARIANCE, learning.eigh_top_k),
     (constants.KlipStrategy.COVARIANCE, learning.eigh_full_decomposition)])
-def test_klip_mtx(strategy, decomposer):
-    res_handle = resources.open_binary(
-        "xpipeline.ref", "naco_betapic_preproc_absil2013_gonzalez2017.npz"
-    )
-    data = np.load(res_handle)
+def test_klip_mtx(strategy, decomposer, naco_betapic_data):
+    data = naco_betapic_data
     n_modes = 50
     threshold = 2200  # fake, just to test masking
     good_pix_mask = np.average(data["cube"], axis=0) < threshold
@@ -91,11 +92,8 @@ def test_klip_mtx(strategy, decomposer):
     assert snr > ABSIL_GOOD_SNR_THRESHOLD
 
 
-def test_trap_mtx():
-    res_handle = resources.open_binary(
-        "xpipeline.ref", "naco_betapic_preproc_absil2013_gonzalez2017.npz"
-    )
-    data = np.load(res_handle)
+def test_trap_mtx(naco_betapic_data):
+    data = naco_betapic_data
 
     threshold = 2200  # fake, just to test masking
     good_pix_mask = np.average(data["cube"], axis=0) < threshold
@@ -141,11 +139,8 @@ def test_trap_mtx():
 
 
 
-def test_trap_mtx_reuse_basis():
-    res_handle = resources.open_binary(
-        "xpipeline.ref", "naco_betapic_preproc_absil2013_gonzalez2017.npz"
-    )
-    data = np.load(res_handle)
+def test_trap_mtx_reuse_basis(naco_betapic_data):
+    data = naco_betapic_data
 
     threshold = 2200  # fake, just to test masking
     good_pix_mask = np.average(data["cube"], axis=0) < threshold
@@ -167,15 +162,7 @@ def test_trap_mtx_reuse_basis():
     params.precomputed_temporal_basis = basis
     params.return_basis = False
     coeff, timers, pix_used, resid_vecs = starlight_subtraction.trap_mtx(image_vecs, model_vecs, params)
+    print(coeff)
+    _ref_value = 0.009964724803923637
+    assert np.abs(coeff - _ref_value) < 1e-4 * _ref_value, "model coeff did not match value when test was written to prevent regressions"
 
-    outcube = improc.wrap_matrix(resid_vecs, cube.shape, subset_idxs)
-    final_cube = improc.derotate_cube(outcube, angles)
-    final_image = np.nansum(final_cube, axis=0)
-
-    fwhm_naco = 4
-
-    _, results = characterization.reduce_apertures(
-        final_image, r_px, pa_deg, fwhm_naco, np.sum
-    )
-    snr = characterization.calc_snr_mawet(results[0], results[1:])
-    assert snr > 35, "snr did not meet threshold based on performance when test was written to prevent regressions"
