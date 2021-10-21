@@ -7,6 +7,7 @@ from collections.abc import Callable
 import numpy as np
 from scipy import sparse
 import pylops
+import pylops.optimization.solver
 import dask.array as da
 import distributed.protocol
 from numba import njit
@@ -453,9 +454,16 @@ class TrapParams:
     model_trim_threshold : float = 0.2
     model_pix_threshold : float = 0.3
     compute_residuals : bool = True
+    incorporate_offset : bool = True
+    scale_ref_std : bool = True
+    scale_model_std : bool = True
     decomposer : callable = learning.generic_svd
     force_gpu_decomposition : bool = False
     force_gpu_inversion : bool = False
+    # arguments to pylops.optimization.solver.cgls
+    damp : float = 1e-8
+    tol : float = 1e-8
+
 
 def trap_mtx(image_vecs, model_vecs, trap_params):
     xp = core.get_array_module(image_vecs)
@@ -477,8 +485,11 @@ def trap_mtx(image_vecs, model_vecs, trap_params):
     log.debug(f"Using {pix_used} pixel time series for TRAP basis with {k_modes} modes")
 
     # Using the std of each pixel's timeseries to scale it before decomposition reduces the weight of the brightest pixels
-    ref_vecs_std = xp.std(ref_vecs, axis=1)
-    scaled_ref_vecs = ref_vecs / ref_vecs_std[:,np.newaxis]
+    if trap_params.scale_ref_std:
+        ref_vecs_std = xp.std(ref_vecs, axis=1)
+        scaled_ref_vecs = ref_vecs / ref_vecs_std[:,np.newaxis]
+    else:
+        scaled_ref_vecs = ref_vecs
     if trap_params.force_gpu_decomposition:
         scaled_ref_vecs = cp.asarray(scaled_ref_vecs)
         xp = core.cupy
@@ -489,37 +500,54 @@ def trap_mtx(image_vecs, model_vecs, trap_params):
     log.debug(f"SVD complete in {timers['svd']} sec, constructing operator")
     temporal_basis = mtx_v  # shape = (nframes, ncomponents)
     flat_model_vecs = model_vecs.flatten()
-    flat_model_vecs /= xp.std(flat_model_vecs)
+    if trap_params.scale_model_std:
+        model_coeff_scale = xp.std(flat_model_vecs)
+        flat_model_vecs /= model_coeff_scale
+    else:
+        model_coeff_scale = 1
     if trap_params.force_gpu_inversion:
         temporal_basis = cp.asarray(temporal_basis)
         flat_model_vecs = cp.asarray(flat_model_vecs)
     operator_block_diag = [temporal_basis.T] * image_vecs.shape[0]
-    op = pylops.VStack([
+    opstack = [
         pylops.BlockDiag(operator_block_diag),
-        flat_model_vecs[xp.newaxis, :]
-    ]).transpose()
+    ]
+    if trap_params.incorporate_offset:
+        opstack.append(np.ones_like(flat_model_vecs[xp.newaxis, :]))
+    opstack.append(flat_model_vecs[xp.newaxis, :])
+    op = pylops.VStack(opstack).transpose()
     log.debug(f"TRAP operator: {op}")
 
     image_megavec = image_vecs_medsub.flatten()
-    if trap_params.force_gpu_inversion or xp is cp:
-        image_megavec = cp.asarray(image_megavec)
-        solver_kwargs = dict(damp=1e-8, tol=1e-8)
-    else:
-        solver_kwargs = dict(damp=1e-8)
+    # if trap_params.force_gpu_inversion or xp is cp:
+    #     image_megavec = cp.asarray(image_megavec)
+    #     solver_kwargs = dict(damp=1e-8, tol=1e-8)
+    # else:
+    #     solver_kwargs = dict(damp=1e-8)
+    solver_kwargs = dict(damp=trap_params.damp, tol=trap_params.tol)
     log.debug(f"Performing inversion on A.shape={op.shape} and b={image_megavec.shape}")
     timers['invert'] = time.perf_counter()
-    xinv = pylops.optimization.leastsquares.RegularizedInversion(
+    # xinv = pylops.optimization.leastsquares.RegularizedInversion(
+    #     op,
+    #     [],
+    #     image_megavec,
+    #     **solver_kwargs
+    # )
+    cgls_result = pylops.optimization.solver.cgls(
         op,
-        [],
         image_megavec,
+        xp.zeros(int(op.shape[1])),
         **solver_kwargs
     )
+    xinv = cgls_result[0]
     timers['invert'] = time.perf_counter() - timers['invert']
     log.debug(f"Finished RegularizedInversion in {timers['invert']} sec")
     if core.get_array_module(xinv) is cp:
         model_coeff = float(xinv.get()[-1])
     else:
         model_coeff = float(xinv[-1])
+    model_coeff = model_coeff / model_coeff_scale
+    print(f"{model_coeff=}")
     if trap_params.compute_residuals:
         solnvec = xinv
         solnvec[-1] = 0  # zero planet model contribution
