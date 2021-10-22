@@ -466,6 +466,7 @@ class TrapParams:
     # make it possible to pass in basis
     return_basis : bool = False
     precomputed_temporal_basis : Optional[np.ndarray] = None
+    background_split_mask: Optional[np.ndarray] = None
 
 
 def trap_mtx(image_vecs, model_vecs, trap_params):
@@ -486,7 +487,7 @@ def trap_mtx(image_vecs, model_vecs, trap_params):
     log.debug(f"Using {pix_used} pixel time series for TRAP basis with {trap_params.k_modes} modes")
     temporal_basis, phase_1_timers = trap_phase_1(ref_vecs, trap_params)
     if trap_params.return_basis:
-        return temporal_basis
+        return temporal_basis, phase_1_timers
     timers.update(phase_1_timers)
     model_coeff, inv_timers, maybe_resid_vecs = trap_phase_2(image_vecs_medsub, trimmed_model_vecs, temporal_basis, trap_params)
     timers.update(inv_timers)
@@ -537,7 +538,17 @@ def trap_phase_2(image_vecs_medsub, model_vecs, temporal_basis, trap_params):
         pylops.BlockDiag(operator_block_diag),
     ]
     if trap_params.incorporate_offset:
-        opstack.append(np.ones_like(flat_model_vecs[xp.newaxis, :]))
+        if trap_params.background_split_mask is not None:
+            left_mask_vec = trap_params.background_split_mask
+            left_mask_megavec = np.repeat(left_mask_vec[:,np.newaxis], model_vecs.shape[1]).flatten()
+            assert len(left_mask_megavec) == len(flat_model_vecs)
+            # ones for left side pixels -> fit constant offset for left psf
+            opstack.append(left_mask_megavec[np.newaxis,:].astype(flat_model_vecs.dtype))
+            right_mask_megavec = ~left_mask_megavec
+            # ones for right side pixels -> fit constant offset for right psf
+            opstack.append(right_mask_megavec[np.newaxis,:].astype(flat_model_vecs.dtype))
+        else:
+            opstack.append(np.ones_like(flat_model_vecs[xp.newaxis, :]))
     opstack.append(flat_model_vecs[xp.newaxis, :])
     op = pylops.VStack(opstack).transpose()
     log.debug(f"TRAP operator: {op}")
@@ -571,7 +582,6 @@ def trap_phase_2(image_vecs_medsub, model_vecs, temporal_basis, trap_params):
     else:
         model_coeff = float(xinv[-1])
     model_coeff = model_coeff / model_coeff_scale
-    print(f"{model_coeff=}")
     # return model_coeff, timers
     if trap_params.compute_residuals:
         solnvec = xinv
