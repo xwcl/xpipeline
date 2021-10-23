@@ -542,13 +542,18 @@ def trap_phase_2(image_vecs_medsub, model_vecs, temporal_basis, trap_params):
             left_mask_vec = trap_params.background_split_mask
             left_mask_megavec = np.repeat(left_mask_vec[:,np.newaxis], model_vecs.shape[1]).flatten()
             assert len(left_mask_megavec) == len(flat_model_vecs)
-            # ones for left side pixels -> fit constant offset for left psf
-            opstack.append(left_mask_megavec[np.newaxis,:].astype(flat_model_vecs.dtype))
-            right_mask_megavec = ~left_mask_megavec
-            # ones for right side pixels -> fit constant offset for right psf
-            opstack.append(right_mask_megavec[np.newaxis,:].astype(flat_model_vecs.dtype))
+            left_mask_megavec = left_mask_megavec[np.newaxis,:].astype(flat_model_vecs.dtype)
+            left_mask_megavec = left_mask_megavec - left_mask_megavec.mean()
+            left_mask_megavec /= np.linalg.norm(left_mask_megavec)
+            # "ones" for left side pixels -> fit constant offset for left psf
+            opstack.append(left_mask_megavec)
+            # "ones" for right side pixels -> fit constant offset for right psf
+            right_mask_megavec = -1 * left_mask_megavec
+            opstack.append(right_mask_megavec)
         else:
-            opstack.append(np.ones_like(flat_model_vecs[xp.newaxis, :]))
+            background_megavec = np.ones_like(flat_model_vecs[xp.newaxis, :])
+            background_megavec /= np.linalg.norm(background_megavec)
+            opstack.append(background_megavec)
     opstack.append(flat_model_vecs[xp.newaxis, :])
     op = pylops.VStack(opstack).transpose()
     log.debug(f"TRAP operator: {op}")
