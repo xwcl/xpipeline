@@ -311,8 +311,18 @@ class VappTrap(xconf.Command):
         right_template = self.right_template.load()
 
         # init ray
+        from ray.job_config import JobConfig
+        worker_env = {
+            'OMP_NUM_THREADS': '1',
+            'MKL_NUM_THREADS': '1',
+            'NUMBA_NUM_THREADS': '1',
+            # we aren't using numba threads anyway,
+            # but setting this silences tbb-related fork errors:
+            'NUMBA_THREADING_LAYER': 'workqueue',
+        }
+        job_config_env = JobConfig(worker_env=worker_env)
         if isinstance(self.ray, RemoteRayConfig):
-            ray.init(self.ray.url)
+            ray.init(self.ray.url, job_config=job_config_env)
         else:
             resources = {}
             if self.ray.ram_gb is not None:
@@ -320,7 +330,8 @@ class VappTrap(xconf.Command):
             ray.init(
                 num_cpus=self.ray.cpus,
                 num_gpus=self.ray.gpus,
-                resources=resources
+                resources=resources,
+                job_config=job_config_env
             )
         options = {'resources':{}}
         generate_options = options.copy()
