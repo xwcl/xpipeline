@@ -33,8 +33,8 @@ class PerTaskConfig:
     evaluate : float = xconf.field(help="amount required in fitting")
 
 
-@ray.remote
-def generate_model(cube_shape, left_template, right_template,
+
+def _generate_model(cube_shape, left_template, right_template,
                    left_scales, right_scales, angles, companion_r_px, companion_pa_deg, mask):
     companion_spec = characterization.CompanionSpec(companion_r_px, companion_pa_deg, 1.0)
     # generate
@@ -44,13 +44,13 @@ def generate_model(cube_shape, left_template, right_template,
     out_cube = pipelines.vapp_stitch(left_model_cube, right_model_cube, clio.VAPP_PSF_ROTATION_DEG)
     model_vecs, _ = improc.unwrap_cube(out_cube, mask)
     return model_vecs
+generate_model = ray.remote(_generate_model)
 
-@ray.remote
-def inject_model(image_vecs, model_vecs, companion_scale):
+def _inject_model(image_vecs, model_vecs, companion_scale):
     return image_vecs + companion_scale * model_vecs
+inject_model = ray.remote(_inject_model)
 
-@ray.remote
-def precompute_basis(image_vecs, model_vecs, k_modes_max, force_gpu_decomposition):
+def _precompute_basis(image_vecs, model_vecs, k_modes_max, force_gpu_decomposition):
     params = starlight_subtraction.TrapParams(
         k_modes=k_modes_max,
         force_gpu_decomposition=force_gpu_decomposition,
@@ -58,9 +58,9 @@ def precompute_basis(image_vecs, model_vecs, k_modes_max, force_gpu_decompositio
     )
     precomputed_temporal_basis, phase_1_timers = starlight_subtraction.trap_mtx(image_vecs, model_vecs, params)
     return precomputed_temporal_basis, phase_1_timers
+precompute_basis = ray.remote(_precompute_basis)
 
-@ray.remote
-def evaluate_point(out_idx, row, inject_image_vecs, model_vecs, k_modes, precomputed_temporal_basis, left_pix_vec, force_gpu_inversion):
+def _evaluate_point(out_idx, row, inject_image_vecs, model_vecs, k_modes, precomputed_temporal_basis, left_pix_vec, force_gpu_inversion):
     start = time.perf_counter()
     row = row.copy() # since ray is r/o
     temporal_basis, phase_1_timers = precomputed_temporal_basis
@@ -79,6 +79,7 @@ def evaluate_point(out_idx, row, inject_image_vecs, model_vecs, k_modes, precomp
     row['time_total_sec'] = time.perf_counter() - start
     log.info(f"Evaluated {out_idx=} in {row['time_total_sec']} sec")
     return out_idx, row
+evaluate_point = ray.remote(_evaluate_point)
 
 def grid_generate(k_modes_vals, covered_pix_mask, every_n_pix, companions):
     # static: every_n_pix, every_t_frames, min_coverage
@@ -126,45 +127,6 @@ def worker_init(num_cpus):
         torch.set_num_threads(num_cpus)
     from xpipeline.cli import Dispatcher
     Dispatcher.configure_logging(None, 'INFO')
-
-def evaluate_grid_point(idx, cube, grid_point, left_template, right_template,
-                        left_scales, right_scales, mask, angles, force_gpu_decomposition, force_gpu_inversion):
-    worker_init(num_cpus=1)
-    grid_point = grid_point.copy()
-    start = time.perf_counter()
-    r_px, pa_deg = grid_point['r_px'], grid_point['pa_deg']
-    scale_free_spec = characterization.CompanionSpec(r_px=r_px, pa_deg=pa_deg, scale=1)
-    left_signal = characterization.generate_signals(cube.shape, [scale_free_spec], left_template, angles, left_scales)
-    right_signal = characterization.generate_signals(cube.shape, [scale_free_spec], right_template, angles, right_scales)
-    signal = pipelines.vapp_stitch(left_signal, right_signal, clio.VAPP_PSF_ROTATION_DEG)
-    grid_point['time_gen_model_sec'] = time.perf_counter() - start
-    image_vecs, _ = improc.unwrap_cube(cube, mask)
-    model_vecs, _ = improc.unwrap_cube(signal, mask)
-    params = starlight_subtraction.TrapParams(
-        k_modes=grid_point['k_modes'],
-        compute_residuals=False,
-        force_gpu_decomposition=force_gpu_decomposition,
-        force_gpu_inversion=force_gpu_inversion,
-    )
-    model_coeff, timers, pix_used, _ = starlight_subtraction.trap_mtx(image_vecs, model_vecs, params)
-    grid_point['model_coeff'] = model_coeff
-    grid_point['pix_used'] = pix_used
-    grid_point['time_total_sec'] = time.perf_counter() - start
-    grid_point['time_svd'] = timers['svd']
-    grid_point['time_invert'] = timers['invert']
-    log.info(f"Evaluated {idx=} in {grid_point['time_total_sec']} sec")
-    return idx, grid_point
-
-def evaluate_many_grid_points(indices, grid_slice, cube, left_template, right_template, left_scales, right_scales, mask, angles, force_gpu_decomposition, force_gpu_inversion):
-    outslice = grid_slice.copy()  # since it's r/o from Ray
-    for slice_idx in len(outslice):
-        _, result = evaluate_grid_point(
-            indices[slice_idx], cube, outslice[slice_idx],
-            left_template, right_template, left_scales, right_scales, mask, angles,
-            force_gpu_decomposition, force_gpu_inversion
-        )
-        outslice[slice_idx] = result
-    return indices, outslice
 
 def launch_grid(grid, 
                 left_cube, right_cube,
@@ -288,7 +250,7 @@ def launch_grid(grid,
             k_modes,
             precompute_ref,
             left_pix_vec,
-            force_gpu_inversion
+            force_gpu_inversion,
         )
         remaining_point_refs.append(point_ref)
     return remaining_point_refs
@@ -421,7 +383,8 @@ class VappTrap(xconf.Command):
                 with open("./grid.fits", 'wb') as fh:
                     hdu = fits.BinTableHDU(grid, name='grid')
                     hdu.writeto('./grid.fits')
-
+        else:
+            grid = grid[:self.benchmark_trials]
         result_refs = launch_grid(
             grid,
             left_cube,
@@ -438,7 +401,12 @@ class VappTrap(xconf.Command):
             decompose_options=decompose_options,
             evaluate_options=evaluate_options,
         )
-
+        if self.benchmark:
+            log.debug(f"Running {self.benchmark_trials} trials...")
+            for i in range(self.benchmark_trials):
+                print(ray.get(result_refs[i]))
+            ray.shutdown()
+            return 0
         # for idx, grid_point in enumerate(grid):
         #     if grid_point['time_total_sec'] != 0:
         #         continue
