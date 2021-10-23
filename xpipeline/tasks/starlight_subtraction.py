@@ -497,7 +497,7 @@ def trap_phase_1(ref_vecs, trap_params):
     xp = core.get_array_module(ref_vecs)
     timers = {}
     if trap_params.precomputed_temporal_basis is not None:
-        temporal_basis = trap_params.precomputed_temporal_basis
+        temporal_basis = np.ascontiguousarray(trap_params.precomputed_temporal_basis[:,:trap_params.k_modes])
         timers['svd'] = 0
         return temporal_basis, timers
     # k_modes = int(min(image_vecs_medsub.shape) * trap_params.modes_frac)
