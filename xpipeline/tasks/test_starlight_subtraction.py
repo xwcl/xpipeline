@@ -163,6 +163,6 @@ def test_trap_mtx_reuse_basis(naco_betapic_data):
     params.return_basis = False
     coeff, timers, pix_used, resid_vecs = starlight_subtraction.trap_mtx(image_vecs, model_vecs, params)
     print(coeff)
-    _ref_value = 0.009964724803923637
+    _ref_value = 0.009980708465446193
     assert np.abs(coeff - _ref_value) < 1e-4 * _ref_value, "model coeff did not match value when test was written to prevent regressions"
 

@@ -56,25 +56,24 @@ def _precompute_basis(image_vecs, model_vecs, k_modes_max, force_gpu_decompositi
         force_gpu_decomposition=force_gpu_decomposition,
         return_basis=True,
     )
-    precomputed_temporal_basis, phase_1_timers = starlight_subtraction.trap_mtx(image_vecs, model_vecs, params)
-    return precomputed_temporal_basis, phase_1_timers
+    precomputed_trap_basis = starlight_subtraction.trap_mtx(image_vecs, model_vecs, params)
+    return precomputed_trap_basis
 precompute_basis = ray.remote(_precompute_basis)
 
-def _evaluate_point(out_idx, row, inject_image_vecs, model_vecs, k_modes, precomputed_temporal_basis, left_pix_vec, force_gpu_inversion):
+def _evaluate_point(out_idx, row, inject_image_vecs, model_vecs, k_modes, precomputed_trap_basis, left_pix_vec, force_gpu_inversion):
     start = time.perf_counter()
     row = row.copy() # since ray is r/o
-    temporal_basis, phase_1_timers = precomputed_temporal_basis
     params = starlight_subtraction.TrapParams(
         k_modes=k_modes,
         compute_residuals=False,
-        precomputed_temporal_basis=temporal_basis,
+        precomputed_basis=precomputed_trap_basis,
         background_split_mask=left_pix_vec,
         force_gpu_inversion=force_gpu_inversion,
     )
     model_coeff, timers, pix_used, _ = starlight_subtraction.trap_mtx(inject_image_vecs, model_vecs, params)
     row['model_coeff'] = model_coeff
     row['pix_used'] = pix_used
-    row['time_precompute_svd_sec'] = phase_1_timers['svd']
+    row['time_precompute_svd_sec'] = precomputed_trap_basis.time_sec
     row['time_invert_sec'] = timers['invert']
     row['time_total_sec'] = time.perf_counter() - start
     log.info(f"Evaluated {out_idx=} in {row['time_total_sec']} sec")

@@ -448,6 +448,11 @@ DEFAULT_DECOMPOSERS = {
 }
 
 @dataclass
+class TrapBasis:
+    temporal_basis : np.ndarray
+    time_sec : float
+
+@dataclass
 class TrapParams:
     # modes_frac : float = 0.3
     k_modes : int
@@ -465,7 +470,7 @@ class TrapParams:
     tol : float = 1e-8
     # make it possible to pass in basis
     return_basis : bool = False
-    precomputed_temporal_basis : Optional[np.ndarray] = None
+    precomputed_basis : Optional[TrapBasis] = None
     background_split_mask: Optional[np.ndarray] = None
 
 
@@ -485,21 +490,23 @@ def trap_mtx(image_vecs, model_vecs, trap_params):
     ref_vecs = image_vecs_medsub[~pix_with_planet_signal]
     pix_used = np.count_nonzero(~pix_with_planet_signal)
     log.debug(f"Using {pix_used} pixel time series for TRAP basis with {trap_params.k_modes} modes")
-    temporal_basis, phase_1_timers = trap_phase_1(ref_vecs, trap_params)
+    trap_basis = trap_phase_1(ref_vecs, trap_params)
     if trap_params.return_basis:
-        return temporal_basis, phase_1_timers
-    timers.update(phase_1_timers)
-    model_coeff, inv_timers, maybe_resid_vecs = trap_phase_2(image_vecs_medsub, trimmed_model_vecs, temporal_basis, trap_params)
+        return trap_basis
+    timers['time_svd_sec'] = trap_basis.time_sec
+    model_coeff, inv_timers, maybe_resid_vecs = trap_phase_2(
+        image_vecs_medsub, trimmed_model_vecs,
+        trap_basis.temporal_basis, trap_params
+    )
     timers.update(inv_timers)
     return model_coeff, timers, pix_used, maybe_resid_vecs
 
 def trap_phase_1(ref_vecs, trap_params):
     xp = core.get_array_module(ref_vecs)
-    timers = {}
-    if trap_params.precomputed_temporal_basis is not None:
-        temporal_basis = np.ascontiguousarray(trap_params.precomputed_temporal_basis[:,:trap_params.k_modes])
-        timers['svd'] = 0
-        return temporal_basis, timers
+    if trap_params.precomputed_basis is not None:
+        temporal_basis = trap_params.precomputed_basis.temporal_basis
+        temporal_basis = np.ascontiguousarray(temporal_basis[:,:trap_params.k_modes])
+        return TrapBasis(temporal_basis, trap_params.precomputed_basis.time_sec)
     # k_modes = int(min(image_vecs_medsub.shape) * trap_params.modes_frac)
     k_modes = trap_params.k_modes
 
@@ -513,12 +520,12 @@ def trap_phase_1(ref_vecs, trap_params):
         scaled_ref_vecs = cp.asarray(scaled_ref_vecs)
         xp = core.cupy
     log.debug(f"Begin SVD with {trap_params.decomposer=}...")
-    timers['svd'] = time.perf_counter()
+    time_sec = time.perf_counter()
     _, _, mtx_v = trap_params.decomposer(scaled_ref_vecs, k_modes)
-    timers['svd'] = time.perf_counter() - timers['svd']
-    log.debug(f"SVD complete in {timers['svd']} sec, constructing operator")
+    time_sec = time.perf_counter() - time_sec
+    log.debug(f"SVD complete in {time_sec} sec, constructing operator")
     temporal_basis = mtx_v  # shape = (nframes, ncomponents)
-    return temporal_basis, timers
+    return TrapBasis(temporal_basis, time_sec)
 
 def trap_phase_2(image_vecs_medsub, model_vecs, temporal_basis, trap_params):
     xp = core.get_array_module(image_vecs_medsub)
