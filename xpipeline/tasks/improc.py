@@ -8,6 +8,10 @@ from numba import njit, jit
 import numba
 from numpy.core.numeric import count_nonzero
 from scipy import interpolate
+try:
+    from pyfftw.interfaces import numpy_fft as fft
+except ImportError:
+    fft = fft
 
 from scipy.ndimage import binary_dilation
 import skimage.transform
@@ -384,9 +388,9 @@ def ft_shift2(image: np.ndarray, dy: float, dx: float, flux_tol: Union[None, flo
     """
     if output_shape is None:
         output_shape = image.shape
-    xfreqs = np.fft.fftfreq(output_shape[1])
-    yfreqs = np.fft.fftfreq(output_shape[0])
-    xform = np.fft.fft2(image, s=output_shape)
+    xfreqs = fft.fftfreq(output_shape[1])
+    yfreqs = fft.fftfreq(output_shape[0])
+    xform = fft.fft2(image, s=output_shape)
     if output_shape is not None:
         # compute center-to-center displacement such that
         # supplying dx == dy == 0.0 will be a no-op (aside
@@ -404,7 +408,7 @@ def ft_shift2(image: np.ndarray, dy: float, dx: float, flux_tol: Union[None, flo
             + (-(dy + base_dy) * yfreqs)[:, np.newaxis]
         )
     )
-    new_image = np.fft.ifft2(modified_xform).real
+    new_image = fft.ifft2(modified_xform).real
     frac_diff_flux = (np.sum(image) - np.sum(new_image)) / np.sum(image)
     if flux_tol is not None and frac_diff_flux > flux_tol:
         raise RuntimeError(

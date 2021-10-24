@@ -1,4 +1,5 @@
 import time
+from dataclasses import dataclass
 from xpipeline.core import cupy as cp
 import itertools
 import shutil
@@ -32,25 +33,46 @@ class PerTaskConfig:
     decompose : float = xconf.field(help="amount required in basis computation")
     evaluate : float = xconf.field(help="amount required in fitting")
 
+@dataclass
+class ModelInputs:
+    data_cube_shape : tuple[int,int,int]
+    left_template : np.ndarray
+    right_template : np.ndarray
+    left_scales : np.ndarray
+    right_scales : np.ndarray
+    angles : np.ndarray
+    mask : np.ndarray
 
-
-def _generate_model(cube_shape, left_template, right_template,
-                   left_scales, right_scales, angles, companion_r_px, companion_pa_deg, mask):
+def generate_model(model_inputs : ModelInputs, companion_r_px, companion_pa_deg):
     companion_spec = characterization.CompanionSpec(companion_r_px, companion_pa_deg, 1.0)
     # generate
-    left_model_cube = characterization.generate_signals(cube_shape, [companion_spec], left_template, angles, left_scales)
-    right_model_cube = characterization.generate_signals(cube_shape, [companion_spec], right_template, angles, right_scales)
+    left_model_cube = characterization.generate_signals(
+        model_inputs.data_cube_shape,
+        [companion_spec],
+        model_inputs.left_template,
+        model_inputs.angles,
+        model_inputs.left_scales
+    )
+    right_model_cube = characterization.generate_signals(
+        model_inputs.data_cube_shape,
+        [companion_spec],
+        model_inputs.right_template,
+        model_inputs.angles,
+        model_inputs.right_scales
+    )
     # stitch
     out_cube = pipelines.vapp_stitch(left_model_cube, right_model_cube, clio.VAPP_PSF_ROTATION_DEG)
-    model_vecs, _ = improc.unwrap_cube(out_cube, mask)
+    model_vecs, _ = improc.unwrap_cube(out_cube, model_inputs.mask)
     return model_vecs
-generate_model = ray.remote(_generate_model)
+# generate_model = ray.remote(_generate_model)
 
-def _inject_model(image_vecs, model_vecs, companion_scale):
+def _inject_model(image_vecs, model_inputs : ModelInputs, companion_r_px, companion_pa_deg, companion_scale):
+    model_vecs = generate_model(model_inputs, companion_r_px, companion_pa_deg)
     return image_vecs + companion_scale * model_vecs
 inject_model = ray.remote(_inject_model)
 
-def _precompute_basis(image_vecs, model_vecs, k_modes_max, force_gpu_decomposition):
+def _precompute_basis(image_vecs, model_inputs : ModelInputs, r_px, pa_deg, k_modes_max, force_gpu_decomposition):
+    model_vecs = generate_model(model_inputs, r_px, pa_deg)
     params = starlight_subtraction.TrapParams(
         k_modes=k_modes_max,
         force_gpu_decomposition=force_gpu_decomposition,
@@ -60,9 +82,10 @@ def _precompute_basis(image_vecs, model_vecs, k_modes_max, force_gpu_decompositi
     return precomputed_trap_basis
 precompute_basis = ray.remote(_precompute_basis)
 
-def _evaluate_point(out_idx, row, inject_image_vecs, model_vecs, k_modes, precomputed_trap_basis, left_pix_vec, force_gpu_inversion):
+def _evaluate_point(out_idx, row, inject_image_vecs, model_inputs, k_modes, precomputed_trap_basis, left_pix_vec, force_gpu_inversion):
     start = time.perf_counter()
     row = row.copy() # since ray is r/o
+    model_vecs = generate_model(model_inputs, row['r_px'], row['pa_deg'])
     params = starlight_subtraction.TrapParams(
         k_modes=k_modes,
         compute_residuals=False,
@@ -127,11 +150,9 @@ def worker_init(num_cpus):
     from xpipeline.cli import Dispatcher
     Dispatcher.configure_logging(None, 'INFO')
 
-def launch_grid(grid, 
+def launch_grid(grid,
                 left_cube, right_cube,
-                left_template, right_template,
-                left_scales, right_scales,
-                angles, mask,
+                model_inputs,
                 force_gpu_decomposition, force_gpu_inversion,
                 generate_options=None, decompose_options=None, evaluate_options=None):
     if generate_options is None:
@@ -151,82 +172,51 @@ def launch_grid(grid,
     # left_pix_vec is true where vector entries correspond to pixels 
     # used from the left half of the image in the final stitched cube
     # for purposes of creating the two background offset terms
-    left_half, right_half = vapp.mask_along_angle(mask.shape, clio.VAPP_PSF_ROTATION_DEG)
-    left_pix_vec, _ = improc.unwrap_image(left_half, mask)
+    left_half, right_half = vapp.mask_along_angle(model_inputs.mask.shape, clio.VAPP_PSF_ROTATION_DEG)
+    left_pix_vec, _ = improc.unwrap_image(left_half, model_inputs.mask)
 
-
-    # put: templates, scales, angles, masks
-    log.debug(f"Putting data into Ray...")
-    left_template_ref = ray.put(left_template)
-    right_template_ref = ray.put(right_template)
-    left_scales_ref = ray.put(left_scales)
-    right_scales_ref = ray.put(right_scales)
-    mask_ref = ray.put(mask)
-    angles_ref = ray.put(angles)
-    log.debug(f"Put data into Ray.")
+    model_inputs_ref = ray.put(model_inputs)
+    log.debug(f"Put model inputs into Ray.")
 
     # hold reused intermediate results in dicts keyed on the grid parameters
     # that affect them
-    model_vecs_refs = {}
     def key_maker_maker(*columns):
         def key_maker(row):
             # numpy scalars are not hashable, so we convert each one to a float
             return tuple(float(row[colname]) for colname in columns)
         return key_maker
-    model_key_maker = key_maker_maker('r_px', 'pa_deg')
-    model_key_maker_inj = key_maker_maker('inject_r_px', 'inject_pa_deg')
     inject_refs = {}
     inject_key_maker = key_maker_maker('inject_r_px', 'inject_pa_deg', 'inject_scale')
     precompute_refs = {}
     precompute_key_maker = key_maker_maker('inject_r_px', 'inject_pa_deg', 'inject_scale', 'r_px', 'pa_deg')
 
-    data_cube_shape = left_cube.shape
     stitched_cube = pipelines.vapp_stitch(left_cube, right_cube, clio.VAPP_PSF_ROTATION_DEG)
-    image_vecs, indices = improc.unwrap_cube(stitched_cube, mask)
+    image_vecs, indices = improc.unwrap_cube(stitched_cube, model_inputs.mask)
     del indices, stitched_cube
     image_vecs_ref = ray.put(image_vecs)
     # unique (r, pa, scale) for *injected*
     for row in np.unique(remaining_grid[['inject_r_px', 'inject_pa_deg', 'inject_scale']]):
-        # submit model
-        model_key = model_key_maker_inj(row)
-        model_vecs_refs[model_key] = generate_model.options(**generate_options).remote(
-            data_cube_shape,
-            left_template_ref, right_template_ref,
-            left_scales_ref, right_scales_ref, angles_ref,
-            row['inject_r_px'], row['inject_pa_deg'],
-            mask_ref
-        )
-        # submit inject
         inject_key = inject_key_maker(row)
-        inject_refs[inject_key] = inject_model.remote(
+        inject_refs[inject_key] = inject_model.options(**generate_options).remote(
             image_vecs_ref,
-            model_vecs_refs[model_key],
+            model_inputs_ref,
+            row['inject_r_px'],
+            row['inject_pa_deg'],
             row['inject_scale'],
         )
-    # unique (r, pa) for *modeled*
-    for row in np.unique(remaining_grid[['r_px', 'pa_deg']]):
-        # submit model
-        model_key = model_key_maker(row)
-        if model_key not in model_vecs_refs:
-            model_vecs_refs[model_key] = generate_model.options(**generate_options).remote(
-                data_cube_shape, left_template, right_template,
-                left_scales, right_scales, angles_ref,
-                row['r_px'], row['pa_deg'],
-                mask_ref
-            )
-        # store ref by 2-tuple
+
     # unique (inject_r, inject_pa, inject_scale, r, pa) for precomputing basis
     for row in np.unique(remaining_grid[['inject_r_px', 'inject_pa_deg', 'inject_scale', 'r_px', 'pa_deg']]):
         # submit initial_decomposition with max_k_modes
         precompute_key = precompute_key_maker(row)
-        model_key = model_key_maker(row)
-        model_vecs_ref = model_vecs_refs[model_key]
         inject_key = inject_key_maker(row)
         inject_image_vecs_ref = inject_refs[inject_key]
 
         precompute_refs[precompute_key] = precompute_basis.options(**decompose_options).remote(
             inject_image_vecs_ref,
-            model_vecs_ref,
+            model_inputs_ref,
+            row['r_px'],
+            row['pa_deg'],
             max_k_modes,
             force_gpu_decomposition,
         )
@@ -236,8 +226,6 @@ def launch_grid(grid,
         row = grid[idx]
         inject_key = inject_key_maker(row)
         inject_ref = inject_refs[inject_key]
-        model_key = model_key_maker(row)
-        model_vecs_ref = model_vecs_refs[model_key]
         precompute_key = precompute_key_maker(row)
         precompute_ref = precompute_refs[precompute_key]
         k_modes = int(row['k_modes'])
@@ -245,7 +233,7 @@ def launch_grid(grid,
             idx,
             row,
             inject_ref,
-            model_vecs_ref,
+            model_inputs_ref,
             k_modes,
             precompute_ref,
             left_pix_vec,
@@ -303,12 +291,22 @@ class VappTrap(xconf.Command):
         # get masks
         left_mask = self.left_mask.load() == 1
         right_mask = self.right_mask.load() == 1
-        combo_mask = left_mask | right_mask
-        log.debug(f"{np.count_nonzero(combo_mask)=}")
+        mask = left_mask | right_mask
+        log.debug(f"{np.count_nonzero(mask)=}")
         
         # templates
         left_template = self.left_template.load()
         right_template = self.right_template.load()
+
+        model_inputs = ModelInputs(
+            data_cube_shape=left_cube.shape,
+            left_template=left_template,
+            right_template=right_template,
+            left_scales=left_scales,
+            right_scales=right_scales,
+            angles=angles,
+            mask=mask,
+        )
 
         # init ray
         from ray.job_config import JobConfig
@@ -363,7 +361,7 @@ class VappTrap(xconf.Command):
         coverage_map_path = f'./coverage_t{self.every_t_frames}.fits'
         if not os.path.exists(coverage_map_path):
             log.debug(f"Computing coverage map")
-            final_coverage = pipelines.adi_coverage(combo_mask, angles)
+            final_coverage = pipelines.adi_coverage(mask, angles)
             fits.PrimaryHDU(final_coverage).writeto(coverage_map_path, overwrite=True)
         else:
             final_coverage = fits.getdata(coverage_map_path)
@@ -395,16 +393,13 @@ class VappTrap(xconf.Command):
                     hdu.writeto('./grid.fits')
         else:
             grid = grid[:self.benchmark_trials]
+        
+        # submit tasks for every grid point
         result_refs = launch_grid(
             grid,
             left_cube,
             right_cube,
-            left_template,
-            right_template,
-            left_scales,
-            right_scales,
-            angles,
-            combo_mask,
+            model_inputs,
             self.use_gpu_decomposition,
             self.use_gpu_inversion,
             generate_options=generate_options,
@@ -417,48 +412,8 @@ class VappTrap(xconf.Command):
                 print(ray.get(result_refs[i]))
             ray.shutdown()
             return 0
-        # for idx, grid_point in enumerate(grid):
-        #     if grid_point['time_total_sec'] != 0:
-        #         continue
-        #     companion_spec = characterization.CompanionSpec(
-        #         grid_point['inject_r_px'],
-        #         grid_point['inject_pa_deg'],
-        #         grid_point['inject_scale']
-        #     )
-        #     if last_companion != companion_spec:
-        #         last_companion = companion_spec
-        #         # inject
-        #         inject_left_cube = inject(left_cube, left_template, angles, left_scales, companion_spec)
-        #         inject_right_cube = inject(right_cube, right_template, angles, right_scales, companion_spec)
 
-        #         # stitch
-        #         out_cube = pipelines.vapp_stitch(inject_left_cube, inject_right_cube, clio.VAPP_PSF_ROTATION_DEG)
-        #         out_cube_ref = ray.put(out_cube)
-        
-        #     result_ref = evaluate_grid_point_remote.options(**options).remote(
-        #         idx,
-        #         out_cube_ref,
-        #         grid_point,
-        #         left_template_ref,
-        #         right_template_ref,
-        #         left_scales_ref,
-        #         right_scales_ref,
-        #         mask_ref,
-        #         angles_ref,
-        #         self.use_gpu_decomposition,
-        #         self.use_gpu_inversion
-        #     )
-        #     result_refs.append(result_ref)
-        # if self.benchmark:
-        #     pending = result_refs[:self.benchmark_trials]
-        #     while pending:
-        #         complete, pending = ray.wait(pending, timeout=5)
-        #         for ref in complete:
-        #             idx, result = ray.get(ref)
-        #             benchmark_out = {name: result[name] for name in result.dtype.names}
-        #             benchmark_out['idx'] = idx
-        #             print(benchmark_out)
-        #     return
+        # Wait for results, checkpointing as we go
         pending = result_refs
         total = len(result_refs)
         n_complete = 0
