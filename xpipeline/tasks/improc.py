@@ -11,7 +11,7 @@ from scipy import interpolate
 try:
     from pyfftw.interfaces import numpy_fft as fft
 except ImportError:
-    fft = fft
+    fft = np.fft
 
 from scipy.ndimage import binary_dilation
 import skimage.transform
