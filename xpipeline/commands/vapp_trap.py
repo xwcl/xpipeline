@@ -83,14 +83,18 @@ def _measure_ram_for_step(func, *args, **kwargs):
 measure_ram_for_step = ray.remote(_measure_ram_for_step)
 
 
-def _precompute_basis(image_vecs, model_inputs : ModelInputs, r_px, pa_deg, k_modes_max, force_gpu_decomposition):
-    model_vecs = generate_model(model_inputs, r_px, pa_deg)
+def _precompute_basis(image_vecs, model_inputs : ModelInputs, r_px, ring_exclude_px, k_modes_max, force_gpu_decomposition):
+    rho, _ = improc.polar_coords(improc.arr_center(model_inputs.mask), model_inputs.mask.shape)
+    included_pix_mask = np.abs(rho - r_px) > ring_exclude_px / 2
+    included_vecs_mask = improc.unwrap_image(included_pix_mask, model_inputs.mask)
+    assert included_vecs_mask.shape[0] == image_vecs.shape[0]
+    ref_vecs = image_vecs[included_vecs_mask]
     params = starlight_subtraction.TrapParams(
         k_modes=k_modes_max,
         force_gpu_decomposition=force_gpu_decomposition,
         return_basis=True,
     )
-    precomputed_trap_basis = starlight_subtraction.trap_mtx(image_vecs, model_vecs, params)
+    precomputed_trap_basis = starlight_subtraction.trap_phase_1(ref_vecs, params)
     return precomputed_trap_basis
 precompute_basis = ray.remote(_precompute_basis)
 
@@ -182,7 +186,7 @@ def _measure_ram(func, options, *args, ram_pad_factor=1.2, **kwargs):
 
 def launch_grid(grid,
                 left_cube, right_cube,
-                model_inputs,
+                model_inputs, ring_exclude_px,
                 force_gpu_decomposition, force_gpu_inversion,
                 generate_options=None, decompose_options=None, evaluate_options=None,
                 measure_ram=False, ram_pad_factor=1.2):
@@ -219,7 +223,7 @@ def launch_grid(grid,
     inject_refs = {}
     inject_key_maker = key_maker_maker('inject_r_px', 'inject_pa_deg', 'inject_scale')
     precompute_refs = {}
-    precompute_key_maker = key_maker_maker('inject_r_px', 'inject_pa_deg', 'inject_scale', 'r_px', 'pa_deg')
+    precompute_key_maker = key_maker_maker('inject_r_px', 'inject_pa_deg', 'inject_scale', 'r_px')
 
     stitched_cube = pipelines.vapp_stitch(left_cube, right_cube, clio.VAPP_PSF_ROTATION_DEG)
     image_vecs = improc.unwrap_cube(stitched_cube, model_inputs.mask)
@@ -248,9 +252,10 @@ def launch_grid(grid,
             row['inject_pa_deg'],
             row['inject_scale'],
         )
+    log.debug(f"Generating {len(injection_locs)} datasets with model planet injection")
 
     # unique (inject_r, inject_pa, inject_scale, r, pa) for precomputing basis
-    precompute_locs = np.unique(remaining_grid[['inject_r_px', 'inject_pa_deg', 'inject_scale', 'r_px', 'pa_deg']])
+    precompute_locs = np.unique(remaining_grid[['inject_r_px', 'inject_pa_deg', 'inject_scale', 'r_px']])
     if measure_ram:
         ram_requirement_gb = _measure_ram(
             _precompute_basis,
@@ -258,7 +263,6 @@ def launch_grid(grid,
             image_vecs_ref,  # no injection needed
             model_inputs_ref,
             np.min(remaining_grid['r_px']),  # smaller radii -> more reference pixels -> upper bound on time
-            precompute_locs[0]['pa_deg'],
             max_k_modes,
             force_gpu_decomposition,
         )
@@ -273,10 +277,11 @@ def launch_grid(grid,
             inject_image_vecs_ref,
             model_inputs_ref,
             row['r_px'],
-            row['pa_deg'],
+            ring_exclude_px,
             max_k_modes,
             force_gpu_decomposition,
         )
+    log.debug(f"Precomputing {len(precompute_locs)} basis sets")
 
     remaining_point_refs = []
     if measure_ram:
@@ -311,6 +316,7 @@ def launch_grid(grid,
             force_gpu_inversion,
         )
         remaining_point_refs.append(point_ref)
+    log.debug(f"Applying TRAP++ for {len(remaining_idxs)} points in the parameter grid")
     return remaining_point_refs
 
 @xconf.config
@@ -334,6 +340,7 @@ class VappTrap(xconf.Command):
         default=LocalRayConfig(),
         help="Ray distributed framework configuration"
     )
+    ring_exclude_px : float = xconf.field(default=12, help="When selecting reference pixel timeseries, determines width of ring centered at radius of interest for which pixel vectors are excluded")
     gpus_per_task : Optional[Union[float, PerTaskConfig]] = xconf.field(default=None, help="")
     ram_gb_per_task : Optional[Union[float, PerTaskConfig, str]] = xconf.field(default=None, help="")
     # ram_gb_for_generate : Optional[float] = xconf.field(default=None, help="")
@@ -474,6 +481,7 @@ class VappTrap(xconf.Command):
             left_cube,
             right_cube,
             model_inputs,
+            self.ring_exclude_px,
             self.use_gpu_decomposition,
             self.use_gpu_inversion,
             generate_options=generate_options,

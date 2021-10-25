@@ -369,9 +369,9 @@ def klip_mtx_svd(image_vecs_meansub, params : KlipParams, signal_vecs):
     )
     if image_vecs_meansub.shape[0] < initial_k or image_vecs_meansub.shape[1] < initial_k:
         raise ValueError(f"Number of modes requested exceeds dimensions of input")
-    
+
     if (
-        params.strategy is constants.KlipStrategy.DOWNDATE_SVD or 
+        params.strategy is constants.KlipStrategy.DOWNDATE_SVD or
         (params.strategy is constants.KlipStrategy.SVD and params.reuse)
     ):
         initial_decomposition = params.initial_decomposition
@@ -451,6 +451,7 @@ DEFAULT_DECOMPOSERS = {
 class TrapBasis:
     temporal_basis : np.ndarray
     time_sec : float
+    pix_used : int
 
 @dataclass
 class TrapParams:
@@ -462,7 +463,7 @@ class TrapParams:
     incorporate_offset : bool = True
     scale_ref_std : bool = True
     scale_model_std : bool = True
-    decomposer : callable = learning.generic_svd
+    decomposer : callable = learning.cpu_top_k_svd_arpack
     force_gpu_decomposition : bool = False
     force_gpu_inversion : bool = False
     # arguments to pylops.optimization.solver.cgls
@@ -473,6 +474,10 @@ class TrapParams:
     precomputed_basis : Optional[TrapBasis] = None
     background_split_mask: Optional[np.ndarray] = None
 
+    def __post_init__(self):
+        if self.force_gpu_decomposition and self.decomposer is learning.cpu_top_k_svd_arpack:
+            self.decomposer = learning.generic_svd
+
 def trap_mtx(image_vecs, model_vecs, trap_params):
     xp = core.get_array_module(image_vecs)
     was_gpu_array = xp is cp
@@ -482,14 +487,18 @@ def trap_mtx(image_vecs, model_vecs, trap_params):
     trimmed_model_vecs = model_vecs.copy()
     trimmed_model_vecs[pix_below_threshold] = 0
     planet_signal_threshold = trap_params.model_pix_threshold
-    pix_with_planet_signal = xp.any(trimmed_model_vecs / xp.max(trimmed_model_vecs, axis=0),axis=1) > planet_signal_threshold
-    assert 0 < xp.count_nonzero(pix_with_planet_signal) < trimmed_model_vecs.shape[0]
     median_timeseries = xp.median(image_vecs, axis=0)
     image_vecs_medsub = image_vecs - median_timeseries
-    ref_vecs = image_vecs_medsub[~pix_with_planet_signal]
-    pix_used = np.count_nonzero(~pix_with_planet_signal)
-    log.debug(f"Using {pix_used} pixel time series for TRAP basis with {trap_params.k_modes} modes")
-    trap_basis = trap_phase_1(ref_vecs, trap_params)
+
+    if trap_params.precomputed_basis is None:
+        pix_with_planet_signal = xp.any(trimmed_model_vecs / xp.max(trimmed_model_vecs, axis=0),axis=1) > planet_signal_threshold
+        pix_used = xp.count_nonzero(~pix_with_planet_signal)
+        assert 0 < pix_used < trimmed_model_vecs.shape[0]
+        ref_vecs = image_vecs_medsub[~pix_with_planet_signal]
+        log.debug(f"Using {pix_used} pixel time series for TRAP basis with {trap_params.k_modes} modes")
+        trap_basis = trap_phase_1(ref_vecs, trap_params)
+    else:
+        trap_basis = trap_phase_1(None, trap_params)
     if trap_params.return_basis:
         return trap_basis
     timers['time_svd_sec'] = trap_basis.time_sec
@@ -498,14 +507,15 @@ def trap_mtx(image_vecs, model_vecs, trap_params):
         trap_basis.temporal_basis, trap_params
     )
     timers.update(inv_timers)
-    return model_coeff, timers, pix_used, maybe_resid_vecs
+    return model_coeff, timers, trap_basis.pix_used, maybe_resid_vecs
 
 def trap_phase_1(ref_vecs, trap_params):
-    xp = core.get_array_module(ref_vecs)
     if trap_params.precomputed_basis is not None:
-        temporal_basis = trap_params.precomputed_basis.temporal_basis
+        basis = trap_params.precomputed_basis
+        temporal_basis = basis.temporal_basis
         temporal_basis = np.ascontiguousarray(temporal_basis[:,:trap_params.k_modes])
-        return TrapBasis(temporal_basis, trap_params.precomputed_basis.time_sec)
+        return TrapBasis(temporal_basis, basis.time_sec, basis.pix_used)
+    xp = core.get_array_module(ref_vecs)
     # k_modes = int(min(image_vecs_medsub.shape) * trap_params.modes_frac)
     k_modes = trap_params.k_modes
 
@@ -524,7 +534,7 @@ def trap_phase_1(ref_vecs, trap_params):
     time_sec = time.perf_counter() - time_sec
     log.debug(f"SVD complete in {time_sec} sec, constructing operator")
     temporal_basis = mtx_v  # shape = (nframes, ncomponents)
-    return TrapBasis(temporal_basis, time_sec)
+    return TrapBasis(temporal_basis, time_sec, ref_vecs.shape[0])
 
 def trap_phase_2(image_vecs_medsub, model_vecs, temporal_basis, trap_params):
     xp = core.get_array_module(image_vecs_medsub)

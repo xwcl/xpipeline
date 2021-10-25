@@ -138,7 +138,7 @@ def cpu_top_k_svd_arpack(array, n_modes=None):
     """
     if n_modes is None:
         n_modes = min(array.shape)
-    mtx_u, diag_s, mtx_vt = svds(aslinearoperator(array), k=n_modes)
+    mtx_u, diag_s, mtx_vt = svds(array, k=n_modes)
     return mtx_u, diag_s, mtx_vt.T
 
 

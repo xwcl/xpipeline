@@ -81,7 +81,7 @@ def get_array_module(arr):
     elif isinstance(arr, numpy.ndarray):
         return numpy
     else:
-        raise ValueError("Unrecognized type passed to get_array_module")
+        raise ValueError(f"Unrecognized type {type(arr)} passed to get_array_module")
 
 
 def _is_iterable_arg(obj):
