@@ -1,3 +1,4 @@
+import itertools
 import dataclasses
 import logging
 import warnings
@@ -8,6 +9,7 @@ import numba
 from numba import njit
 import math
 from scipy.signal import fftconvolve
+from scipy.interpolate import griddata
 
 from . import improc
 from .. import core
@@ -101,31 +103,52 @@ def generate_signals(
     shape: tuple,
     specs: list[CompanionSpec],
     template: np.ndarray,
-    angles: np.ndarray = None,
+    derotation_angles: np.ndarray = None,
     template_scale_factors: Optional[Union[np.ndarray,float]] = None,
 ):
+    '''Inject signals for companions specified using
+    optional derotation angles to *counter*rotate the coordinates
+    before injection, such that rotation CCW (e.g. by `derotate_cube`)
+    aligns 0 deg PA with +Y
+
+    Parameters
+    ----------
+    shape : tuple[int,int,int]
+    specs : list[CompanionSpec]
+    template : np.ndarray
+    derotation_angles : Optional[np.ndarray]
+    template_scale_factors : Optional[Union[np.ndarray,float]]
+        Scale factor relative to 1.0 being the average brightness
+        of the primary over the observation, used to scale the
+        template image to reflect particularly sharp or poor
+        AO correction
+
+    Returns
+    -------
+    outcube : np.ndarray
+    '''
+
     outcube = np.zeros(shape, dtype=template.dtype)
     n_obs = shape[0]
     template = improc.shift2(template, 0, 0, output_shape=shape[1:])
     ft_template = np.fft.fft2(template)
-    ft_template = ft_template[np.newaxis,:,:]
     xfreqs = np.fft.fftfreq(shape[2])
     yfreqs = np.fft.fftfreq(shape[1])
     if template_scale_factors is None:
         template_scale_factors = np.ones(n_obs)
     if np.isscalar(template_scale_factors):
         template_scale_factors = np.repeat(np.array([template_scale_factors]), n_obs)
-    if angles is None:
-        angles = np.zeros(n_obs)
+    if derotation_angles is None:
+        derotation_angles = np.zeros(n_obs)
     for spec in specs:
-        theta = np.deg2rad(90 + spec.pa_deg - angles)
-        dx = (spec.r_px * np.cos(theta))[:,np.newaxis,np.newaxis]
-        dy = (spec.r_px * np.sin(theta))[:,np.newaxis,np.newaxis]
-        shifter = np.exp(2j * np.pi * ((-dx * xfreqs[np.newaxis, np.newaxis, :]) + (-dy * yfreqs[np.newaxis, :, np.newaxis])))
-        cube_contribution = np.fft.ifft2(ft_template * shifter).real
-        cube_contribution *= spec.scale * template_scale_factors[:,np.newaxis,np.newaxis]
-        outcube += cube_contribution
-        del cube_contribution
+        theta = np.deg2rad(90 + spec.pa_deg - derotation_angles)
+        for i in range(n_obs):
+            dx = spec.r_px * np.cos(theta[i])
+            dy = spec.r_px * np.sin(theta[i])
+            shifter = np.exp(2j * np.pi * ((-dx * xfreqs[np.newaxis, :]) + (-dy * yfreqs[:, np.newaxis])))
+            cube_contribution = np.fft.ifft2(ft_template * shifter).real
+            cube_contribution *= template_scale_factors[i] * spec.scale
+            outcube[i] += cube_contribution
     return outcube
 
 def inject_signals(
@@ -136,6 +159,10 @@ def inject_signals(
     template_scale_factors: Optional[Union[np.ndarray,float]] = None,
     saturation_threshold: Optional[float] = None,
 ):
+    '''Generate signals using `generate_signals` (see docstring) and add to
+    an input `cube` with possible saturation (implemented as a simple clipping of
+    values to some level)
+    '''
     signal_only_cube = generate_signals(cube.shape, specs, template, angles, template_scale_factors)
     outcube = cube + signal_only_cube
     if saturation_threshold is not None:
@@ -353,7 +380,7 @@ def reduce_apertures(
     simple_aperture_radius = resolution_element_px / 2
     results = []
     for offset_x, offset_y in locations:
-        
+
         dist = np.sqrt((xx - offset_x) ** 2 + (yy - offset_y) ** 2)
         mask = dist <= simple_aperture_radius
         result = operation(image[mask] / np.count_nonzero(mask & np.isfinite(image)))
@@ -486,3 +513,92 @@ def local_maxima(image) -> np.ndarray:
             if image[i,j] > this_pixel:
                 return False
     return True
+
+def sigma_mad(points):
+    '''Estimate sigma with the median absolute deviation
+    to improve robustness to outliers
+
+    Parameters
+    ----------
+    points : array-like 1D
+
+    Returns
+    -------
+    sigma_estimate : float
+        Estimated standard deviation from median absolute deviation
+    '''
+    xp = core.get_array_module(points)
+    return 1.48 * xp.median(xp.abs(points - xp.median(points)))
+
+def detection_map_from_table(tbl, coverage_mask, ring_px=3, **kwargs):
+    '''
+    Parameters
+    ----------
+    tbl : recarray-like
+        Record array with at least 'model_coeff', 'r_px',
+        'x', 'y' columns
+    coverage_mask : np.ndarray
+    ring_px : int
+        Half-width of ring centered on each point's r_px
+        within which sigma is estimated from model_coeff
+        values
+    **kwargs : dict[str,float]
+        Equality constraints on other columns of `tbl`
+        (e.g. ``k_modes=100`` implies "select rows with
+        ``k_modes == 100``)
+
+    Returns
+    -------
+    detection_map : np.ndarray
+        Detection strength in units of sigma
+        (estimated at that radius)
+    '''
+    for kwarg in kwargs:
+        mask = tbl[kwarg] == kwargs[kwarg]
+        tbl = tbl[mask]
+    if not len(tbl):
+        raise ValueError(f"No points matching {kwargs}")
+    print(len(tbl))
+    yy, xx = np.indices(coverage_mask.shape, dtype=float)
+    post_grid_mask = coverage_mask == 1
+    points = np.stack((tbl['y'], tbl['x']), axis=-1)
+    newpoints = np.stack((yy.flatten(), xx.flatten()), axis=-1)
+    emp_snr = tbl['model_coeff'].copy()
+    for r_px in np.unique(tbl['r_px']):
+        ring_mask = np.abs(tbl['r_px'] - r_px) < ring_px
+        ring_values = tbl['model_coeff'][ring_mask]
+        new_sigma = sigma_mad(ring_values)
+        emp_snr[tbl['r_px'] == r_px] /= new_sigma
+    outim = griddata(points, emp_snr, newpoints).reshape(coverage_mask.shape)
+    outim[~post_grid_mask] = np.nan
+    return outim
+
+def detection_map_cube_from_table(tbl, coverage_mask, ring_px=3, **kwargs):
+    static_kwargs = {}
+    varying_kwargs = []
+    for kwarg in kwargs:
+        try:
+            seq = np.unique(kwargs[kwarg])
+            varying_kwargs.append((kwarg, seq))
+        except TypeError:
+            static_kwargs[kwarg] = kwargs[kwarg]
+
+    filter_values = list(itertools.product(*[seq for name, seq in varying_kwargs]))
+    filter_names = [name for name, seq in varying_kwargs]
+    detection_map_cube = np.zeros((len(filter_values),) + coverage_mask.shape)
+    print(detection_map_cube.shape)
+    filters = []
+    for idx, row in enumerate(filter_values):
+        filter_kwargs = {}
+        for col_idx, name in enumerate(filter_names):
+            filter_kwargs[name] = row[col_idx]
+        filters.append(filter_kwargs)
+        final_kwargs = filter_kwargs.copy()
+        final_kwargs.update(static_kwargs)
+        detection_map_cube[idx] = detection_map_from_table(
+            tbl,
+            coverage_mask,
+            ring_px=ring_px,
+            **final_kwargs
+        )
+    return filters, detection_map_cube

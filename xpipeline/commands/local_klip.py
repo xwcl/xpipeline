@@ -68,12 +68,12 @@ class LocalKLIP(KLIP):
         import time
 
         start = time.perf_counter()
-        mtx_x, subset_indices = improc.unwrap_cube(sci_arr, region_mask)
+        mtx_x = improc.unwrap_cube(sci_arr, region_mask)
 
         subtracted_mtx = starlight_subtraction.klip_mtx(
             mtx_x, self.args.k_klip, self.args.exclude_nearest_n_frames
         )
-        outcube = improc.wrap_matrix(subtracted_mtx, sci_arr.shape, subset_indices)
+        outcube = improc.wrap_matrix(subtracted_mtx, region_mask)
         out_image = improc.derotate_cube(outcube, derotation_angles)
         elapsed = time.perf_counter() - start
         log.info(f"Computed in {elapsed} sec")

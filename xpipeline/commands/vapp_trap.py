@@ -62,14 +62,26 @@ def generate_model(model_inputs : ModelInputs, companion_r_px, companion_pa_deg)
     )
     # stitch
     out_cube = pipelines.vapp_stitch(left_model_cube, right_model_cube, clio.VAPP_PSF_ROTATION_DEG)
-    model_vecs, _ = improc.unwrap_cube(out_cube, model_inputs.mask)
+    model_vecs = improc.unwrap_cube(out_cube, model_inputs.mask)
     return model_vecs
-# generate_model = ray.remote(_generate_model)
 
 def _inject_model(image_vecs, model_inputs : ModelInputs, companion_r_px, companion_pa_deg, companion_scale):
     model_vecs = generate_model(model_inputs, companion_r_px, companion_pa_deg)
     return image_vecs + companion_scale * model_vecs
 inject_model = ray.remote(_inject_model)
+
+def _measure_ram_for_step(func, *args, **kwargs):
+    from memory_profiler import memory_usage
+    initial_ram = memory_usage(-1, max_usage=True)
+    time_sec = time.perf_counter()
+    mem_mb_series = memory_usage((func, args, kwargs))
+    time_sec = time.perf_counter() - time_sec
+    final_ram = memory_usage(-1, max_usage=True)
+    mem_gb = (np.max(mem_mb_series) - final_ram) / 1024
+    print(f"{initial_ram=} {mem_gb=} {final_ram=}")
+    return mem_gb, time_sec
+measure_ram_for_step = ray.remote(_measure_ram_for_step)
+
 
 def _precompute_basis(image_vecs, model_inputs : ModelInputs, r_px, pa_deg, k_modes_max, force_gpu_decomposition):
     model_vecs = generate_model(model_inputs, r_px, pa_deg)
@@ -150,11 +162,30 @@ def worker_init(num_cpus):
     from xpipeline.cli import Dispatcher
     Dispatcher.configure_logging(None, 'INFO')
 
+def _measure_ram(func, options, *args, ram_pad_factor=1.2, **kwargs):
+    measure_ref = measure_ram_for_step.options(**options).remote(
+        func,
+        *args,
+        **kwargs
+    )
+    outside_time_sec = time.perf_counter()
+    ram_use_gb, inside_time_sec = ray.get(measure_ref)
+    outside_time_sec = time.perf_counter() - outside_time_sec
+    log.info(f"Measured {func} RAM use of {ram_use_gb:1.3f} GB, runtime of {inside_time_sec:1.2f} sec inside and {outside_time_sec:1.2f} sec outside")
+    ram_requirement_gb = ram_pad_factor * ram_use_gb
+    if ram_requirement_gb >= 1.0:
+        # surprise! "ValueError: Resource quantities >1 must be whole numbers." from ray
+        ram_requirement_gb = int(np.ceil(ram_requirement_gb))
+    log.info(f"Setting RAM requirement {ram_requirement_gb:1.3f} GB (pad factor: {ram_pad_factor:1.2f})")
+    return ram_requirement_gb
+
+
 def launch_grid(grid,
                 left_cube, right_cube,
                 model_inputs,
                 force_gpu_decomposition, force_gpu_inversion,
-                generate_options=None, decompose_options=None, evaluate_options=None):
+                generate_options=None, decompose_options=None, evaluate_options=None,
+                measure_ram=False, ram_pad_factor=1.2):
     if generate_options is None:
         generate_options = {}
     if decompose_options is None:
@@ -169,11 +200,11 @@ def launch_grid(grid,
     # precomputation will use the max number of modes, computed once, trimmed as needed
     max_k_modes = int(max(remaining_grid['k_modes']))
 
-    # left_pix_vec is true where vector entries correspond to pixels 
+    # left_pix_vec is true where vector entries correspond to pixels
     # used from the left half of the image in the final stitched cube
     # for purposes of creating the two background offset terms
-    left_half, right_half = vapp.mask_along_angle(model_inputs.mask.shape, clio.VAPP_PSF_ROTATION_DEG)
-    left_pix_vec, _ = improc.unwrap_image(left_half, model_inputs.mask)
+    left_half, _ = vapp.mask_along_angle(model_inputs.mask.shape, clio.VAPP_PSF_ROTATION_DEG)
+    left_pix_vec = improc.unwrap_image(left_half, model_inputs.mask)
 
     model_inputs_ref = ray.put(model_inputs)
     log.debug(f"Put model inputs into Ray.")
@@ -191,11 +222,24 @@ def launch_grid(grid,
     precompute_key_maker = key_maker_maker('inject_r_px', 'inject_pa_deg', 'inject_scale', 'r_px', 'pa_deg')
 
     stitched_cube = pipelines.vapp_stitch(left_cube, right_cube, clio.VAPP_PSF_ROTATION_DEG)
-    image_vecs, indices = improc.unwrap_cube(stitched_cube, model_inputs.mask)
-    del indices, stitched_cube
+    image_vecs = improc.unwrap_cube(stitched_cube, model_inputs.mask)
+    del stitched_cube
     image_vecs_ref = ray.put(image_vecs)
     # unique (r, pa, scale) for *injected*
-    for row in np.unique(remaining_grid[['inject_r_px', 'inject_pa_deg', 'inject_scale']]):
+    injection_locs = np.unique(remaining_grid[['inject_r_px', 'inject_pa_deg', 'inject_scale']])
+    if measure_ram:
+        ram_requirement_gb = _measure_ram(
+            _inject_model,
+            generate_options,
+            image_vecs_ref,
+            model_inputs_ref,
+            injection_locs[0]['inject_r_px'],
+            injection_locs[0]['inject_pa_deg'],
+            injection_locs[0]['inject_scale'],
+        )
+        generate_options['resources']['ram_gb'] = ram_requirement_gb
+
+    for row in injection_locs:
         inject_key = inject_key_maker(row)
         inject_refs[inject_key] = inject_model.options(**generate_options).remote(
             image_vecs_ref,
@@ -206,7 +250,20 @@ def launch_grid(grid,
         )
 
     # unique (inject_r, inject_pa, inject_scale, r, pa) for precomputing basis
-    for row in np.unique(remaining_grid[['inject_r_px', 'inject_pa_deg', 'inject_scale', 'r_px', 'pa_deg']]):
+    precompute_locs = np.unique(remaining_grid[['inject_r_px', 'inject_pa_deg', 'inject_scale', 'r_px', 'pa_deg']])
+    if measure_ram:
+        ram_requirement_gb = _measure_ram(
+            _precompute_basis,
+            decompose_options,
+            image_vecs_ref,  # no injection needed
+            model_inputs_ref,
+            np.min(remaining_grid['r_px']),  # smaller radii -> more reference pixels -> upper bound on time
+            precompute_locs[0]['pa_deg'],
+            max_k_modes,
+            force_gpu_decomposition,
+        )
+        decompose_options['resources']['ram_gb'] = ram_requirement_gb
+    for row in precompute_locs:
         # submit initial_decomposition with max_k_modes
         precompute_key = precompute_key_maker(row)
         inject_key = inject_key_maker(row)
@@ -222,6 +279,20 @@ def launch_grid(grid,
         )
 
     remaining_point_refs = []
+    if measure_ram:
+        ram_requirement_gb = _measure_ram(
+            _evaluate_point,
+            evaluate_options,
+            0,
+            remaining_grid[0],
+            image_vecs_ref,  # no injection needed
+            model_inputs_ref,
+            max_k_modes,
+            precompute_refs[precompute_key], # still set from last loop
+            left_pix_vec,
+            force_gpu_inversion
+        )
+        evaluate_options['resources']['ram_gb'] = ram_requirement_gb
     for idx in remaining_idxs:
         row = grid[idx]
         inject_key = inject_key_maker(row)
@@ -264,7 +335,7 @@ class VappTrap(xconf.Command):
         help="Ray distributed framework configuration"
     )
     gpus_per_task : Optional[Union[float, PerTaskConfig]] = xconf.field(default=None, help="")
-    ram_gb_per_task : Optional[Union[float, PerTaskConfig]] = xconf.field(default=None, help="")
+    ram_gb_per_task : Optional[Union[float, PerTaskConfig, str]] = xconf.field(default=None, help="")
     # ram_gb_for_generate : Optional[float] = xconf.field(default=None, help="")
     # ram_gb_for_decompose : Optional[float] = xconf.field(default=None, help="")
     # ram_gb_for_evaluate : Optional[float] = xconf.field(default=None, help="")
@@ -293,7 +364,7 @@ class VappTrap(xconf.Command):
         right_mask = self.right_mask.load() == 1
         mask = left_mask | right_mask
         log.debug(f"{np.count_nonzero(mask)=}")
-        
+
         # templates
         left_template = self.left_template.load()
         right_template = self.right_template.load()
@@ -309,19 +380,19 @@ class VappTrap(xconf.Command):
         )
 
         # init ray
-        from ray.job_config import JobConfig
-        worker_env = {
-            'OMP_NUM_THREADS': '1',
-            'MKL_NUM_THREADS': '1',
-            'NUMBA_NUM_THREADS': '1',
-            # we aren't using numba threads anyway,
-            # but setting this silences tbb-related fork errors:
-            'NUMBA_THREADING_LAYER': 'workqueue',
-        }
-        job_config_env = JobConfig(worker_env=worker_env)
         if isinstance(self.ray, RemoteRayConfig):
-            ray.init(self.ray.url, job_config=job_config_env)
+            ray.init(self.ray.url)
         else:
+            from ray.job_config import JobConfig
+            worker_env = {
+                'OMP_NUM_THREADS': '1',
+                'MKL_NUM_THREADS': '1',
+                'NUMBA_NUM_THREADS': '1',
+                # we aren't using numba threads anyway,
+                # but setting this silences tbb-related fork errors:
+                'NUMBA_THREADING_LAYER': 'workqueue',
+            }
+            job_config_env = JobConfig(worker_env=worker_env)
             resources = {}
             if self.ray.ram_gb is not None:
                 resources['ram_gb'] = self.ray.ram_gb
@@ -335,11 +406,14 @@ class VappTrap(xconf.Command):
         generate_options = options.copy()
         decompose_options = options.copy()
         evaluate_options = options.copy()
+        measure_ram = False
         if isinstance(self.ram_gb_per_task, PerTaskConfig):
             generate_options['resources']['ram_gb'] = self.ram_gb_per_task.generate
             decompose_options['resources']['ram_gb'] = self.ram_gb_per_task.decompose
             evaluate_options['resources']['ram_gb'] = self.ram_gb_per_task.evaluate
-        else:
+        elif self.ram_gb_per_task == "measure":
+            measure_ram = True
+        elif self.ram_gb_per_task is not None:
             # number or None
             generate_options['resources']['ram_gb'] = self.ram_gb_per_task
             decompose_options['resources']['ram_gb'] = self.ram_gb_per_task
@@ -357,7 +431,7 @@ class VappTrap(xconf.Command):
                 generate_options['num_gpus'] = self.gpus_per_task
                 decompose_options['num_gpus'] = self.gpus_per_task
                 evaluate_options['num_gpus'] = self.gpus_per_task
-        
+
         coverage_map_path = f'./coverage_t{self.every_t_frames}.fits'
         if not os.path.exists(coverage_map_path):
             log.debug(f"Computing coverage map")
@@ -365,7 +439,7 @@ class VappTrap(xconf.Command):
             fits.PrimaryHDU(final_coverage).writeto(coverage_map_path, overwrite=True)
         else:
             final_coverage = fits.getdata(coverage_map_path)
-        
+
         n_frames = len(angles)
         covered_pix_mask = final_coverage > int(n_frames * self.min_coverage_frac)
         from skimage.morphology import binary_closing
@@ -393,7 +467,7 @@ class VappTrap(xconf.Command):
                     hdu.writeto('./grid.fits')
         else:
             grid = grid[:self.benchmark_trials]
-        
+
         # submit tasks for every grid point
         result_refs = launch_grid(
             grid,
@@ -405,6 +479,7 @@ class VappTrap(xconf.Command):
             generate_options=generate_options,
             decompose_options=decompose_options,
             evaluate_options=evaluate_options,
+            measure_ram=measure_ram,
         )
         if self.benchmark:
             log.debug(f"Running {self.benchmark_trials} trials...")

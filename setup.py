@@ -28,7 +28,7 @@ setup(
     },
     install_requires=[
         'pytest>=6.2.1',
-        'numpy>=1.19.5',
+        'numpy>=1.20.3',  # first version with period= argument to unwrap
         'scipy>=1.4.1',
         'matplotlib>=3.2.2',
         'astropy>=4.2',

@@ -204,24 +204,23 @@ def compute_sky_model(
 def klip_inputs_to_mtx_x(klip_inputs: List[KlipInput]):
     matrices = []
     signal_matrices = []
-    subset_indices = []
     xp = core.get_array_module(klip_inputs[0].sci_arr)
     for idx, input_data in enumerate(klip_inputs):
-        mtx_x, subset_idxs = improc.unwrap_cube(
+        mtx_x = improc.unwrap_cube(
             input_data.sci_arr, input_data.estimation_mask
         )
         if input_data.signal_arr is not None:
-            mtx_x_signal_only, _ = improc.unwrap_cube(
+            mtx_x_signal_only = improc.unwrap_cube(
                 input_data.signal_arr, input_data.estimation_mask
             )
         else:
             mtx_x_signal_only = None
         log.debug(
-            f"klip input {idx} has {mtx_x.shape=} from {input_data.sci_arr.shape=} and {np.count_nonzero(input_data.estimation_mask)=} giving {subset_idxs.shape=}"
+            f"klip input {idx} has {mtx_x.shape=} from {input_data.sci_arr.shape=} and "
+            f"{np.count_nonzero(input_data.estimation_mask)=}"
         )
         matrices.append(mtx_x)
         signal_matrices.append(mtx_x_signal_only)
-        subset_indices.append(subset_idxs)
 
     mtx_x = xp.vstack(matrices)
     if all([ki.signal_arr is not None for ki in klip_inputs]):
@@ -230,11 +229,11 @@ def klip_inputs_to_mtx_x(klip_inputs: List[KlipInput]):
         raise ValueError("Some inputs have signal arrays, some don't")
     else:
         mtx_x_signal_only = None
-    return mtx_x, mtx_x_signal_only, subset_indices
+    return mtx_x, mtx_x_signal_only
 
 def klip_multi(klip_inputs: List[KlipInput], klip_params: KlipParams):
     log.debug("assembling klip_multi")
-    mtx_x, mtx_x_signal_only, subset_indices = klip_inputs_to_mtx_x(klip_inputs)
+    mtx_x, mtx_x_signal_only = klip_inputs_to_mtx_x(klip_inputs)
     
     # where the klipping happens
     result, mean_vec = starlight_subtraction.klip_mtx(
@@ -248,9 +247,9 @@ def klip_multi(klip_inputs: List[KlipInput], klip_params: KlipParams):
         subtracted_mtx, signal_mtx = result
     start_idx = 0
     cubes, signal_arrs, mean_images = [], [], []
-    for input_data, subset_idxs in zip(klip_inputs, subset_indices):
+    for input_data in klip_inputs:
         # first axis selects "which axis", second axis has an entry per retained pixel
-        n_features = subset_idxs.shape[1]
+        n_features = np.count_nonzero(input_data.estimation_mask)
         end_idx = start_idx + n_features
         # slice out the range of rows in the combined matrix that correspond to this input
         submatrix = subtracted_mtx[start_idx:end_idx]
@@ -258,15 +257,13 @@ def klip_multi(klip_inputs: List[KlipInput], klip_params: KlipParams):
         # log.debug(f"{submatrix=}")
         cube = improc.wrap_matrix(
             submatrix,
-            input_data.sci_arr.shape,
-            subset_idxs,
+            input_data.estimation_mask,
             fill_value=klip_params.missing_data_value,
         )
         if signal_mtx is not None:
             signal = improc.wrap_matrix(
                 signal_mtx[start_idx:end_idx],
-                input_data.sci_arr.shape,
-                subset_idxs,
+                input_data.estimation_mask,
                 fill_value=klip_params.missing_data_value,
             )
         else:
@@ -274,8 +271,7 @@ def klip_multi(klip_inputs: List[KlipInput], klip_params: KlipParams):
 
         mean_image = improc.wrap_vector(
             sub_mean_vec,
-            input_data.sci_arr.shape[1:],
-            subset_idxs,
+            input_data.estimation_mask,
             fill_value=klip_params.missing_data_value
         )
         cubes.append(cube)
@@ -351,13 +347,13 @@ def klip(
     k_klip: int,
 ):
     log.debug("Assembling pipeline...")
-    mtx_x, subset_idxs = improc.unwrap_cube(sci_arr, estimation_mask)
+    mtx_x = improc.unwrap_cube(sci_arr, estimation_mask)
     log.debug(f"{mtx_x.shape=}")
 
     subtracted_mtx = starlight_subtraction.klip_mtx(
         mtx_x, k_klip, exclude_nearest_n_frames
     )
-    outcube = improc.wrap_matrix(subtracted_mtx, sci_arr.shape, subset_idxs)
+    outcube = improc.wrap_matrix(subtracted_mtx, estimation_mask)
     # TODO apply combination_mask
     log.debug(f"{outcube.shape=}")
     log.debug("done assembling")

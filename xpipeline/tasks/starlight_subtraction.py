@@ -473,7 +473,6 @@ class TrapParams:
     precomputed_basis : Optional[TrapBasis] = None
     background_split_mask: Optional[np.ndarray] = None
 
-
 def trap_mtx(image_vecs, model_vecs, trap_params):
     xp = core.get_array_module(image_vecs)
     was_gpu_array = xp is cp
@@ -642,12 +641,10 @@ def trap_evaluate_point(
     log.debug("Unwrapping cubes with mask")
     start = time.perf_counter()
     if inject:
-        image_vecs, indices = improc.unwrap_cube(injected, mask)
+        image_vecs = improc.unwrap_cube(injected, mask)
     else:
-        image_vecs, indices = improc.unwrap_cube(data_cube, mask)
-    del indices
-    model_vecs, indices = improc.unwrap_cube(signal_cube, mask)
-    del indices
+        image_vecs = improc.unwrap_cube(data_cube, mask)
+    model_vecs = improc.unwrap_cube(signal_cube, mask)
     log.debug(f"Unwrapping done in {time.perf_counter() - start}")
 
     log.debug("TRAP++ing...")

@@ -34,76 +34,21 @@ def test_rough_peak():
     assert loc_x == peak_x
     assert loc_y == peak_y
 
-
-
 def test_wrap_2d():
     image = np.arange(9).reshape(3, 3)
     mask = np.ones(image.shape, dtype=bool)
-    vec, subset_idxs = unwrap_image(image, mask)
-    wrap_result = wrap_vector(vec, image.shape, subset_idxs)
+    vec = unwrap_image(image, mask)
+    wrap_result = wrap_vector(vec, mask)
     assert np.all(image == wrap_result)
-
-
-def test_wrap_3d():
-    imcube = np.arange(27).reshape(3, 3, 3)
-    mask = np.ones(imcube.shape, dtype=bool)
-    vec, subset_idxs = unwrap_image(imcube, mask)
-    wrap_result = wrap_vector(vec, imcube.shape, subset_idxs)
-    assert np.all(imcube == wrap_result)
-
-    imcube = np.arange(27).reshape(3, 3, 3)
-    imcube = np.repeat(imcube[np.newaxis, :, :, :], 3, axis=0)
-    mtx, subset_idxs = unwrap_cube(imcube, mask)
-    wrap_result = wrap_matrix(mtx, imcube.shape, subset_idxs)
-    assert np.all(imcube == wrap_result)
-
-
 
 def test_unwrap_2d():
     image = np.arange(9, dtype=float).reshape((3, 3))
     mask = np.ones((3, 3), dtype=bool)
     image[1, 1] = np.infty  # make a bogus value to change the max
     mask[1, 1] = False  # mask it out so it doesn't change the max
-    mtx, subset_idxs = unwrap_image(image, mask)
+    mtx = unwrap_image(image, mask)
     assert np.max(mtx) == 8
     assert mtx.shape[0] == 8
-    assert subset_idxs[1].shape[0] == 8, "Not the right number of X indices"
-    assert subset_idxs[0].shape[0] == 8, "Not the right number of Y indices"
-
-
-def test_unwrap_one_3d():
-    imcube = np.zeros((3, 3, 3))
-    mask = np.ones(imcube.shape, dtype=bool)
-
-    # set one nonzero pixel, and mask it out so we can tell if
-    # masking worked when it's not present in the output
-    imcube[1, 1, 1] = 1
-    mask[1, 1, 1] = False
-    mtx, subset_idxs = unwrap_image(imcube, mask)
-    nonzero_pix = 3 * 3 * 3 - 1
-    assert mtx.shape[0] == nonzero_pix
-    assert subset_idxs[0].shape[0] == nonzero_pix, "Not the right number of Z indices"
-    assert subset_idxs[1].shape[0] == nonzero_pix, "Not the right number of Y indices"
-    assert subset_idxs[2].shape[0] == nonzero_pix, "Not the right number of X indices"
-    assert np.max(mtx) == 0
-
-
-def test_unwrap_many_3d():
-    imcube = np.zeros((3, 3, 3))
-    mask = np.ones(imcube.shape, dtype=bool)
-
-    # set one nonzero pixel, and mask it out so we can tell if
-    # masking worked when it's not present in the output
-    imcube[1, 1, 1] = 1
-    mask[1, 1, 1] = False
-    imcube = np.repeat(imcube[np.newaxis, :, :, :], 3, axis=0)
-    mtx, subset_idxs = unwrap_cube(imcube, mask)
-    nonzero_pix = 3 * 3 * 3 - 1
-    assert mtx.shape[0] == nonzero_pix
-    assert subset_idxs[0].shape[0] == nonzero_pix, "Not the right number of Z indices"
-    assert subset_idxs[1].shape[0] == nonzero_pix, "Not the right number of Y indices"
-    assert subset_idxs[2].shape[0] == nonzero_pix, "Not the right number of X indices"
-    assert np.max(mtx) == 0
 
 
 def test_cartesian_coords():
