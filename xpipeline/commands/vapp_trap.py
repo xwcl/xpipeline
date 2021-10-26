@@ -347,8 +347,8 @@ class VappTrap(xconf.Command):
         help="Ray distributed framework configuration"
     )
     ring_exclude_px : float = xconf.field(default=12, help="When selecting reference pixel timeseries, determines width of ring centered at radius of interest for which pixel vectors are excluded")
-    gpus_per_task : Optional[Union[float, PerTaskConfig]] = xconf.field(default=None, help="")
-    ram_gb_per_task : Optional[Union[float, PerTaskConfig, str]] = xconf.field(default=None, help="")
+    gpus_per_task : Union[float, PerTaskConfig, None] = xconf.field(default=None, help="")
+    ram_gb_per_task : Union[float, str, PerTaskConfig, None] = xconf.field(default=None, help="")
     # ram_gb_for_generate : Optional[float] = xconf.field(default=None, help="")
     # ram_gb_for_decompose : Optional[float] = xconf.field(default=None, help="")
     # ram_gb_for_evaluate : Optional[float] = xconf.field(default=None, help="")

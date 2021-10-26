@@ -62,49 +62,12 @@ class TemplateSignal:
     signal : np.ndarray
     scale_factors : Union[np.ndarray,float]
 
-@njit(parallel=True, cache=True)
-def _inject_signals(nz, ny, nx, angles, spec_scales, spec_r_pxs, spec_pa_degs, template, template_scale_factors):
-    frame_shape = (ny, nx)
-    outcube = np.zeros((nz, ny, nx))
-    for frame_idx in numba.prange(nz):
-        for spec_idx in range(spec_scales.size):
-            if spec_scales[spec_idx] == 0:
-                continue
-            theta = np.deg2rad(90 + spec_pa_degs[spec_idx] - angles[frame_idx])
-            dx, dy = spec_r_pxs[spec_idx] * np.cos(theta), spec_r_pxs[spec_idx] * np.sin(theta)
-            addition = spec_scales[spec_idx] * template_scale_factors[frame_idx] * improc.shift2(template, dx, dy, output_shape=frame_shape)
-            result = outcube[frame_idx] + addition  # multiple companions get accumulated in outcube
-            outcube[frame_idx] = result
-    return outcube
-
-# def generate_signals(
-#     shape: tuple,
-#     specs: List[CompanionSpec],
-#     template: np.ndarray,
-#     angles: np.ndarray = None,
-#     template_scale_factors: Optional[Union[np.ndarray,float]] = None,
-# ):
-#     n_obs = shape[0]
-#     if template_scale_factors is None:
-#         template_scale_factors = np.ones(n_obs)
-#     if np.isscalar(template_scale_factors):
-#         template_scale_factors = np.repeat(np.array([template_scale_factors]), n_obs)
-#     if angles is None:
-#         angles = np.zeros(n_obs)
-#     spec_scales = np.array([spec.scale for spec in specs])
-#     spec_r_pxs = np.array([spec.r_px for spec in specs])
-#     spec_pa_degs = np.array([spec.pa_deg for spec in specs])
-
-#     nz, ny, nx = shape
-#     signal_only_cube = _inject_signals(nz, ny, nx, angles, spec_scales, spec_r_pxs, spec_pa_degs, template, template_scale_factors)
-#     return signal_only_cube
-
 def generate_signals(
     shape: tuple,
     specs: list[CompanionSpec],
     template: np.ndarray,
     derotation_angles: np.ndarray = None,
-    template_scale_factors: Optional[Union[np.ndarray,float]] = None,
+    template_scale_factors: Union[np.ndarray,float,None] = None,
 ):
     '''Inject signals for companions specified using
     optional derotation angles to *counter*rotate the coordinates
@@ -117,7 +80,7 @@ def generate_signals(
     specs : list[CompanionSpec]
     template : np.ndarray
     derotation_angles : Optional[np.ndarray]
-    template_scale_factors : Optional[Union[np.ndarray,float]]
+    template_scale_factors : Union[np.ndarray,float,None]
         Scale factor relative to 1.0 being the average brightness
         of the primary over the observation, used to scale the
         template image to reflect particularly sharp or poor
@@ -156,7 +119,7 @@ def inject_signals(
     specs: List[CompanionSpec],
     template: np.ndarray,
     angles: np.ndarray = None,
-    template_scale_factors: Optional[Union[np.ndarray,float]] = None,
+    template_scale_factors: Union[np.ndarray,float,None] = None,
     saturation_threshold: Optional[float] = None,
 ):
     '''Generate signals using `generate_signals` (see docstring) and add to
