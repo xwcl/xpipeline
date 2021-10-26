@@ -70,13 +70,12 @@ def generic_svd(mtx_x, n_modes=None, full_matrices=False):
     """Computes SVD of mtx_x returning U, s, and V such that
     allclose(mtx_x, U @ diag(s) @ V.T) (with some tolerance).
 
-    When supplied with CPU arrays, `torch` is used if available, TODO
-    falling back to `numpy.linalg.svd`. When supplied with GPU arrays,
-    `torch` is used if available, falling back to `cupy.linalg.svd`.
+    If `n_modes` is not None, this function will truncate the
+    return values to the first `n_modes` columns/entries, and
+    copy if necessary to make the array contiguous.
 
-    When supplied with distributed arrays, those with total number of
-    elements < `dask_size_threshold` are converted to local NumPy
-    arrays and processed as in the CPU array case. TODO
+    When supplied with CPU arrays, `numpy.linalg.svd` is called.
+    When supplied with GPU arrays, `cupy.linalg.svd` is used.
 
     Parameters
     ----------
