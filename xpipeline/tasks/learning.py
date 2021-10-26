@@ -139,7 +139,13 @@ def cpu_top_k_svd_arpack(array, n_modes=None):
     if n_modes is None:
         n_modes = min(array.shape)
     mtx_u, diag_s, mtx_vt = svds(array, k=n_modes)
-    return mtx_u, diag_s, mtx_vt.T
+    sorter = np.flip(np.argsort(diag_s))
+    mtx_u, diag_s, mtx_v = (
+        np.ascontiguousarray(mtx_u[:, sorter]),
+        diag_s[sorter],
+        np.ascontiguousarray(mtx_vt.T[:, sorter])
+    )
+    return mtx_u, diag_s, mtx_v
 
 
 @numba.njit(inline='always')
