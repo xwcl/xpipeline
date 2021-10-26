@@ -13,6 +13,7 @@ import distributed.protocol
 from numba import njit
 import numba
 import time
+import memory_profiler
 from ..core import get_array_module
 from ..core import cupy as cp
 from .. import core, utils, constants
@@ -463,7 +464,10 @@ class TrapParams:
     incorporate_offset : bool = True
     scale_ref_std : bool = True
     scale_model_std : bool = True
-    decomposer : callable = learning.cpu_top_k_svd_arpack
+    dense_decomposer : callable = learning.generic_svd
+    iterative_decomposer : callable = learning.cpu_top_k_svd_arpack
+    min_modes_frac_for_dense : float = 0.3  # dense solver presumed faster when more than this fraction of all modes requested
+    min_dim_for_iterative : int = 1000   # dense solver is as fast or faster below some matrix dimension
     force_gpu_decomposition : bool = False
     force_gpu_inversion : bool = False
     # arguments to pylops.optimization.solver.cgls
@@ -473,12 +477,11 @@ class TrapParams:
     return_basis : bool = False
     precomputed_basis : Optional[TrapBasis] = None
     background_split_mask: Optional[np.ndarray] = None
+    profile_inversion : bool = True
 
-    def __post_init__(self):
-        if self.force_gpu_decomposition and self.decomposer is learning.cpu_top_k_svd_arpack:
-            self.decomposer = learning.generic_svd
-
-def trap_mtx(image_vecs, model_vecs, trap_params):
+import memory_profiler
+@memory_profiler.profile
+def trap_mtx(image_vecs, model_vecs, trap_params : TrapParams):
     xp = core.get_array_module(image_vecs)
     was_gpu_array = xp is cp
     timers = {}
@@ -502,11 +505,19 @@ def trap_mtx(image_vecs, model_vecs, trap_params):
     if trap_params.return_basis:
         return trap_basis
     timers['time_svd_sec'] = trap_basis.time_sec
+    if trap_params.force_gpu_inversion and not was_gpu_array:
+        image_vecs_medsub_, trimmed_model_vecs_ = cp.asarray(image_vecs_medsub), cp.asarray(trimmed_model_vecs)
+        del image_vecs_medsub, trimmed_model_vecs
+        image_vecs_medsub, trimmed_model_vecs = image_vecs_medsub_, trimmed_model_vecs_
     model_coeff, inv_timers, maybe_resid_vecs = trap_phase_2(
         image_vecs_medsub, trimmed_model_vecs,
         trap_basis.temporal_basis, trap_params
     )
     timers.update(inv_timers)
+    if trap_params.force_gpu_inversion and not was_gpu_array:
+        if maybe_resid_vecs is not None:
+            maybe_resid_vecs = maybe_resid_vecs.get()
+        model_coeff = model_coeff.get()
     return model_coeff, timers, trap_basis.pix_used, maybe_resid_vecs
 
 def trap_phase_1(ref_vecs, trap_params):
@@ -518,6 +529,7 @@ def trap_phase_1(ref_vecs, trap_params):
     xp = core.get_array_module(ref_vecs)
     # k_modes = int(min(image_vecs_medsub.shape) * trap_params.modes_frac)
     k_modes = trap_params.k_modes
+    max_modes = min(ref_vecs.shape)
 
     # Using the std of each pixel's timeseries to scale it before decomposition reduces the weight of the brightest pixels
     if trap_params.scale_ref_std:
@@ -528,19 +540,32 @@ def trap_phase_1(ref_vecs, trap_params):
     if trap_params.force_gpu_decomposition:
         scaled_ref_vecs = cp.asarray(scaled_ref_vecs)
         xp = core.cupy
-    log.debug(f"Begin SVD with {trap_params.decomposer=}...")
+
+    # select decomposer based on mode fraction and whether we're on GPU
+    if xp is core.cupy:
+        decomposer = trap_params.dense_decomposer
+    elif k_modes > trap_params.min_modes_frac_for_dense * max_modes:
+        decomposer = trap_params.dense_decomposer
+    elif max_modes < trap_params.min_dim_for_iterative:
+        decomposer = trap_params.dense_decomposer
+    else:
+        decomposer = trap_params.iterative_decomposer
+
+    log.debug(f"Begin SVD with {decomposer=}...")
     time_sec = time.perf_counter()
-    _, _, mtx_v = trap_params.decomposer(scaled_ref_vecs, k_modes)
+    _, _, mtx_v = decomposer(scaled_ref_vecs, k_modes)
     time_sec = time.perf_counter() - time_sec
     log.debug(f"SVD complete in {time_sec} sec, constructing operator")
     temporal_basis = mtx_v  # shape = (nframes, ncomponents)
     return TrapBasis(temporal_basis, time_sec, ref_vecs.shape[0])
 
+import memory_profiler
+@memory_profiler.profile
 def trap_phase_2(image_vecs_medsub, model_vecs, temporal_basis, trap_params):
     xp = core.get_array_module(image_vecs_medsub)
     was_gpu_array = xp is cp
     timers = {}
-    flat_model_vecs = model_vecs.flatten()
+    flat_model_vecs = model_vecs.ravel()
     if trap_params.scale_model_std:
         model_coeff_scale = xp.std(flat_model_vecs)
         flat_model_vecs /= model_coeff_scale
@@ -556,40 +581,32 @@ def trap_phase_2(image_vecs_medsub, model_vecs, temporal_basis, trap_params):
     if trap_params.incorporate_offset:
         if trap_params.background_split_mask is not None:
             left_mask_vec = trap_params.background_split_mask
-            left_mask_megavec = np.repeat(left_mask_vec[:,np.newaxis], model_vecs.shape[1]).flatten()
+            left_mask_megavec = np.repeat(left_mask_vec[:,np.newaxis], model_vecs.shape[1]).ravel()
             assert len(left_mask_megavec) == len(flat_model_vecs)
             left_mask_megavec = left_mask_megavec[np.newaxis,:].astype(flat_model_vecs.dtype)
             left_mask_megavec = left_mask_megavec - left_mask_megavec.mean()
             left_mask_megavec /= np.linalg.norm(left_mask_megavec)
             # "ones" for left side pixels -> fit constant offset for left psf
-            opstack.append(left_mask_megavec)
+            opstack.append(xp.asarray(left_mask_megavec))
             # "ones" for right side pixels -> fit constant offset for right psf
             right_mask_megavec = -1 * left_mask_megavec
-            opstack.append(right_mask_megavec)
+            opstack.append(xp.asarray(right_mask_megavec))
         else:
             background_megavec = np.ones_like(flat_model_vecs[xp.newaxis, :])
             background_megavec /= np.linalg.norm(background_megavec)
-            opstack.append(background_megavec)
+            opstack.append(xp.asarray(background_megavec))
     opstack.append(flat_model_vecs[xp.newaxis, :])
     op = pylops.VStack(opstack).transpose()
     log.debug(f"TRAP operator: {op}")
 
-    image_megavec = image_vecs_medsub.flatten()
-    # if trap_params.force_gpu_inversion or xp is cp:
-    #     image_megavec = cp.asarray(image_megavec)
-    #     solver_kwargs = dict(damp=1e-8, tol=1e-8)
-    # else:
-    #     solver_kwargs = dict(damp=1e-8)
+    image_megavec = image_vecs_medsub.ravel()
     solver_kwargs = dict(damp=trap_params.damp, tol=trap_params.tol)
     log.debug(f"Performing inversion on A.shape={op.shape} and b={image_megavec.shape}")
     timers['invert'] = time.perf_counter()
-    # xinv = pylops.optimization.leastsquares.RegularizedInversion(
-    #     op,
-    #     [],
-    #     image_megavec,
-    #     **solver_kwargs
-    # )
-    cgls_result = pylops.optimization.solver.cgls(
+    solver = pylops.optimization.solver.cgls
+    if trap_params.profile_inversion:
+        solver = memory_profiler.profile(solver)
+    cgls_result = solver(
         op,
         image_megavec,
         xp.zeros(int(op.shape[1])),

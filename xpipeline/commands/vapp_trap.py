@@ -98,6 +98,8 @@ def _precompute_basis(image_vecs, model_inputs : ModelInputs, r_px, ring_exclude
     return precomputed_trap_basis
 precompute_basis = ray.remote(_precompute_basis)
 
+import memory_profiler
+@memory_profiler.profile
 def _evaluate_point(out_idx, row, inject_image_vecs, model_inputs, k_modes, precomputed_trap_basis, left_pix_vec, force_gpu_inversion):
     start = time.perf_counter()
     row = row.copy() # since ray is r/o
@@ -208,6 +210,7 @@ def launch_grid(grid,
     remaining_grid = grid[remaining_idxs]
 
     # precomputation will use the max number of modes, computed once, trimmed as needed
+    log.debug(f"{np.unique(remaining_grid['k_modes'])=}")
     max_k_modes = int(max(remaining_grid['k_modes']))
 
     # left_pix_vec is true where vector entries correspond to pixels
@@ -268,7 +271,8 @@ def launch_grid(grid,
             decompose_options,
             image_vecs_ref,  # no injection needed
             model_inputs_ref,
-            np.min(remaining_grid['r_px']),  # smaller radii -> more reference pixels -> upper bound on time
+            0,  # smaller radii -> more reference pixels -> upper bound on time
+            0,  # no exclusion -> more pixels
             max_k_modes,
             force_gpu_decomposition,
         )
@@ -287,7 +291,7 @@ def launch_grid(grid,
             max_k_modes,
             force_gpu_decomposition,
         )
-    log.debug(f"Precomputing {len(precompute_locs)} basis sets")
+    log.debug(f"Precomputing {len(precompute_locs)} basis sets with {max_k_modes=}")
 
     remaining_point_refs = []
     if measure_ram:
@@ -396,16 +400,16 @@ class VappTrap(xconf.Command):
         if isinstance(self.ray, RemoteRayConfig):
             ray.init(self.ray.url)
         else:
-            from ray.job_config import JobConfig
-            worker_env = {
-                'OMP_NUM_THREADS': '1',
-                'MKL_NUM_THREADS': '1',
-                'NUMBA_NUM_THREADS': '1',
-                # we aren't using numba threads anyway,
-                # but setting this silences tbb-related fork errors:
-                'NUMBA_THREADING_LAYER': 'workqueue',
-            }
-            job_config_env = JobConfig(worker_env=worker_env)
+            # from ray.job_config import JobConfig
+            # worker_env = {
+            #     'OMP_NUM_THREADS': '1',
+            #     'MKL_NUM_THREADS': '1',
+            #     'NUMBA_NUM_THREADS': '1',
+            #     # we aren't using numba threads anyway,
+            #     # but setting this silences tbb-related fork errors:
+            #     'NUMBA_THREADING_LAYER': 'workqueue',
+            # }
+            # job_config_env = JobConfig(worker_env=worker_env)
             resources = {}
             if self.ray.ram_gb is not None:
                 resources['ram_gb'] = self.ray.ram_gb
@@ -413,7 +417,7 @@ class VappTrap(xconf.Command):
                 num_cpus=self.ray.cpus,
                 num_gpus=self.ray.gpus,
                 resources=resources,
-                job_config=job_config_env
+                # job_config=job_config_env
             )
         options = {'resources':{}}
         generate_options = options.copy()
@@ -479,7 +483,9 @@ class VappTrap(xconf.Command):
                     hdu = fits.BinTableHDU(grid, name='grid')
                     hdu.writeto('./grid.fits')
         else:
-            grid = grid[:self.benchmark_trials]
+            # select most costly points
+            bench_mask = grid['k_modes'] == max(self.k_modes_vals)
+            grid = grid[bench_mask][:self.benchmark_trials]
 
         # submit tasks for every grid point
         result_refs = launch_grid(
