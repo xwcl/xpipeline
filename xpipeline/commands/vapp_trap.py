@@ -199,6 +199,12 @@ def launch_grid(grid,
     # filter points that have already been evaluated out
     # but keep the indices into the full grid for later
     remaining_idxs = np.argwhere(grid['time_total_sec'] == 0)
+    n_remaining = len(remaining_idxs)
+    if n_remaining == 0:
+        log.info(f"All grid entries processed, nothing to do")
+        return []
+    elif n_remaining > 0:
+        log.info(f"Loaded {len(grid) - n_remaining} completed grid points, {n_remaining} left to go")
     remaining_grid = grid[remaining_idxs]
 
     # precomputation will use the max number of modes, computed once, trimmed as needed
