@@ -466,7 +466,7 @@ class TrapParams:
     scale_model_std : bool = True
     dense_decomposer : callable = learning.generic_svd
     iterative_decomposer : callable = learning.cpu_top_k_svd_arpack
-    min_modes_frac_for_dense : float = 0.3  # dense solver presumed faster when more than this fraction of all modes requested
+    min_modes_frac_for_dense : float = 0.15  # dense solver presumed faster when more than this fraction of all modes requested
     min_dim_for_iterative : int = 1000   # dense solver is as fast or faster below some matrix dimension
     force_gpu_decomposition : bool = False
     force_gpu_inversion : bool = False
@@ -502,16 +502,21 @@ def trap_mtx(image_vecs, model_vecs, trap_params : TrapParams):
         trap_basis = trap_phase_1(ref_vecs, trap_params)
     else:
         trap_basis = trap_phase_1(None, trap_params)
-    if trap_params.return_basis:
+    if trap_params.return_basis and not was_gpu_array:
+        if get_array_module(trap_basis.temporal_basis) is core.cupy:
+            trap_basis.temporal_basis = trap_basis.temporal_basis.get()
         return trap_basis
     timers['time_svd_sec'] = trap_basis.time_sec
     if trap_params.force_gpu_inversion and not was_gpu_array:
         image_vecs_medsub_, trimmed_model_vecs_ = cp.asarray(image_vecs_medsub), cp.asarray(trimmed_model_vecs)
         del image_vecs_medsub, trimmed_model_vecs
         image_vecs_medsub, trimmed_model_vecs = image_vecs_medsub_, trimmed_model_vecs_
+        temporal_basis = cp.asarray(trap_basis.temporal_basis)
+    else:
+        temporal_basis = trap_basis.temporal_basis
     model_coeff, inv_timers, maybe_resid_vecs = trap_phase_2(
         image_vecs_medsub, trimmed_model_vecs,
-        trap_basis.temporal_basis, trap_params
+        temporal_basis, trap_params
     )
     timers.update(inv_timers)
     if trap_params.force_gpu_inversion and not was_gpu_array:
@@ -524,7 +529,8 @@ def trap_phase_1(ref_vecs, trap_params):
     if trap_params.precomputed_basis is not None:
         basis = trap_params.precomputed_basis
         temporal_basis = basis.temporal_basis
-        temporal_basis = np.ascontiguousarray(temporal_basis[:,:trap_params.k_modes])
+        xp = core.get_array_module(temporal_basis)
+        temporal_basis = xp.ascontiguousarray(temporal_basis[:,:trap_params.k_modes])
         return TrapBasis(temporal_basis, basis.time_sec, basis.pix_used)
     xp = core.get_array_module(ref_vecs)
     # k_modes = int(min(image_vecs_medsub.shape) * trap_params.modes_frac)
@@ -557,6 +563,8 @@ def trap_phase_1(ref_vecs, trap_params):
     time_sec = time.perf_counter() - time_sec
     log.debug(f"SVD complete in {time_sec} sec, constructing operator")
     temporal_basis = mtx_v  # shape = (nframes, ncomponents)
+    if trap_params.return_basis and xp is not core.cupy:
+        temporal_basis = temporal_basis.get()
     return TrapBasis(temporal_basis, time_sec, ref_vecs.shape[0])
 
 import memory_profiler

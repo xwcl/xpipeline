@@ -70,15 +70,22 @@ def _inject_model(image_vecs, model_inputs : ModelInputs, companion_r_px, compan
     return image_vecs + companion_scale * model_vecs
 inject_model = ray.remote(_inject_model)
 
+def test_particle(n_sec):
+    print(f"Going to sleep for {n_sec} sec")
+    time.sleep(5)
+    print(f"Done sleeping")
+
 def _measure_ram_for_step(func, *args, **kwargs):
     from memory_profiler import memory_usage
     initial_ram = memory_usage(-1, max_usage=True)
     time_sec = time.perf_counter()
+    print(f"inner timer {time_sec=}")
     mem_mb_series = memory_usage((func, args, kwargs))
-    time_sec = time.perf_counter() - time_sec
     final_ram = memory_usage(-1, max_usage=True)
     mem_gb = (np.max(mem_mb_series) - final_ram) / 1024
-    print(f"{initial_ram=} {mem_gb=} {final_ram=}")
+    time_sec = time.perf_counter() - time_sec
+    print(f"inner timer end {time.perf_counter()=}")
+    print(f"{initial_ram=} {mem_gb=} {final_ram=} {time_sec=}")
     return mem_gb, time_sec
 measure_ram_for_step = ray.remote(_measure_ram_for_step)
 
@@ -95,6 +102,8 @@ def _precompute_basis(image_vecs, model_inputs : ModelInputs, r_px, ring_exclude
         return_basis=True,
     )
     precomputed_trap_basis = starlight_subtraction.trap_phase_1(ref_vecs, params)
+    print(precomputed_trap_basis)
+    print(f"{type(precomputed_trap_basis.temporal_basis)=}")
     return precomputed_trap_basis
 precompute_basis = ray.remote(_precompute_basis)
 
@@ -169,13 +178,16 @@ def worker_init(num_cpus):
     Dispatcher.configure_logging(None, 'INFO')
 
 def _measure_ram(func, options, *args, ram_pad_factor=1.2, **kwargs):
+    log.info(f"Submitting measure_ram_for_step for {func}")
     measure_ref = measure_ram_for_step.options(**options).remote(
         func,
         *args,
         **kwargs
     )
     outside_time_sec = time.perf_counter()
+    log.debug(f"{outside_time_sec=} at start")
     ram_use_gb, inside_time_sec = ray.get(measure_ref)
+    log.debug(f"end time {time.perf_counter()}")
     outside_time_sec = time.perf_counter() - outside_time_sec
     log.info(f"Measured {func} RAM use of {ram_use_gb:1.3f} GB, runtime of {inside_time_sec:1.2f} sec inside and {outside_time_sec:1.2f} sec outside")
     ram_requirement_gb = ram_pad_factor * ram_use_gb
@@ -295,6 +307,7 @@ def launch_grid(grid,
 
     remaining_point_refs = []
     if measure_ram:
+        log.debug(f"First measuring RAM use for evaluate_point")
         ram_requirement_gb = _measure_ram(
             _evaluate_point,
             evaluate_options,
