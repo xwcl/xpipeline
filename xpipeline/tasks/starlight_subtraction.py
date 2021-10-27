@@ -477,10 +477,7 @@ class TrapParams:
     return_basis : bool = False
     precomputed_basis : Optional[TrapBasis] = None
     background_split_mask: Optional[np.ndarray] = None
-    profile_inversion : bool = True
 
-import memory_profiler
-@memory_profiler.profile
 def trap_mtx(image_vecs, model_vecs, trap_params : TrapParams):
     xp = core.get_array_module(image_vecs)
     was_gpu_array = xp is cp
@@ -567,8 +564,6 @@ def trap_phase_1(ref_vecs, trap_params):
         temporal_basis = temporal_basis.get()
     return TrapBasis(temporal_basis, time_sec, ref_vecs.shape[0])
 
-import memory_profiler
-@memory_profiler.profile
 def trap_phase_2(image_vecs_medsub, model_vecs, temporal_basis, trap_params):
     xp = core.get_array_module(image_vecs_medsub)
     was_gpu_array = xp is cp
@@ -612,8 +607,6 @@ def trap_phase_2(image_vecs_medsub, model_vecs, temporal_basis, trap_params):
     log.debug(f"Performing inversion on A.shape={op.shape} and b={image_megavec.shape}")
     timers['invert'] = time.perf_counter()
     solver = pylops.optimization.solver.cgls
-    if trap_params.profile_inversion:
-        solver = memory_profiler.profile(solver)
     cgls_result = solver(
         op,
         image_megavec,

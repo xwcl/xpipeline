@@ -85,7 +85,7 @@ def _measure_ram_for_step(func, *args, **kwargs):
     mem_gb = (np.max(mem_mb_series) - final_ram) / 1024
     time_sec = time.perf_counter() - time_sec
     print(f"inner timer end {time.perf_counter()=}")
-    print(f"{initial_ram=} {mem_gb=} {final_ram=} {time_sec=}")
+    print(f"{initial_ram/1024=} {mem_gb=} {final_ram/1024=} {time_sec=}")
     return mem_gb, time_sec
 measure_ram_for_step = ray.remote(_measure_ram_for_step)
 
@@ -102,13 +102,9 @@ def _precompute_basis(image_vecs, model_inputs : ModelInputs, r_px, ring_exclude
         return_basis=True,
     )
     precomputed_trap_basis = starlight_subtraction.trap_phase_1(ref_vecs, params)
-    print(precomputed_trap_basis)
-    print(f"{type(precomputed_trap_basis.temporal_basis)=}")
     return precomputed_trap_basis
 precompute_basis = ray.remote(_precompute_basis)
 
-import memory_profiler
-@memory_profiler.profile
 def _evaluate_point(out_idx, row, inject_image_vecs, model_inputs, k_modes, precomputed_trap_basis, left_pix_vec, force_gpu_inversion):
     start = time.perf_counter()
     row = row.copy() # since ray is r/o

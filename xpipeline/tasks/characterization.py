@@ -521,7 +521,6 @@ def detection_map_from_table(tbl, coverage_mask, ring_px=3, **kwargs):
         tbl = tbl[mask]
     if not len(tbl):
         raise ValueError(f"No points matching {kwargs}")
-    print(len(tbl))
     yy, xx = np.indices(coverage_mask.shape, dtype=float)
     post_grid_mask = coverage_mask == 1
     points = np.stack((tbl['y'], tbl['x']), axis=-1)
@@ -534,7 +533,7 @@ def detection_map_from_table(tbl, coverage_mask, ring_px=3, **kwargs):
         emp_snr[tbl['r_px'] == r_px] /= new_sigma
     outim = griddata(points, emp_snr, newpoints).reshape(coverage_mask.shape)
     outim[~post_grid_mask] = np.nan
-    return outim
+    return outim, emp_snr
 
 def detection_map_cube_from_table(tbl, coverage_mask, ring_px=3, **kwargs):
     static_kwargs = {}
@@ -549,7 +548,6 @@ def detection_map_cube_from_table(tbl, coverage_mask, ring_px=3, **kwargs):
     filter_values = list(itertools.product(*[seq for name, seq in varying_kwargs]))
     filter_names = [name for name, seq in varying_kwargs]
     detection_map_cube = np.zeros((len(filter_values),) + coverage_mask.shape)
-    print(detection_map_cube.shape)
     filters = []
     for idx, row in enumerate(filter_values):
         filter_kwargs = {}
