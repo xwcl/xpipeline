@@ -105,7 +105,7 @@ def _precompute_basis(image_vecs, model_inputs : ModelInputs, r_px, ring_exclude
     return precomputed_trap_basis
 precompute_basis = ray.remote(_precompute_basis)
 
-def _evaluate_point(out_idx, row, inject_image_vecs, model_inputs, k_modes, precomputed_trap_basis, left_pix_vec, force_gpu_inversion):
+def _evaluate_point(out_idx, row, inject_image_vecs, model_inputs, k_modes, precomputed_trap_basis, left_pix_vec, force_gpu_fit):
     start = time.perf_counter()
     row = row.copy() # since ray is r/o
     model_vecs = generate_model(model_inputs, row['r_px'], row['pa_deg'])
@@ -114,7 +114,7 @@ def _evaluate_point(out_idx, row, inject_image_vecs, model_inputs, k_modes, prec
         compute_residuals=False,
         precomputed_basis=precomputed_trap_basis,
         background_split_mask=left_pix_vec,
-        force_gpu_inversion=force_gpu_inversion,
+        force_gpu_fit=force_gpu_fit,
     )
     model_coeff, timers, pix_used, _ = starlight_subtraction.trap_mtx(inject_image_vecs, model_vecs, params)
     row['model_coeff'] = model_coeff
@@ -197,7 +197,7 @@ def _measure_ram(func, options, *args, ram_pad_factor=1.2, **kwargs):
 def launch_grid(grid,
                 left_cube, right_cube,
                 model_inputs, ring_exclude_px,
-                force_gpu_decomposition, force_gpu_inversion,
+                force_gpu_decomposition, force_gpu_fit,
                 generate_options=None, decompose_options=None, evaluate_options=None,
                 measure_ram=False, ram_pad_factor=1.2):
     if generate_options is None:
@@ -260,16 +260,21 @@ def launch_grid(grid,
         )
         generate_options['resources']['ram_gb'] = ram_requirement_gb
 
+    made = 0
     for row in injection_locs:
         inject_key = inject_key_maker(row)
-        inject_refs[inject_key] = inject_model.options(**generate_options).remote(
-            image_vecs_ref,
-            model_inputs_ref,
-            row['inject_r_px'],
-            row['inject_pa_deg'],
-            row['inject_scale'],
-        )
-    log.debug(f"Generating {len(injection_locs)} datasets with model planet injection")
+        if row['inject_scale'] == 0:
+            inject_refs[inject_key] = image_vecs_ref
+        else:
+            inject_refs[inject_key] = inject_model.options(**generate_options).remote(
+                image_vecs_ref,
+                model_inputs_ref,
+                row['inject_r_px'],
+                row['inject_pa_deg'],
+                row['inject_scale'],
+            )
+            made += 1
+    log.debug(f"Generating {made} datasets with model planet injection")
 
     # unique (inject_r, inject_pa, inject_scale, r, pa) for precomputing basis
     precompute_locs = np.unique(remaining_grid[['inject_r_px', 'inject_pa_deg', 'inject_scale', 'r_px']])
@@ -314,7 +319,7 @@ def launch_grid(grid,
             max_k_modes,
             precompute_refs[precompute_key], # still set from last loop
             left_pix_vec,
-            force_gpu_inversion
+            force_gpu_fit
         )
         evaluate_options['resources']['ram_gb'] = ram_requirement_gb
     for idx in remaining_idxs:
@@ -332,7 +337,7 @@ def launch_grid(grid,
             k_modes,
             precompute_ref,
             left_pix_vec,
-            force_gpu_inversion,
+            force_gpu_fit,
         )
         remaining_point_refs.append(point_ref)
     log.debug(f"Applying TRAP++ for {len(remaining_idxs)} points in the parameter grid")
@@ -366,7 +371,7 @@ class VappTrap(xconf.Command):
     # ram_gb_for_decompose : Optional[float] = xconf.field(default=None, help="")
     # ram_gb_for_evaluate : Optional[float] = xconf.field(default=None, help="")
     use_gpu_decomposition : bool = xconf.field(default=False, help="")
-    use_gpu_inversion : bool = xconf.field(default=False, help="")
+    use_gpu_fit : bool = xconf.field(default=False, help="")
     benchmark : bool = xconf.field(default=False, help="")
     benchmark_trials : int = xconf.field(default=2, help="")
     # ray_url : Optional[str] = xconf.field(help="")
@@ -445,7 +450,7 @@ class VappTrap(xconf.Command):
             decompose_options['resources']['ram_gb'] = self.ram_gb_per_task
             evaluate_options['resources']['ram_gb'] = self.ram_gb_per_task
 
-        if self.use_gpu_decomposition or self.use_gpu_inversion:
+        if self.use_gpu_decomposition or self.use_gpu_fit:
             if self.gpus_per_task is None:
                 raise RuntimeError(f"Specify GPUs per task")
             if isinstance(self.gpus_per_task, PerTaskConfig):
@@ -504,7 +509,7 @@ class VappTrap(xconf.Command):
             model_inputs,
             self.ring_exclude_px,
             self.use_gpu_decomposition,
-            self.use_gpu_inversion,
+            self.use_gpu_fit,
             generate_options=generate_options,
             decompose_options=decompose_options,
             evaluate_options=evaluate_options,
