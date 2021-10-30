@@ -469,7 +469,7 @@ class TrapParams:
     min_modes_frac_for_dense : float = 0.15  # dense solver presumed faster when more than this fraction of all modes requested
     min_dim_for_iterative : int = 1000   # dense solver is as fast or faster below some matrix dimension
     force_gpu_decomposition : bool = False
-    force_gpu_inversion : bool = False
+    force_gpu_fit : bool = False
     # arguments to pylops.optimization.solver.cgls
     damp : float = 1e-8
     tol : float = 1e-8
@@ -504,7 +504,7 @@ def trap_mtx(image_vecs, model_vecs, trap_params : TrapParams):
             trap_basis.temporal_basis = trap_basis.temporal_basis.get()
         return trap_basis
     timers['time_svd_sec'] = trap_basis.time_sec
-    if trap_params.force_gpu_inversion and not was_gpu_array:
+    if trap_params.force_gpu_fit and not was_gpu_array:
         image_vecs_medsub_, trimmed_model_vecs_ = cp.asarray(image_vecs_medsub), cp.asarray(trimmed_model_vecs)
         del image_vecs_medsub, trimmed_model_vecs
         image_vecs_medsub, trimmed_model_vecs = image_vecs_medsub_, trimmed_model_vecs_
@@ -516,7 +516,7 @@ def trap_mtx(image_vecs, model_vecs, trap_params : TrapParams):
         temporal_basis, trap_params
     )
     timers.update(inv_timers)
-    if trap_params.force_gpu_inversion and not was_gpu_array:
+    if trap_params.force_gpu_fit and not was_gpu_array:
         if maybe_resid_vecs is not None:
             maybe_resid_vecs = maybe_resid_vecs.get()
         model_coeff = model_coeff.get()
@@ -560,8 +560,6 @@ def trap_phase_1(ref_vecs, trap_params):
     time_sec = time.perf_counter() - time_sec
     log.debug(f"SVD complete in {time_sec} sec, constructing operator")
     temporal_basis = mtx_v  # shape = (nframes, ncomponents)
-    if trap_params.return_basis and xp is not core.cupy:
-        temporal_basis = temporal_basis.get()
     return TrapBasis(temporal_basis, time_sec, ref_vecs.shape[0])
 
 def trap_phase_2(image_vecs_medsub, model_vecs, temporal_basis, trap_params):

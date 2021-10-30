@@ -16,6 +16,7 @@ from xpipeline.ref import clio
 from xpipeline import pipelines, utils
 import logging
 log = logging.getLogger(__name__)
+BYTES_PER_GB = 1024 * 1024 * 1024
 
 @xconf.config
 class LocalRayConfig:
@@ -258,7 +259,7 @@ def launch_grid(grid,
             injection_locs[0]['inject_pa_deg'],
             injection_locs[0]['inject_scale'],
         )
-        generate_options['resources']['ram_gb'] = ram_requirement_gb
+        generate_options['memory'] = ram_requirement_gb * BYTES_PER_GB
 
     made = 0
     for row in injection_locs:
@@ -289,7 +290,7 @@ def launch_grid(grid,
             max_k_modes,
             force_gpu_decomposition,
         )
-        decompose_options['resources']['ram_gb'] = ram_requirement_gb
+        decompose_options['memory'] = ram_requirement_gb * BYTES_PER_GB
     for row in precompute_locs:
         # submit initial_decomposition with max_k_modes
         precompute_key = precompute_key_maker(row)
@@ -321,7 +322,7 @@ def launch_grid(grid,
             left_pix_vec,
             force_gpu_fit
         )
-        evaluate_options['resources']['ram_gb'] = ram_requirement_gb
+        evaluate_options['memory'] = ram_requirement_gb * BYTES_PER_GB
     for idx in remaining_idxs:
         row = grid[idx]
         inject_key = inject_key_maker(row)
@@ -439,16 +440,16 @@ class VappTrap(xconf.Command):
         evaluate_options = options.copy()
         measure_ram = False
         if isinstance(self.ram_gb_per_task, PerTaskConfig):
-            generate_options['resources']['ram_gb'] = self.ram_gb_per_task.generate
-            decompose_options['resources']['ram_gb'] = self.ram_gb_per_task.decompose
-            evaluate_options['resources']['ram_gb'] = self.ram_gb_per_task.evaluate
+            generate_options['memory'] = self.ram_gb_per_task.generate * BYTES_PER_GB
+            decompose_options['memory'] = self.ram_gb_per_task.decompose * BYTES_PER_GB
+            evaluate_options['memory'] = self.ram_gb_per_task.evaluate * BYTES_PER_GB
         elif self.ram_gb_per_task == "measure":
             measure_ram = True
         elif self.ram_gb_per_task is not None:
             # number or None
-            generate_options['resources']['ram_gb'] = self.ram_gb_per_task
-            decompose_options['resources']['ram_gb'] = self.ram_gb_per_task
-            evaluate_options['resources']['ram_gb'] = self.ram_gb_per_task
+            generate_options['memory'] = self.ram_gb_per_task * BYTES_PER_GB
+            decompose_options['memory'] = self.ram_gb_per_task * BYTES_PER_GB
+            evaluate_options['memory'] = self.ram_gb_per_task * BYTES_PER_GB
 
         if self.use_gpu_decomposition or self.use_gpu_fit:
             if self.gpus_per_task is None:
