@@ -120,7 +120,7 @@ def _evaluate_point(out_idx, row, inject_image_vecs, model_inputs, k_modes, prec
     model_coeff, timers, pix_used, _ = starlight_subtraction.trap_mtx(inject_image_vecs, model_vecs, params)
     row['model_coeff'] = model_coeff
     row['pix_used'] = pix_used
-    row['time_precompute_svd_sec'] = precomputed_trap_basis.time_sec
+    row['time_precompute_svd_sec'] = timers['time_svd_sec']
     row['time_invert_sec'] = timers['invert']
     row['time_total_sec'] = time.perf_counter() - start
     log.info(f"Evaluated {out_idx=} in {row['time_total_sec']} sec")
