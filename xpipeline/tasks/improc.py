@@ -96,6 +96,10 @@ def _dask_ndcube_to_rows(ndcube_list, good_pix_mask):
             parts.append(ndcube[:, good_pix_mask])
     return np.concatenate(parts)
 
+def _ensure_mask_bool(mask):
+    if mask.dtype == bool:
+        return mask
+    return mask == 1
 
 def unwrap_cube(cube, good_pix_mask):
     """Unwrap a shape (planes, ypix, xpix) `cube` and transpose into
@@ -117,7 +121,7 @@ def unwrap_cube(cube, good_pix_mask):
     """
     if len(good_pix_mask.shape) != 2 or len(cube.shape) != 3:
         raise ValueError(f"Tried to unwrap {cube.shape=} with {good_pix_mask.shape=}")
-    good_pix_mask = good_pix_mask == 1
+    good_pix_mask = _ensure_mask_bool(good_pix_mask)
     image_vecs = cube[:, good_pix_mask].T
     return image_vecs
 
@@ -142,6 +146,7 @@ def unwrap_image(image, good_pix_mask):
         to each entry in the vectorized image
     """
     xp = core.get_array_module(image)
+    good_pix_mask = _ensure_mask_bool(good_pix_mask)
     cube = unwrap_cube(image[xp.newaxis, :, :], good_pix_mask)
     return cube[:, 0]
 
@@ -164,6 +169,7 @@ def wrap_matrix(matrix, good_pix_mask, fill_value=np.nan):
     """
     xp = core.get_array_module(matrix)
     n_obs = matrix.shape[1]
+    good_pix_mask = _ensure_mask_bool(good_pix_mask)
     cube = fill_value * xp.ones((n_obs,) + good_pix_mask.shape)
     cube[:, good_pix_mask] = matrix.T
     return cube
@@ -186,6 +192,7 @@ def wrap_vector(image_vec, good_pix_mask, fill_value=np.nan):
     image : array of shape ``shape``
     """
     xp = core.get_array_module(image_vec)
+    good_pix_mask = _ensure_mask_bool(good_pix_mask)
     matrix = image_vec[:, xp.newaxis]
     cube = wrap_matrix(matrix, good_pix_mask, fill_value=fill_value)
     return cube[0]
