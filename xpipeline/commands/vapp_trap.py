@@ -247,10 +247,17 @@ def launch_grid(grid,
     image_vecs = improc.unwrap_cube(stitched_cube, model_inputs.mask)
     del stitched_cube
     image_vecs_ref = ray.put(image_vecs)
+
     # unique (r, pa, scale) for *injected*
     injection_locs = np.unique(remaining_grid[['inject_r_px', 'inject_pa_deg', 'inject_scale']])
+    # unique (inject_r, inject_pa, inject_scale, r, pa) for precomputing basis
+    precompute_locs = np.unique(remaining_grid[['inject_r_px', 'inject_pa_deg', 'inject_scale', 'r_px']])
+    # try to avoid bottlenecking submission on ram measurement
     if measure_ram:
-        ram_requirement_gb = _measure_ram(
+        # Measure injection using first location (assumes at least 1 unique value for
+        # injection parameters, even if it's zero)
+        log.debug(f"Measuring RAM use in inject_model()")
+        injection_ram_gb = _measure_ram(
             _inject_model,
             generate_options,
             image_vecs_ref,
@@ -259,7 +266,42 @@ def launch_grid(grid,
             injection_locs[0]['inject_pa_deg'],
             injection_locs[0]['inject_scale'],
         )
-        generate_options['memory'] = ram_requirement_gb * BYTES_PER_GB
+        generate_options['memory'] = injection_ram_gb * BYTES_PER_GB
+
+        # End up precomputing twice, but use the same args at least...
+        precomp_args = (
+            image_vecs_ref,  # no injection needed
+            model_inputs_ref,
+            0,  # smaller radii -> more reference pixels -> upper bound on time
+            0,  # no exclusion -> more pixels
+            max_k_modes,
+            force_gpu_decomposition,
+        )
+        # precompute to measure
+        log.debug(f"Measuring RAM use in precompute_basis()")
+        precomp_ram_gb = _measure_ram(
+            _precompute_basis,
+            decompose_options,
+            *precomp_args
+        )
+        decompose_options['memory'] = precomp_ram_gb * BYTES_PER_GB
+        # precompute to use as input for evaluate_point
+        temp_precompute_ref = precompute_basis.options(**decompose_options).remote(*precomp_args)
+
+        log.debug(f"Measuring RAM use in evaluate_point()")
+        ram_requirement_gb = _measure_ram(
+            _evaluate_point,
+            evaluate_options,
+            0,
+            remaining_grid[0],
+            image_vecs_ref,  # no injection needed
+            model_inputs_ref,
+            max_k_modes,
+            temp_precompute_ref,
+            left_pix_vec,
+            force_gpu_fit
+        )
+        evaluate_options['memory'] = ram_requirement_gb * BYTES_PER_GB
 
     made = 0
     for row in injection_locs:
@@ -277,20 +319,6 @@ def launch_grid(grid,
             made += 1
     log.debug(f"Generating {made} datasets with model planet injection")
 
-    # unique (inject_r, inject_pa, inject_scale, r, pa) for precomputing basis
-    precompute_locs = np.unique(remaining_grid[['inject_r_px', 'inject_pa_deg', 'inject_scale', 'r_px']])
-    if measure_ram:
-        ram_requirement_gb = _measure_ram(
-            _precompute_basis,
-            decompose_options,
-            image_vecs_ref,  # no injection needed
-            model_inputs_ref,
-            0,  # smaller radii -> more reference pixels -> upper bound on time
-            0,  # no exclusion -> more pixels
-            max_k_modes,
-            force_gpu_decomposition,
-        )
-        decompose_options['memory'] = ram_requirement_gb * BYTES_PER_GB
     for row in precompute_locs:
         # submit initial_decomposition with max_k_modes
         precompute_key = precompute_key_maker(row)
@@ -308,21 +336,7 @@ def launch_grid(grid,
     log.debug(f"Precomputing {len(precompute_locs)} basis sets with {max_k_modes=}")
 
     remaining_point_refs = []
-    if measure_ram:
-        log.debug(f"First measuring RAM use for evaluate_point")
-        ram_requirement_gb = _measure_ram(
-            _evaluate_point,
-            evaluate_options,
-            0,
-            remaining_grid[0],
-            image_vecs_ref,  # no injection needed
-            model_inputs_ref,
-            max_k_modes,
-            precompute_refs[precompute_key], # still set from last loop
-            left_pix_vec,
-            force_gpu_fit
-        )
-        evaluate_options['memory'] = ram_requirement_gb * BYTES_PER_GB
+
     for idx in remaining_idxs:
         row = grid[idx]
         inject_key = inject_key_maker(row)
@@ -415,16 +429,6 @@ class VappTrap(xconf.Command):
         if isinstance(self.ray, RemoteRayConfig):
             ray.init(self.ray.url)
         else:
-            # from ray.job_config import JobConfig
-            # worker_env = {
-            #     'OMP_NUM_THREADS': '1',
-            #     'MKL_NUM_THREADS': '1',
-            #     'NUMBA_NUM_THREADS': '1',
-            #     # we aren't using numba threads anyway,
-            #     # but setting this silences tbb-related fork errors:
-            #     'NUMBA_THREADING_LAYER': 'workqueue',
-            # }
-            # job_config_env = JobConfig(worker_env=worker_env)
             resources = {}
             if self.ray.ram_gb is not None:
                 resources['ram_gb'] = self.ray.ram_gb
@@ -432,7 +436,6 @@ class VappTrap(xconf.Command):
                 num_cpus=self.ray.cpus,
                 num_gpus=self.ray.gpus,
                 resources=resources,
-                # job_config=job_config_env
             )
         options = {'resources':{}}
         generate_options = options.copy()

@@ -562,7 +562,7 @@ def trap_phase_1(ref_vecs, trap_params):
     temporal_basis = mtx_v  # shape = (nframes, ncomponents)
     return TrapBasis(temporal_basis, time_sec, ref_vecs.shape[0])
 
-def trap_phase_2(image_vecs_medsub, model_vecs, temporal_basis, trap_params):
+def trap_phase_2(image_vecs_medsub, model_vecs, temporal_basis, trap_params : TrapParams):
     xp = core.get_array_module(image_vecs_medsub)
     was_gpu_array = xp is cp
     timers = {}
@@ -572,7 +572,7 @@ def trap_phase_2(image_vecs_medsub, model_vecs, temporal_basis, trap_params):
         flat_model_vecs /= model_coeff_scale
     else:
         model_coeff_scale = 1
-    if trap_params.force_gpu_inversion:
+    if trap_params.force_gpu_fit:
         temporal_basis = cp.asarray(temporal_basis)
         flat_model_vecs = cp.asarray(flat_model_vecs)
     operator_block_diag = [temporal_basis.T] * image_vecs_medsub.shape[0]

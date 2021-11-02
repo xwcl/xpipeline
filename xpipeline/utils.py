@@ -164,3 +164,7 @@ def num_cpus():
     return count
 
 CPU_COUNT = num_cpus()
+
+from matplotlib.cm import magma
+gmagma = magma.copy()
+gmagma.set_bad('gray')
