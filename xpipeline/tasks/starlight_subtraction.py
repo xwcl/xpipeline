@@ -601,17 +601,19 @@ def trap_phase_2(image_vecs_medsub, model_vecs, temporal_basis, trap_params : Tr
     log.debug(f"TRAP operator: {op}")
 
     image_megavec = image_vecs_medsub.ravel()
-    solver_kwargs = dict(damp=trap_params.damp, tol=trap_params.tol)
     log.debug(f"Performing inversion on A.shape={op.shape} and b={image_megavec.shape}")
     timers['invert'] = time.perf_counter()
-    solver = pylops.optimization.solver.cgls
-    cgls_result = solver(
-        op,
-        image_megavec,
-        xp.zeros(int(op.shape[1])),
-        **solver_kwargs
-    )
-    xinv = cgls_result[0]
+    # solver = pylops.optimization.solver.cgls
+    # solver_kwargs = dict(damp=trap_params.damp, tol=trap_params.tol)
+    # cgls_result = solver(
+    #     op,
+    #     image_megavec,
+    #     xp.zeros(int(op.shape[1])),
+    #     **solver_kwargs
+    # )
+    # xinv = cgls_result[0]
+    soln = sparse.linalg.lsqr(op, image_megavec, damp=trap_params.damp)
+    xinv = soln[0]
     timers['invert'] = time.perf_counter() - timers['invert']
     log.debug(f"Finished RegularizedInversion in {timers['invert']} sec")
     if core.get_array_module(xinv) is cp:
