@@ -128,12 +128,13 @@ def _evaluate_point(out_idx, row, inject_image_vecs, model_inputs, k_modes, prec
 evaluate_point = ray.remote(_evaluate_point)
 
 def grid_generate(k_modes_vals, covered_pix_mask, every_n_pix, companions):
+    log.debug(f"{companions=}")
+    rhos, pa_degs, xx, yy = improc.downsampled_grid_r_pa(covered_pix_mask, every_n_pix)
     # static: every_n_pix, every_t_frames, min_coverage
     # varying: k_modes, inject_r_px, inject_pa_deg, inject_scale, r_px, pa_deg, x, y
     # computed: model_coeff, time_total, time_model, time_decomp, time_fit
-    companions.append(characterization.CompanionSpec(0, 0, 0))
-    rhos, pa_degs, xx, yy = improc.downsampled_grid_r_pa(covered_pix_mask, every_n_pix)
-    grid = np.zeros(len(companions) * len(k_modes_vals) * len(rhos), dtype=[
+    n_rows = len(k_modes_vals) * len(rhos)
+    cols_dtype = [
         ('inject_r_px', float),
         ('inject_pa_deg', float),
         ('inject_scale', float),
@@ -145,20 +146,54 @@ def grid_generate(k_modes_vals, covered_pix_mask, every_n_pix, companions):
         ('pix_used', int),
         ('model_coeff', float),
         ('time_total_sec', float),
-        # ('time_gen_model_sec', float),
         ('time_precompute_svd_sec', float),
         ('time_invert_sec', float),
-    ])
-
-    for idx, (companion, k_modes, inner_idx) in enumerate(itertools.product(companions, k_modes_vals, range(len(rhos)))):
+    ]
+    grid = np.zeros(n_rows, dtype=cols_dtype)
+    for idx, (k_modes, inner_idx) in enumerate(itertools.product(k_modes_vals, range(len(rhos)))):
         grid[idx]['k_modes'] = k_modes
-        grid[idx]['inject_r_px'] = companion.r_px
-        grid[idx]['inject_pa_deg'] = companion.pa_deg
-        grid[idx]['inject_scale'] = companion.scale
         grid[idx]['r_px'] = rhos[inner_idx]
         grid[idx]['pa_deg'] = pa_degs[inner_idx]
         grid[idx]['x'] = xx[inner_idx]
         grid[idx]['y'] = yy[inner_idx]
+
+    # Strategy for companions:
+    # - compute fit coefficient at every location without injection
+    # - compute injected dataset and basis
+    # - compute fit coefficient for nearest r, pa from overall grid
+    # - compute fit coefficient for exact r, pa
+    n_comp_rows = 2 * len(k_modes_vals) * len(companions)
+    comp_grid = np.zeros(n_comp_rows, dtype=cols_dtype)
+    for cidx, companion in enumerate(companions):
+        comp_x, comp_y = characterization.r_pa_to_x_y(companion.r_px, companion.pa_deg, *improc.arr_center(covered_pix_mask))
+        nearest_grid_idx = np.argmin((grid['x'] - comp_x)**2 + (grid['y'] - comp_y)**2)
+        nearest_grid_point = grid[nearest_grid_idx]
+        log.debug(f"{nearest_grid_point=}")
+        assert nearest_grid_point['inject_scale'] == 0
+        for kidx, k_modes in enumerate(k_modes_vals):
+            grid_idx = cidx * (len(k_modes_vals) * 2) + 2 * kidx
+
+            # nearest
+            comp_grid[grid_idx]['inject_r_px'] = companion.r_px
+            comp_grid[grid_idx]['inject_pa_deg'] = companion.pa_deg
+            comp_grid[grid_idx]['inject_scale'] = companion.scale
+            comp_grid[grid_idx]['k_modes'] = k_modes
+            comp_grid[grid_idx]['r_px'] = nearest_grid_point['r_px']
+            comp_grid[grid_idx]['pa_deg'] = nearest_grid_point['pa_deg']
+            comp_grid[grid_idx]['x'] = nearest_grid_point['x']
+            comp_grid[grid_idx]['y'] = nearest_grid_point['y']
+            print(grid_idx, f"{comp_grid[grid_idx]=}")
+            # now right on the money
+            comp_grid[grid_idx + 1]['inject_r_px'] = companion.r_px
+            comp_grid[grid_idx + 1]['inject_pa_deg'] = companion.pa_deg
+            comp_grid[grid_idx + 1]['inject_scale'] = companion.scale
+            comp_grid[grid_idx + 1]['k_modes'] = k_modes
+            comp_grid[grid_idx + 1]['r_px'] = companion.r_px
+            comp_grid[grid_idx + 1]['pa_deg'] = companion.pa_deg
+            comp_grid[grid_idx + 1]['x'] = comp_x
+            comp_grid[grid_idx + 1]['y'] = comp_y
+            print(grid_idx + 1, f"{comp_grid[grid_idx + 1]=}")
+    grid = np.concatenate((grid, comp_grid))
     return grid
 
 def worker_init(num_cpus):
