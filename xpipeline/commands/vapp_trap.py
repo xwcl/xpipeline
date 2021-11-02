@@ -200,7 +200,7 @@ def launch_grid(grid,
                 model_inputs, ring_exclude_px,
                 force_gpu_decomposition, force_gpu_fit,
                 generate_options=None, decompose_options=None, evaluate_options=None,
-                measure_ram=False, ram_pad_factor=1.2):
+                measure_ram=False, efficient_decomp_reuse=False, split_bg=False):
     if generate_options is None:
         generate_options = {}
     if decompose_options is None:
@@ -225,8 +225,11 @@ def launch_grid(grid,
     # left_pix_vec is true where vector entries correspond to pixels
     # used from the left half of the image in the final stitched cube
     # for purposes of creating the two background offset terms
-    left_half, _ = vapp.mask_along_angle(model_inputs.mask.shape, clio.VAPP_PSF_ROTATION_DEG)
-    left_pix_vec = improc.unwrap_image(left_half, model_inputs.mask)
+    if split_bg:
+        left_half, _ = vapp.mask_along_angle(model_inputs.mask.shape, clio.VAPP_PSF_ROTATION_DEG)
+        left_pix_vec = improc.unwrap_image(left_half, model_inputs.mask)
+    else:
+        left_pix_vec = None
 
     model_inputs_ref = ray.put(model_inputs)
     log.debug(f"Put model inputs into Ray.")
@@ -319,21 +322,22 @@ def launch_grid(grid,
             made += 1
     log.debug(f"Generating {made} datasets with model planet injection")
 
-    for row in precompute_locs:
-        # submit initial_decomposition with max_k_modes
-        precompute_key = precompute_key_maker(row)
-        inject_key = inject_key_maker(row)
-        inject_image_vecs_ref = inject_refs[inject_key]
+    if efficient_decomp_reuse:
+        for row in precompute_locs:
+            # submit initial_decomposition with max_k_modes
+            precompute_key = precompute_key_maker(row)
+            inject_key = inject_key_maker(row)
+            inject_image_vecs_ref = inject_refs[inject_key]
 
-        precompute_refs[precompute_key] = precompute_basis.options(**decompose_options).remote(
-            inject_image_vecs_ref,
-            model_inputs_ref,
-            row['r_px'],
-            ring_exclude_px,
-            max_k_modes,
-            force_gpu_decomposition,
-        )
-    log.debug(f"Precomputing {len(precompute_locs)} basis sets with {max_k_modes=}")
+            precompute_refs[precompute_key] = precompute_basis.options(**decompose_options).remote(
+                inject_image_vecs_ref,
+                model_inputs_ref,
+                row['r_px'],
+                ring_exclude_px,
+                max_k_modes,
+                force_gpu_decomposition,
+            )
+        log.debug(f"Precomputing {len(precompute_locs)} basis sets with {max_k_modes=}")
 
     remaining_point_refs = []
 
@@ -341,8 +345,11 @@ def launch_grid(grid,
         row = grid[idx]
         inject_key = inject_key_maker(row)
         inject_ref = inject_refs[inject_key]
-        precompute_key = precompute_key_maker(row)
-        precompute_ref = precompute_refs[precompute_key]
+        if efficient_decomp_reuse:
+            precompute_key = precompute_key_maker(row)
+            precompute_ref = precompute_refs[precompute_key]
+        else:
+            precompute_ref = None
         k_modes = int(row['k_modes'])
         point_ref = evaluate_point.options(**evaluate_options).remote(
             idx,
@@ -389,6 +396,8 @@ class VappTrap(xconf.Command):
     use_gpu_fit : bool = xconf.field(default=False, help="")
     benchmark : bool = xconf.field(default=False, help="")
     benchmark_trials : int = xconf.field(default=2, help="")
+    split_bg_model : bool = xconf.field(default=True, help="Use split BG model along clio symmetry ax for vAPP")
+    efficient_decomp_reuse : bool = xconf.field(default=True, help="Use a single decomposition for all PAs at given separation by masking a ring")
     # ray_url : Optional[str] = xconf.field(help="")
     checkpoint_every_x : int = xconf.field(default=10, help="Write current state of grid to disk every X iterations")
     # max_jobs_chunk_size : int = xconf.field(default=1, help="Number of grid points to submit as single Ray task")
@@ -518,6 +527,8 @@ class VappTrap(xconf.Command):
             decompose_options=decompose_options,
             evaluate_options=evaluate_options,
             measure_ram=measure_ram,
+            efficient_decomp_reuse=self.efficient_decomp_reuse,
+            split_bg=self.split_bg_model,
         )
         if self.benchmark:
             log.debug(f"Running {self.benchmark_trials} trials...")
