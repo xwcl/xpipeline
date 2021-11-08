@@ -11,6 +11,11 @@ import math
 from scipy.signal import fftconvolve
 from scipy.interpolate import griddata
 
+try:
+    from pyfftw.interfaces import numpy_fft as fft
+except ImportError:
+    fft = np.fft
+
 from . import improc
 from .. import core
 
@@ -94,9 +99,9 @@ def generate_signals(
     outcube = np.zeros(shape, dtype=template.dtype)
     n_obs = shape[0]
     template = improc.shift2(template, 0, 0, output_shape=shape[1:])
-    ft_template = np.fft.fft2(template)
-    xfreqs = np.fft.fftfreq(shape[2])
-    yfreqs = np.fft.fftfreq(shape[1])
+    ft_template = fft.fft2(template)
+    xfreqs = fft.fftfreq(shape[2])
+    yfreqs = fft.fftfreq(shape[1])
     if template_scale_factors is None:
         template_scale_factors = np.ones(n_obs)
     if np.isscalar(template_scale_factors):
@@ -109,7 +114,7 @@ def generate_signals(
             dx = spec.r_px * np.cos(theta[i])
             dy = spec.r_px * np.sin(theta[i])
             shifter = np.exp(2j * np.pi * ((-dx * xfreqs[np.newaxis, :]) + (-dy * yfreqs[:, np.newaxis])))
-            cube_contribution = np.fft.ifft2(ft_template * shifter).real
+            cube_contribution = fft.ifft2(ft_template * shifter).real
             cube_contribution *= template_scale_factors[i] * spec.scale
             outcube[i] += cube_contribution
     return outcube
