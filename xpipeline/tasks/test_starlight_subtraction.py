@@ -166,3 +166,34 @@ def test_trap_mtx_reuse_basis(naco_betapic_data):
     _ref_value = 0.009980708465446193
     assert np.abs(coeff - _ref_value) < 1e-4 * _ref_value, "model coeff did not match value when test was written to prevent regressions"
 
+def test_trap_detection_mapping(naco_betapic_data):
+    cube = naco_betapic_data['cube']
+    avg_amp = np.average(np.sum(cube, axis=0))
+    scaled_psf = naco_betapic_data['psf'] / np.sum(naco_betapic_data['psf']) * avg_amp
+    N_POINTS = 8
+    rho, _ = improc.polar_coords(improc.arr_center(cube[0]), cube[0].shape)
+    iwa_px = 14 # just inside beta pic b in these data
+    good_pix_mask = rho > iwa_px
+    r_px = iwa_px + 5
+    pa_degs = (360 / N_POINTS) * np.arange(N_POINTS)
+    image_vecs = improc.unwrap_cube(cube, good_pix_mask)
+    trap_params = starlight_subtraction.TrapParams(k_modes=3)
+    xx = []
+    yy = []
+    coeffs = []
+    for i in range(N_POINTS):
+        model_cube = characterization.generate_signals(
+            cube.shape,
+            [characterization.CompanionSpec(r_px=r_px, pa_deg=pa_degs[i], scale=1)],
+            scaled_psf,
+            naco_betapic_data['angles']
+        )
+        model_vecs = improc.unwrap_cube(model_cube, good_pix_mask)
+        model_coeff, timers, pix_used, maybe_resid_vecs = starlight_subtraction.trap_mtx(image_vecs, model_vecs, trap_params)
+        coeffs.append(model_coeff)
+        x, y = characterization.r_pa_to_x_y(r_px, pa_degs[i], 0, 0)
+        xx.append(x)
+        yy.append(y)
+    coeffs = np.asarray(coeffs)
+    sigma = characterization.sigma_mad(coeffs)
+    assert np.count_nonzero(coeffs / sigma >= 5) == 1, "Exactly one point should be beta Pic b"
