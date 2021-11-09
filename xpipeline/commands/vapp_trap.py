@@ -106,7 +106,7 @@ def _precompute_basis(image_vecs, model_inputs : ModelInputs, r_px, ring_exclude
     return precomputed_trap_basis
 precompute_basis = ray.remote(_precompute_basis)
 
-def _evaluate_point(out_idx, row, inject_image_vecs, model_inputs, k_modes, precomputed_trap_basis, left_pix_vec, force_gpu_fit):
+def _evaluate_point(out_idx, row, inject_image_vecs, model_inputs, k_modes, precomputed_trap_basis, left_pix_vec, force_gpu_fit, use_cgls):
     start = time.perf_counter()
     row = row.copy() # since ray is r/o
     model_vecs = generate_model(model_inputs, row['r_px'], row['pa_deg'])
@@ -116,6 +116,7 @@ def _evaluate_point(out_idx, row, inject_image_vecs, model_inputs, k_modes, prec
         precomputed_basis=precomputed_trap_basis,
         background_split_mask=left_pix_vec,
         force_gpu_fit=force_gpu_fit,
+        use_cgls=use_cgls,
     )
     model_coeff, timers, pix_used, _ = starlight_subtraction.trap_mtx(inject_image_vecs, model_vecs, params)
     row['model_coeff'] = model_coeff
@@ -235,7 +236,7 @@ def launch_grid(grid,
                 model_inputs, ring_exclude_px,
                 force_gpu_decomposition, force_gpu_fit,
                 generate_options=None, decompose_options=None, evaluate_options=None,
-                measure_ram=False, efficient_decomp_reuse=False, split_bg=False):
+                measure_ram=False, efficient_decomp_reuse=False, split_bg=False, use_cgls=False):
     if generate_options is None:
         generate_options = {}
     if decompose_options is None:
@@ -395,6 +396,7 @@ def launch_grid(grid,
             precompute_ref,
             left_pix_vec,
             force_gpu_fit,
+            use_cgls,
         )
         remaining_point_refs.append(point_ref)
     log.debug(f"Applying TRAP++ for {len(remaining_idxs)} points in the parameter grid")
@@ -429,6 +431,7 @@ class VappTrap(xconf.Command):
     # ram_gb_for_evaluate : Optional[float] = xconf.field(default=None, help="")
     use_gpu_decomposition : bool = xconf.field(default=False, help="")
     use_gpu_fit : bool = xconf.field(default=False, help="")
+    use_cgls : bool = xconf.field(default=False, help="")
     benchmark : bool = xconf.field(default=False, help="")
     benchmark_trials : int = xconf.field(default=2, help="")
     split_bg_model : bool = xconf.field(default=True, help="Use split BG model along clio symmetry ax for vAPP")
@@ -564,6 +567,7 @@ class VappTrap(xconf.Command):
             measure_ram=measure_ram,
             efficient_decomp_reuse=self.efficient_decomp_reuse,
             split_bg=self.split_bg_model,
+            use_cgls=self.use_cgls,
         )
         if self.benchmark:
             log.debug(f"Running {self.benchmark_trials} trials...")
