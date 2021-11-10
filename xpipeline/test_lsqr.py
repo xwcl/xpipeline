@@ -39,34 +39,57 @@ from numpy.testing import assert_allclose, assert_array_equal, assert_equal
 import pytest
 import scipy.sparse
 import scipy.sparse.linalg
-from scipy.sparse.linalg import lsqr
+from .lsqr import lsqr
 from time import time
 
-# Set up a test problem
+from .core import cupy, HAVE_CUPY
+
 n = 35
-G = np.eye(n)
-normal = np.random.normal
-norm = np.linalg.norm
 
-for jj in range(5):
-    gg = normal(size=n)
-    hh = gg * gg.T
-    G += (hh + hh.T) * 0.5
-    G += normal(size=n) * normal(size=n)
 
-b = normal(size=n)
+def make_G():
+    # Set up a test problem
+    G = np.eye(n)
+    normal = np.random.normal
+    norm = np.linalg.norm
+
+    for jj in range(5):
+        gg = normal(size=n)
+        hh = gg * gg.T
+        G += (hh + hh.T) * 0.5
+        G += normal(size=n) * normal(size=n)
+    return G
+
+G = pytest.fixture(make_G)
+
+def make_b():
+    return np.random.normal(size=n)
+b = pytest.fixture(make_b)
 
 tol = 1e-10
 show = False
 maxit = None
 
-
-def test_basic():
+@pytest.mark.parametrize('xp', [
+    pytest.param(cupy, marks=pytest.mark.skipif(not HAVE_CUPY, reason="No GPU support")),
+    np
+])
+def test_basic(xp, G, b):
+    # compute with normal dense solver
+    svx = np.linalg.solve(G, b)
+    # move to GPU if needed
+    G = xp.asarray(G)
+    b = xp.asarray(b)
     b_copy = b.copy()
     xo, *_ = lsqr(G, b, show=show, atol=tol, btol=tol, iter_lim=maxit)
-    assert_array_equal(b_copy, b)
+    if xp is cupy:
+        assert_array_equal(b_copy.get(), b.get())
+    else:
+        assert_array_equal(b_copy, b)
 
-    svx = np.linalg.solve(G, b)
+    # compare to dense solver
+    if xp is cupy:
+        xo = xo.get()
     assert_allclose(xo, svx, atol=tol, rtol=tol)
 
     # Now the same but with damp > 0.
@@ -77,9 +100,12 @@ def test_basic():
     xo, *_ = lsqr(
         G, b, damp=damp, show=show, atol=tol, btol=tol, iter_lim=maxit)
 
-    Gext = np.r_[G, damp * np.eye(G.shape[1])]
-    bext = np.r_[b, np.zeros(G.shape[1])]
-    svx, *_ = np.linalg.lstsq(Gext, bext, rcond=None)
+    Gext = xp.r_[G, damp * np.eye(G.shape[1])]
+    bext = xp.r_[b, np.zeros(G.shape[1])]
+    svx, *_ = xp.linalg.lstsq(Gext, bext, rcond=None)
+    if xp is cupy:
+        xo = xo.get()
+        svx = svx.get()
     assert_allclose(xo, svx, atol=tol, rtol=tol)
 
 
@@ -92,19 +118,28 @@ def test_gh_2466():
     lsqr(A, b)
 
 
-def test_well_conditioned_problems():
+@pytest.mark.parametrize('xp', [
+    pytest.param(cupy, marks=pytest.mark.skipif(not HAVE_CUPY, reason="No GPU support")),
+    np
+])
+def test_well_conditioned_problems(xp):
     # Test that sparse the lsqr solver returns the right solution
     # on various problems with different random seeds.
     # This is a non-regression test for a potential ZeroDivisionError
     # raised when computing the `test2` & `test3` convergence conditions.
     n = 10
-    A_sparse = scipy.sparse.eye(n, n)
+    if HAVE_CUPY and xp is cupy:
+        import cupyx.scipy.sparse
+        sparse = cupyx.scipy.sparse
+    else:
+        sparse = scipy.sparse
+    A_sparse = sparse.eye(n, n)
     A_dense = A_sparse.toarray()
 
     with np.errstate(invalid='raise'):
         for seed in range(30):
             rng = np.random.RandomState(seed + 10)
-            beta = rng.rand(n)
+            beta = xp.asarray(rng.rand(n))
             beta[beta == 0] = 0.00001  # ensure that all the betas are not null
             b = A_sparse @ beta[:, np.newaxis]
             output = lsqr(A_sparse, b, show=show)
@@ -115,28 +150,46 @@ def test_well_conditioned_problems():
             solution = output[0]
 
             # Check that we recover the ground truth solution
-            assert_allclose(solution, beta)
+            if xp is cupy:
+                assert_allclose(solution.get(), beta.get())
+            else:
+                assert_allclose(solution, beta)
 
             # Sanity check: compare to the dense array solver
-            reference_solution = np.linalg.solve(A_dense, b).ravel()
-            assert_allclose(solution, reference_solution)
+            reference_solution = xp.linalg.solve(A_dense, b).ravel()
+            if xp is cupy:
+                assert_allclose(solution.get(), reference_solution.get())
+            else:
+                assert_allclose(solution, reference_solution)
 
-
-def test_b_shapes():
+@pytest.mark.parametrize('xp', [
+    pytest.param(cupy, marks=pytest.mark.skipif(not HAVE_CUPY, reason="No GPU support")),
+    np
+])
+def test_b_shapes(xp):
     # Test b being a scalar.
-    A = np.array([[1.0, 2.0]])
+    A = xp.array([[1.0, 2.0]])
     b = 3.0
     x = lsqr(A, b)[0]
-    assert norm(A.dot(x) - b) == pytest.approx(0)
+    diffnorm = xp.linalg.norm(A.dot(x) - b)
+    if xp is cupy:
+        diffnorm = diffnorm.get()
+    assert diffnorm == pytest.approx(0)
 
     # Test b being a column vector.
     A = np.eye(10)
     b = np.ones((10, 1))
     x = lsqr(A, b)[0]
-    assert norm(A.dot(x) - b.ravel()) == pytest.approx(0)
+    diffnorm = xp.linalg.norm(A.dot(x) - b.ravel())
+    if xp is cupy:
+        diffnorm = diffnorm.get()
+    assert diffnorm == pytest.approx(0)
 
-
-def test_initialization():
+# @pytest.mark.parametrize('xp', [
+#     pytest.param(cupy, marks=pytest.mark.skipif(not HAVE_CUPY, reason="No GPU support")),
+#     np
+# ])
+def test_initialization(G, b):
     # Test the default setting is the same as zeros
     b_copy = b.copy()
     x_ref = lsqr(G, b, show=show, atol=tol, btol=tol, iter_lim=maxit)
@@ -153,6 +206,7 @@ def test_initialization():
 
 
 if __name__ == "__main__":
+    G, b = make_G(), make_b()
     svx = np.linalg.solve(G, b)
 
     tic = time()

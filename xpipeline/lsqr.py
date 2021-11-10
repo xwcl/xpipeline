@@ -56,11 +56,11 @@ Adapted for SciPy by Stefan van der Walt.
 __all__ = ['lsqr']
 
 import numpy as np
-from math import sqrt
-from scipy.sparse.linalg.interface import aslinearoperator
+from math import sqrt, copysign
+import scipy.sparse
+from .core import get_array_module, HAVE_CUPY, cupy
 
-eps = np.finfo(np.float64).eps
-
+sign = lambda x: copysign(1, x)
 
 def _sym_ortho(a, b):
     """
@@ -80,25 +80,26 @@ def _sym_ortho(a, b):
            http://www.stanford.edu/group/SOL/dissertations/sou-cheng-choi-thesis.pdf
 
     """
+    # xp = get_array_module(a)
     if b == 0:
-        return np.sign(a), 0, abs(a)
+        return sign(a), 0, abs(a)
     elif a == 0:
-        return 0, np.sign(b), abs(b)
+        return 0, sign(b), abs(b)
     elif abs(b) > abs(a):
         tau = a / b
-        s = np.sign(b) / sqrt(1 + tau * tau)
+        s = sign(b) / sqrt(1 + tau * tau)
         c = s * tau
         r = b / s
     else:
         tau = b / a
-        c = np.sign(a) / sqrt(1+tau*tau)
+        c = sign(a) / sqrt(1+tau*tau)
         s = c * tau
         r = a / c
     return c, s, r
 
 
 def lsqr(A, b, damp=0.0, atol=1e-6, btol=1e-6, conlim=1e8,
-         iter_lim=None, show=False, calc_var=False, x0=None):
+         iter_lim=None, show=False, calc_var=False, x0=None, default_float='float32'):
     """Find the least-squares solution to a large, sparse, linear system
     of equations.
 
@@ -322,15 +323,24 @@ def lsqr(A, b, damp=0.0, atol=1e-6, btol=1e-6, conlim=1e8,
     approximate solution to the corresponding least-squares problem. `r1norm`
     contains the norm of the minimal residual that was found.
     """
-    A = aslinearoperator(A)
-    b = np.atleast_1d(b)
+    xp = get_array_module(A)
+    if HAVE_CUPY and xp is cupy:
+        from cupyx.scipy.sparse import linalg
+    else:
+        linalg = scipy.sparse.linalg
+    A = linalg.aslinearoperator(A)
+    b = xp.atleast_1d(b)
     if b.ndim > 1:
         b = b.squeeze()
+    try:
+        eps = xp.finfo(b.dtype).eps
+    except ValueError:
+        eps = xp.finfo(getattr(xp, default_float)).eps
 
     m, n = A.shape
     if iter_lim is None:
         iter_lim = 2 * n
-    var = np.zeros(n)
+    var = xp.zeros(n)
 
     msg = ('The exact solution is  x = 0                              ',
            'Ax - b is small enough, given atol, btol                  ',
@@ -372,20 +382,20 @@ def lsqr(A, b, damp=0.0, atol=1e-6, btol=1e-6, conlim=1e8,
     # Set up the first vectors u and v for the bidiagonalization.
     # These satisfy  beta*u = b - A@x,  alfa*v = A'@u.
     u = b
-    bnorm = np.linalg.norm(b)
+    bnorm = xp.linalg.norm(b)
 
     if x0 is None:
-        x = np.zeros(n)
+        x = xp.zeros(n)
         beta = bnorm.copy()
     else:
-        x = np.asarray(x0)
+        x = xp.asarray(x0)
         u = u - A.matvec(x)
-        beta = np.linalg.norm(u)
+        beta = xp.linalg.norm(u)
 
     if beta > 0:
         u = (1/beta) * u
         v = A.rmatvec(u)
-        alfa = np.linalg.norm(v)
+        alfa = xp.linalg.norm(v)
     else:
         v = x.copy()
         alfa = 0
@@ -429,13 +439,13 @@ def lsqr(A, b, damp=0.0, atol=1e-6, btol=1e-6, conlim=1e8,
         #     beta*u  =  a@v   -  alfa*u,
         #     alfa*v  =  A'@u  -  beta*v.
         u = A.matvec(v) - alfa * u
-        beta = np.linalg.norm(u)
+        beta = xp.linalg.norm(u)
 
         if beta > 0:
             u = (1/beta) * u
             anorm = sqrt(anorm**2 + alfa**2 + beta**2 + dampsq)
             v = A.rmatvec(u) - beta * v
-            alfa = np.linalg.norm(v)
+            alfa = xp.linalg.norm(v)
             if alfa > 0:
                 v = (1 / alfa) * v
 
@@ -469,7 +479,7 @@ def lsqr(A, b, damp=0.0, atol=1e-6, btol=1e-6, conlim=1e8,
 
         x = x + t1 * w
         w = v + t2 * w
-        ddnorm = ddnorm + np.linalg.norm(dk)**2
+        ddnorm = ddnorm + xp.linalg.norm(dk)**2
 
         if calc_var:
             var = var + dk**2
