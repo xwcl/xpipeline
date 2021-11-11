@@ -43,7 +43,10 @@ setup(
         'sphinx-rtd-theme>=0.4.3',
         'python-dateutil>=2.8.1,<3',
         'dacite>=1.6.0,<2.0',
-        'numba>=0.53,<1.0'
+        'numba>=0.53,<1.0',
+        'memory-profiler>=0.58.0',
+        'ray>=1.8',
+        'pylops>=1.14,<2.0',
     ],
     entry_points={
         'console_scripts': [
