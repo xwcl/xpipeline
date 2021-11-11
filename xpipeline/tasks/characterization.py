@@ -498,7 +498,7 @@ def sigma_mad(points):
     xp = core.get_array_module(points)
     return 1.48 * xp.median(xp.abs(points - xp.median(points)))
 
-def detection_map_from_table(tbl, coverage_mask, ring_px=3, **kwargs):
+def detection_map_from_table(tbl, coverage_mask, ring_px=3, exclude_rows_mask=None, **kwargs):
     '''
     Parameters
     ----------
@@ -524,6 +524,8 @@ def detection_map_from_table(tbl, coverage_mask, ring_px=3, **kwargs):
     for kwarg in kwargs:
         mask = tbl[kwarg] == kwargs[kwarg]
         tbl = tbl[mask]
+        if exclude_rows_mask is not None:
+            exclude_rows_mask = exclude_rows_mask[mask]
     if not len(tbl):
         raise ValueError(f"No points matching {kwargs}")
     yy, xx = np.indices(coverage_mask.shape, dtype=float)
@@ -533,7 +535,10 @@ def detection_map_from_table(tbl, coverage_mask, ring_px=3, **kwargs):
     emp_snr = tbl['model_coeff'].copy()
     for r_px in np.unique(tbl['r_px']):
         ring_mask = np.abs(tbl['r_px'] - r_px) < ring_px
-        ring_values = tbl['model_coeff'][ring_mask]
+        if exclude_rows_mask is not None:
+            ring_values = tbl['model_coeff'][ring_mask & ~exclude_rows_mask]
+        else:
+            ring_values = tbl['model_coeff'][ring_mask]
         new_sigma = sigma_mad(ring_values)
         emp_snr[tbl['r_px'] == r_px] /= new_sigma
     outim = griddata(points, emp_snr, newpoints).reshape(coverage_mask.shape)
