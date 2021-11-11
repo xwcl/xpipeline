@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 import dask.array as da
-from .. import constants
+from .. import utils
 from . import improc
 from .improc import (
     rough_peak_in_box,
@@ -197,6 +197,10 @@ def test_encircled_energy_radial_profile():
     assert len(profile_values) == 1, "Profile should be identically 1 at all radii"
     assert profile_values[0] == 1, "Profile should be identically 1 at all radii"
 
+@pytest.mark.skipif(
+    not utils.version_greater_or_equal(np.__version__, "1.21"),
+    reason="period= arg to unwrap arrived in NumPy 1.21"
+)
 def test_combine_ranges():
     data = np.zeros((6, 3, 3))
     angles = np.zeros(6)

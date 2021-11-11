@@ -168,3 +168,6 @@ CPU_COUNT = num_cpus()
 from matplotlib.cm import magma
 gmagma = magma.copy()
 gmagma.set_bad('gray')
+from pkg_resources import packaging
+def version_greater_or_equal(version_a, version_b):
+    return packaging.version.parse(version_a) >= packaging.version.parse(version_b)

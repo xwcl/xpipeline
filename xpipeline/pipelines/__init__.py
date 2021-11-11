@@ -4,7 +4,6 @@ import numpy as np
 import typing
 import dask
 import dask.array as da
-import pandas as pd
 from typing import List, Union, Optional
 
 from .. import constants as const

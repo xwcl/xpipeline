@@ -99,7 +99,8 @@ def _sym_ortho(a, b):
 
 
 def lsqr(A, b, damp=0.0, atol=1e-6, btol=1e-6, conlim=1e8,
-         iter_lim=None, show=False, calc_var=False, x0=None, default_float='float32'):
+         iter_lim=None, show=False, calc_var=False, x0=None,
+         default_float='float64'):
     """Find the least-squares solution to a large, sparse, linear system
     of equations.
 
@@ -167,6 +168,10 @@ def lsqr(A, b, damp=0.0, atol=1e-6, btol=1e-6, conlim=1e8,
         Initial guess of x, if None zeros are used. Default is None.
 
         .. versionadded:: 1.0.0
+    default_float : 'float32' or 'float64', optional
+        Determining machine epsilon when passed an exact type (like an
+        integer) requires choosing which inexact type to use
+        (default: 'float64')
 
     Returns
     -------
@@ -323,7 +328,7 @@ def lsqr(A, b, damp=0.0, atol=1e-6, btol=1e-6, conlim=1e8,
     approximate solution to the corresponding least-squares problem. `r1norm`
     contains the norm of the minimal residual that was found.
     """
-    xp = get_array_module(A)
+    xp = get_array_module(b)
     if HAVE_CUPY and xp is cupy:
         from cupyx.scipy.sparse import linalg
     else:

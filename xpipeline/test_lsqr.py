@@ -39,6 +39,7 @@ from numpy.testing import assert_allclose, assert_array_equal, assert_equal
 import pytest
 import scipy.sparse
 import scipy.sparse.linalg
+import pylops
 from .lsqr import lsqr
 from time import time
 
@@ -108,6 +109,20 @@ def test_basic(xp, G, b):
         svx = svx.get()
     assert_allclose(xo, svx, atol=tol, rtol=tol)
 
+@pytest.mark.parametrize('xp', [
+    pytest.param(cupy, marks=pytest.mark.skipif(not HAVE_CUPY, reason="No GPU support")),
+    np
+])
+def test_pylops(xp, G, b):
+    G = xp.asarray(G)
+    b = xp.asarray(b)
+    svx = xp.linalg.solve(G, b)
+    svx2 = xp.tile(svx, 2)
+    G2 = pylops.BlockDiag([G, G])
+    b2 = xp.tile(b, 2)
+    xo, *_ = lsqr(G2, b2, show=show, atol=tol, btol=tol, iter_lim=maxit)
+    assert xp.allclose(xo, svx2, atol=tol, rtol=tol)
+
 
 def test_gh_2466():
     row = np.array([0, 0])
@@ -169,7 +184,7 @@ def test_well_conditioned_problems(xp):
 def test_b_shapes(xp):
     # Test b being a scalar.
     A = xp.array([[1.0, 2.0]])
-    b = 3.0
+    b = xp.array([3.0])[0]
     x = lsqr(A, b)[0]
     diffnorm = xp.linalg.norm(A.dot(x) - b)
     if xp is cupy:
@@ -177,8 +192,8 @@ def test_b_shapes(xp):
     assert diffnorm == pytest.approx(0)
 
     # Test b being a column vector.
-    A = np.eye(10)
-    b = np.ones((10, 1))
+    A = xp.eye(10)
+    b = xp.ones((10, 1))
     x = lsqr(A, b)[0]
     diffnorm = xp.linalg.norm(A.dot(x) - b.ravel())
     if xp is cupy:

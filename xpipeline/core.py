@@ -29,10 +29,12 @@ except ImportError:
 
 try:
     import cupy
+    import cupyx
     HAVE_CUPY = True
 except ImportError:
     HAVE_CUPY = False
     cupy = YellingProxy("cupy")
+    cupyx = YellingProxy("cupyx")
 
 try:
     import torch
@@ -66,8 +68,9 @@ def set_num_mkl_threads(n_mkl_threads):
             log.debug(f'No MKL service, {n_mkl_threads=} will have no effect (install mkl-service?)')
 
 def get_array_module(arr):
-    """Returns `dask.array` if `arr` is a `dask.array.core.Array`, or
-    numpy if `arr` is a NumPy ndarray.
+    """Returns a module implementing the NumPy API appropriate to
+    `arr` (i.e. ``numpy``, ``dask.array``, or ``cupy``, depending on
+    what kind of array).
 
     Use to write code that can handle both, e.g.::
 
@@ -76,12 +79,12 @@ def get_array_module(arr):
     """
     if isinstance(arr, da.Array):
         return da
-    if HAVE_CUPY and isinstance(arr, cupy.ndarray):
+    if HAVE_CUPY and (
+        isinstance(arr, cupy.ndarray) or
+        isinstance(arr, cupyx.scipy.sparse.spmatrix)
+    ):
         return cupy
-    elif isinstance(arr, numpy.ndarray):
-        return numpy
-    else:
-        raise ValueError(f"Unrecognized type {type(arr)} passed to get_array_module")
+    return numpy
 
 
 def _is_iterable_arg(obj):

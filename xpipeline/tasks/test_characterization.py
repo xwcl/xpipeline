@@ -12,6 +12,8 @@ from .characterization import (
 )
 from . import improc, learning, characterization, starlight_subtraction
 from .. import core, pipelines, constants
+from .test_common import naco_betapic_data
+naco_betapic_data
 
 log = logging.getLogger(__name__)
 
@@ -91,11 +93,8 @@ def test_inject_signals():
     (constants.KlipStrategy.SVD, True, 4.41, None),
     (constants.KlipStrategy.DOWNDATE_SVD, False, 8.41, None),
 ])
-def test_end_to_end(strategy, reuse, snr_threshold, decomposer):
-    res_handle = resources.open_binary(
-        "xpipeline.ref", "naco_betapic_preproc_absil2013_gonzalez2017.npz"
-    )
-    data = np.load(res_handle)
+def test_end_to_end(strategy, reuse, snr_threshold, decomposer, naco_betapic_data):
+    data = naco_betapic_data
     n_modes = 50
     threshold = 2200  # fake, just to test masking
     good_pix_mask = np.average(data["cube"], axis=0) < threshold
@@ -234,3 +233,44 @@ def test_calc_snr_image_nan():
     snr_image, _ = characterization.calc_snr_image(image, aperture_diameter_px, data_min_r_px=13, data_max_r_px=55, exclude_nearest=1)
     recovered_peak2 = np.unravel_index(np.argmax(snr_image), snr_image.shape)
     assert recovered_peak == recovered_peak2
+
+@pytest.mark.parametrize('force_gpu_fit', [
+    pytest.param(True, marks=pytest.mark.skipif(not core.HAVE_CUPY, reason="No GPU support")),
+    False
+])
+@pytest.mark.parametrize('use_cgls', [True, False])
+def test_trap_detection_mapping(naco_betapic_data, use_cgls, force_gpu_fit):
+    cube = naco_betapic_data['cube']
+    avg_amp = np.average(np.sum(cube, axis=0))
+    scaled_psf = naco_betapic_data['psf'] / np.sum(naco_betapic_data['psf']) * avg_amp
+    N_POINTS = 8
+    rho, _ = improc.polar_coords(improc.arr_center(cube[0]), cube[0].shape)
+    iwa_px = 14 # just inside beta pic b in these data
+    good_pix_mask = rho > iwa_px
+    r_px = iwa_px + 5
+    pa_degs = (360 / N_POINTS) * np.arange(N_POINTS)
+    image_vecs = improc.unwrap_cube(cube, good_pix_mask)
+    trap_params = starlight_subtraction.TrapParams(
+        k_modes=3,
+        use_cgls=use_cgls,
+        force_gpu_fit=force_gpu_fit,
+    )
+    xx = []
+    yy = []
+    coeffs = []
+    for i in range(N_POINTS):
+        model_cube = characterization.generate_signals(
+            cube.shape,
+            [characterization.CompanionSpec(r_px=r_px, pa_deg=pa_degs[i], scale=1)],
+            scaled_psf,
+            naco_betapic_data['angles']
+        )
+        model_vecs = improc.unwrap_cube(model_cube, good_pix_mask)
+        model_coeff, timers, pix_used, maybe_resid_vecs = starlight_subtraction.trap_mtx(image_vecs, model_vecs, trap_params)
+        coeffs.append(model_coeff)
+        x, y = characterization.r_pa_to_x_y(r_px, pa_degs[i], 0, 0)
+        xx.append(x)
+        yy.append(y)
+    coeffs = np.asarray(coeffs)
+    sigma = characterization.sigma_mad(coeffs)
+    assert np.count_nonzero(coeffs / sigma >= 5) == 1, "Exactly one point should be beta Pic b"

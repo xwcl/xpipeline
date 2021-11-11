@@ -606,6 +606,7 @@ def trap_phase_2(image_vecs_medsub, model_vecs, temporal_basis, trap_params : Tr
     timers['invert'] = time.perf_counter()
     if trap_params.use_cgls:
         solver = pylops.optimization.solver.cgls
+        log.debug(f"{solver=}")
         solver_kwargs = dict(damp=trap_params.damp, tol=trap_params.tol)
         cgls_result = solver(
             op,
@@ -615,7 +616,12 @@ def trap_phase_2(image_vecs_medsub, model_vecs, temporal_basis, trap_params : Tr
         )
         xinv = cgls_result[0]
     else:
-        soln = sparse.linalg.lsqr(op, image_megavec, atol=trap_params.tol, damp=trap_params.damp)
+        if was_gpu_array or trap_params.force_gpu_fit:
+            solver = pylops.optimization.solver.lsqr
+        else:
+            solver = sparse.linalg.lsqr
+        log.debug(f"{solver=}")
+        soln = solver(op, image_megavec, x0=None, atol=trap_params.tol, damp=trap_params.damp)
         xinv = soln[0]
     timers['invert'] = time.perf_counter() - timers['invert']
     log.debug(f"Finished RegularizedInversion in {timers['invert']} sec")
