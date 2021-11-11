@@ -16,7 +16,7 @@ import time
 import memory_profiler
 from ..core import get_array_module
 from ..core import cupy as cp
-from .. import core, utils, constants
+from .. import core, utils, constants, lsqr
 from . import learning, improc, characterization
 
 @njit(cache=True)
@@ -616,12 +616,7 @@ def trap_phase_2(image_vecs_medsub, model_vecs, temporal_basis, trap_params : Tr
         )
         xinv = cgls_result[0]
     else:
-        if was_gpu_array or trap_params.force_gpu_fit:
-            solver = pylops.optimization.solver.lsqr
-        else:
-            solver = sparse.linalg.lsqr
-        log.debug(f"{solver=}")
-        soln = solver(op, image_megavec, x0=None, atol=trap_params.tol, damp=trap_params.damp)
+        soln = lsqr.lsqr(op, image_megavec, x0=None, atol=trap_params.tol, damp=trap_params.damp)
         xinv = soln[0]
     timers['invert'] = time.perf_counter() - timers['invert']
     log.debug(f"Finished RegularizedInversion in {timers['invert']} sec")
