@@ -24,6 +24,15 @@ class LocalRayConfig:
     gpus : Optional[int] = xconf.field(default=None, help="GPUs available to built-in Ray cluster (default is auto-detected)")
     ram_gb : Optional[float] = xconf.field(default=None, help="RAM available to built-in Ray cluster")
 
+
+@xconf.config
+class ContrastProbesConfig:
+    n_radii : int = xconf.field(help="Number of steps in radius at which to probe contrast")
+    spacing_px : float = xconf.field(help="Spacing in pixels between contrast probes along circle (sets number of probes at radius by 2 * pi * r / spacing)")
+    scales : list[float] = xconf.field(help="Probe contrast levels (C = companion / host)")
+    iwa_px : float = xconf.field(help="Inner working angle (px)")
+    owa_px : float = xconf.field(help="Outer working angle (px)")
+
 @xconf.config
 class RemoteRayConfig:
     url : str = xconf.field(help="URL to existing Ray cluster head node")
@@ -43,6 +52,28 @@ class ModelInputs:
     right_scales : np.ndarray
     angles : np.ndarray
     mask : np.ndarray
+
+def generate_probes(config : Optional[ContrastProbesConfig]):
+    '''Generator returning CompanionSpec objects for
+    radii / PA / contrast scales that cover the region from iwa to owa
+    in steps as specificed by `config`
+
+    When config.n_radii == 1, only iwa_px matters
+    '''
+    if config is None:
+        return []
+    iwa_px, owa_px = config.iwa_px, config.owa_px
+    radii_dpx = (owa_px - iwa_px) / config.n_radii
+    for i in range(config.n_radii):
+        r_px = iwa_px + i * radii_dpx
+        circumference = np.pi * 2 * r_px
+        n_probes = int(circumference // config.spacing_px)
+        angles_ddeg = 360 / n_probes
+        for j in range(n_probes):
+            pa_deg = j * angles_ddeg
+            for scl in config.scales:
+                yield characterization.CompanionSpec(r_px, pa_deg, scl)
+
 
 def generate_model(model_inputs : ModelInputs, companion_r_px, companion_pa_deg):
     companion_spec = characterization.CompanionSpec(companion_r_px, companion_pa_deg, 1.0)
@@ -128,8 +159,8 @@ def _evaluate_point(out_idx, row, inject_image_vecs, model_inputs, k_modes, prec
     return out_idx, row
 evaluate_point = ray.remote(_evaluate_point)
 
-def grid_generate(k_modes_vals, covered_pix_mask, every_n_pix, companions):
-    log.debug(f"{companions=}")
+def grid_generate(k_modes_vals, covered_pix_mask, every_n_pix, contrast_probes_config):
+    log.debug(f"{contrast_probes_config=}")
     rhos, pa_degs, xx, yy = improc.downsampled_grid_r_pa(covered_pix_mask, every_n_pix)
     # static: every_n_pix, every_t_frames, min_coverage
     # varying: k_modes, inject_r_px, inject_pa_deg, inject_scale, r_px, pa_deg, x, y
@@ -158,23 +189,22 @@ def grid_generate(k_modes_vals, covered_pix_mask, every_n_pix, companions):
         grid[idx]['x'] = xx[inner_idx]
         grid[idx]['y'] = yy[inner_idx]
 
-    # Strategy for companions:
-    # - compute fit coefficient at every location without injection
-    # - compute injected dataset and basis
-    # - compute fit coefficient for nearest r, pa from overall grid
-    # - compute fit coefficient for exact r, pa
-    n_comp_rows = 2 * len(k_modes_vals) * len(companions)
+    probes = list(generate_probes(contrast_probes_config))
+    n_comp_rows = 2 * len(k_modes_vals) * len(probes)
+    log.debug(f"Evaluating {len(probes)} positions/contrast levels at {len(k_modes_vals)} k values and 2 map locations")
     comp_grid = np.zeros(n_comp_rows, dtype=cols_dtype)
-    for cidx, companion in enumerate(companions):
+    # for every probe location and value for scale:
+    for cidx, companion in enumerate(probes):
         comp_x, comp_y = characterization.r_pa_to_x_y(companion.r_px, companion.pa_deg, *improc.arr_center(covered_pix_mask))
         nearest_grid_idx = np.argmin((grid['x'] - comp_x)**2 + (grid['y'] - comp_y)**2)
         nearest_grid_point = grid[nearest_grid_idx]
         log.debug(f"{nearest_grid_point=}")
         assert nearest_grid_point['inject_scale'] == 0
+        # for every number of modes:
         for kidx, k_modes in enumerate(k_modes_vals):
             grid_idx = cidx * (len(k_modes_vals) * 2) + 2 * kidx
 
-            # nearest
+            # - compute fit coefficient for nearest r, pa from overall grid
             comp_grid[grid_idx]['inject_r_px'] = companion.r_px
             comp_grid[grid_idx]['inject_pa_deg'] = companion.pa_deg
             comp_grid[grid_idx]['inject_scale'] = companion.scale
@@ -184,7 +214,7 @@ def grid_generate(k_modes_vals, covered_pix_mask, every_n_pix, companions):
             comp_grid[grid_idx]['x'] = nearest_grid_point['x']
             comp_grid[grid_idx]['y'] = nearest_grid_point['y']
             print(grid_idx, f"{comp_grid[grid_idx]=}")
-            # now right on the money
+            # - compute fit coefficient for exact r, pa
             comp_grid[grid_idx + 1]['inject_r_px'] = companion.r_px
             comp_grid[grid_idx + 1]['inject_pa_deg'] = companion.pa_deg
             comp_grid[grid_idx + 1]['inject_scale'] = companion.scale
@@ -338,7 +368,8 @@ def launch_grid(grid,
             max_k_modes,
             temp_precompute_ref,
             left_pix_vec,
-            force_gpu_fit
+            force_gpu_fit,
+            use_cgls,
         )
         evaluate_options['memory'] = ram_requirement_gb * BYTES_PER_GB
 
@@ -417,7 +448,8 @@ class VappTrap(xconf.Command):
     left_mask : FitsConfig = xconf.field(help="")
     right_mask : FitsConfig = xconf.field(help="")
     angles : Union[FitsConfig,FitsTableColumnConfig] = xconf.field(help="")
-    companions : list[CompanionConfig] = xconf.field(default_factory=list, help="")
+    contrast_probes : Optional[ContrastProbesConfig] = xconf.field(default=None, help="")
+    # companions : list[CompanionConfig] = xconf.field(default_factory=list, help="")
     min_coverage_frac : float = xconf.field(help="")
     ray : Union[LocalRayConfig,RemoteRayConfig] = xconf.field(
         default=LocalRayConfig(),
@@ -534,7 +566,7 @@ class VappTrap(xconf.Command):
             self.k_modes_vals,
             covered_pix_mask,
             self.every_n_pix,
-            self.companions
+            self.contrast_probes,
         )
         if not self.benchmark:
             try:
@@ -553,6 +585,7 @@ class VappTrap(xconf.Command):
             grid = grid[bench_mask][:self.benchmark_trials]
 
         # submit tasks for every grid point
+        start_time = time.time()
         result_refs = launch_grid(
             grid,
             left_cube,
@@ -586,7 +619,11 @@ class VappTrap(xconf.Command):
                 grid[idx] = result
             if len(complete):
                 n_complete += len(complete)
-                log.debug(f"{n_complete=} / {total=}")
+                dt = time.time() - start_time
+                complete_per_sec = n_complete / dt
+                sec_per_point = 1/complete_per_sec
+                est_remaining = sec_per_point * (total - n_complete)
+                log.debug(f"{n_complete=} / {total=} ({complete_per_sec=} {sec_per_point=}, {est_remaining=} sec or {est_remaining/60} min)")
                 with open("./grid.fits~", 'wb') as fh:
                     hdu = fits.BinTableHDU(grid, name='grid')
                     hdu.writeto(fh)

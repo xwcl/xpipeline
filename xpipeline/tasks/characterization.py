@@ -9,7 +9,7 @@ import numba
 from numba import njit
 import math
 from scipy.signal import fftconvolve
-from scipy.interpolate import griddata
+from scipy.interpolate import griddata, interp1d
 
 try:
     from pyfftw.interfaces import numpy_fft as fft
@@ -498,6 +498,22 @@ def sigma_mad(points):
     xp = core.get_array_module(points)
     return 1.48 * xp.median(xp.abs(points - xp.median(points)))
 
+def _scale_trap_noise(tbl, ring_px, exclude_rows_mask):
+    emp_snr = tbl['model_coeff'].copy()
+    radii = []
+    sigmas = []
+    for r_px in np.unique(tbl['r_px']):
+        ring_mask = np.abs(tbl['r_px'] - r_px) < ring_px
+        if exclude_rows_mask is not None:
+            ring_values = tbl['model_coeff'][ring_mask & ~exclude_rows_mask]
+        else:
+            ring_values = tbl['model_coeff'][ring_mask]
+        new_sigma = sigma_mad(ring_values)
+        radii.append(r_px)
+        sigmas.append(new_sigma)
+        emp_snr[tbl['r_px'] == r_px] /= new_sigma
+    return emp_snr, np.asarray(radii), np.asarray(sigmas)
+
 def detection_map_from_table(tbl, coverage_mask, ring_px=3, exclude_rows_mask=None, **kwargs):
     '''
     Parameters
@@ -532,18 +548,10 @@ def detection_map_from_table(tbl, coverage_mask, ring_px=3, exclude_rows_mask=No
     post_grid_mask = coverage_mask == 1
     points = np.stack((tbl['y'], tbl['x']), axis=-1)
     newpoints = np.stack((yy.flatten(), xx.flatten()), axis=-1)
-    emp_snr = tbl['model_coeff'].copy()
-    for r_px in np.unique(tbl['r_px']):
-        ring_mask = np.abs(tbl['r_px'] - r_px) < ring_px
-        if exclude_rows_mask is not None:
-            ring_values = tbl['model_coeff'][ring_mask & ~exclude_rows_mask]
-        else:
-            ring_values = tbl['model_coeff'][ring_mask]
-        new_sigma = sigma_mad(ring_values)
-        emp_snr[tbl['r_px'] == r_px] /= new_sigma
+    emp_snr, radii, sigmas = _scale_trap_noise(tbl, ring_px, exclude_rows_mask)
     outim = griddata(points, emp_snr, newpoints).reshape(coverage_mask.shape)
     outim[~post_grid_mask] = np.nan
-    return outim, emp_snr
+    return outim, emp_snr, interp1d(radii, sigmas)
 
 def detection_map_cube_from_table(tbl, coverage_mask, ring_px=3, **kwargs):
     static_kwargs = {}
