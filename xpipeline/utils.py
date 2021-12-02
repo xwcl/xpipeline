@@ -10,11 +10,32 @@ import logging
 import numba
 import psutil
 
+from .core import HAVE_CUPY
+
 log = logging.getLogger(__name__)
 
 _LOCAL = threading.local()
 _LOCAL.filesystems = {}
 WHITESPACE_RE = re.compile(r"\s+")
+
+class DummyRamHook:
+    used_bytes = 0
+    def __enter__(self):
+        pass
+    def __exit__(self, *args):
+        pass
+
+if HAVE_CUPY:
+    from cupy.cuda import memory_hook, runtime
+    import cupy
+
+    class CupyRamHook(memory_hook.MemoryHook):
+        def __init__(self):
+            self.used_bytes = cupy.get_default_memory_pool().used_bytes()
+        def alloc_preprocess(self, device_id, mem_size):
+            self.used_bytes += mem_size
+else:
+    CupyRamHook = DummyRamHook
 
 def join(*args):
     res = urlparse(args[0])

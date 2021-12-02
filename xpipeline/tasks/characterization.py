@@ -224,10 +224,10 @@ def simple_aperture_locations(r_px, pa_deg, resolution_element_px, exclude_neare
     return locs
 
 def r_pa_to_x_y(r_px, pa_deg, xcenter, ycenter):
-   return (
+    return (
        r_px * np.cos(np.deg2rad(90 + pa_deg)) + xcenter,
        r_px * np.sin(np.deg2rad(90 + pa_deg)) + ycenter
-   )
+    )
 
 def x_y_to_r_pa(x, y, xcenter, ycenter):
     dx = x - xcenter
@@ -369,35 +369,40 @@ def calculate_snr(image, r_px, pa_deg, resolution_element_px, exclude_nearest, g
     )
     return calc_snr_mawet(results[0], results[1:])
 
+@njit(cache=True)
+def snr_from_convolution(convolved_image, loc_rho, loc_pa_deg, aperture_diameter_px, exclude_nearest):
+    height, width = convolved_image.shape
+    yc, xc = (height - 1) / 2, (width - 1) / 2
+    locs = _simple_aperture_locations(
+        loc_rho, loc_pa_deg, aperture_diameter_px, xcenter=xc, ycenter=yc
+    )
+    n_apertures = locs.shape[0]
+    signal_x, signal_y = locs[0]
+    signal = convolved_image[round(signal_y), round(signal_x)]
+    n_noises = n_apertures - 1 - 2 * exclude_nearest
+    if n_noises < 2:
+        # note this is checked for in the wrapper
+        # as raising exceptions will leak memory allocated in numba functions
+        raise ValueError("Reached radius where only a single noise aperture is available for estimation. Change exclude_nearest or iwa_px.")
+    first_noise_offset = 1 + exclude_nearest
+    noises = np.zeros(n_noises)
+    for i in range(n_noises):
+        nidx = first_noise_offset + i
+        noise_x, noise_y = locs[nidx]
+        noises[i] = convolved_image[round(noise_y),round(noise_x)]
+    return _calc_snr_mawet(signal, noises), signal
 
 @njit(parallel=True, cache=True)
 def _calc_snr_image(convolved_image, rho, theta, mask, aperture_diameter_px, exclude_nearest, snr_image_out):
     height, width = convolved_image.shape
-    yc, xc = (height - 1) / 2, (width - 1) / 2
     for y in numba.prange(height):
         for x in range(width):
             if not mask[y, x]:
                 continue
             loc_rho, loc_theta = rho[y, x], theta[y, x]
             loc_pa_deg = np.rad2deg(loc_theta) - 90
-            locs = _simple_aperture_locations(
-                loc_rho, loc_pa_deg, aperture_diameter_px, xcenter=xc, ycenter=yc
-            )
-            n_apertures = locs.shape[0]
-            signal_x, signal_y = locs[0]
-            signal = convolved_image[round(signal_y), round(signal_x)]
-            n_noises = n_apertures - 1 - 2 * exclude_nearest
-            if n_noises < 2:
-                # note this is checked for in the wrapper
-                # as raising exceptions will leak memory allocated in numba functions
-                raise ValueError("Reached radius where only a single noise aperture is available for estimation. Change exclude_nearest or iwa_px.")
-            first_noise_offset = 1 + exclude_nearest
-            noises = np.zeros(n_noises)
-            for i in range(n_noises):
-                nidx = first_noise_offset + i
-                noise_x, noise_y = locs[nidx]
-                noises[i] = convolved_image[round(noise_y),round(noise_x)]
-            calculated_snr = _calc_snr_mawet(signal, noises)
+            
+            calculated_snr, _ = snr_from_convolution(convolved_image, loc_rho, loc_pa_deg, aperture_diameter_px, exclude_nearest)
             snr_image_out[y, x] = calculated_snr
     return snr_image_out
 

@@ -39,8 +39,14 @@ class BaseCommand(xconf.Command):
     random_state : int = xconf.field(default=0, help="Initialize NumPy's random number generator with this seed")
     cpus : int = xconf.field(default=utils.available_cpus(), help="Number of CPUs free for use")
 
-    def check_for_outputs(self, output_paths):
+    def get_dest_fs(self):
         dest_fs = utils.get_fs(self.destination)
+        log.debug(f"calling makedirs on {dest_fs} at {self.destination}")
+        dest_fs.makedirs(self.destination, exist_ok=True)
+        return dest_fs
+
+    def check_for_outputs(self, output_paths):
+        dest_fs = self.get_dest_fs()
         for op in output_paths:
             if dest_fs.exists(op):
                 return True

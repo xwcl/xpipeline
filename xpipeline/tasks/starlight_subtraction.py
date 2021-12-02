@@ -458,8 +458,8 @@ class TrapBasis:
 class TrapParams:
     # modes_frac : float = 0.3
     k_modes : int
-    model_trim_threshold : float = 0.2
-    model_pix_threshold : float = 0.3
+    model_trim_threshold : float = 0.2  # fraction of peak model intensity in a frame below which model is trimmed to zero
+    model_pix_threshold : float = 0.3  # max level in model pix for data pix to be included in ref vecs
     compute_residuals : bool = True
     incorporate_offset : bool = True
     scale_ref_std : bool = True
@@ -479,23 +479,32 @@ class TrapParams:
     background_split_mask: Optional[np.ndarray] = None
     use_cgls : bool = False
 
+def trim_model_vecs(model_vecs: np.ndarray, model_trim_threshold: float):
+    xp = core.get_array_module(model_vecs)
+    pix_below_threshold = model_vecs / xp.max(model_vecs, axis=0) < model_trim_threshold
+    trimmed_model_vecs = model_vecs.copy()
+    trimmed_model_vecs[pix_below_threshold] = 0
+    return trimmed_model_vecs
+
+def trap_ref_vecs_mask(trimmed_model_vecs, planet_signal_threshold):
+    xp = core.get_array_module(trimmed_model_vecs)
+    pix_with_planet_signal = xp.any(trimmed_model_vecs / xp.max(trimmed_model_vecs, axis=0),axis=1) > planet_signal_threshold
+    pix_used = xp.count_nonzero(~pix_with_planet_signal)
+    assert 0 < pix_used < trimmed_model_vecs.shape[0]
+    return ~pix_with_planet_signal, pix_used
+
 def trap_mtx(image_vecs, model_vecs, trap_params : TrapParams):
     xp = core.get_array_module(image_vecs)
     was_gpu_array = xp is cp
     timers = {}
-    model_threshold = trap_params.model_trim_threshold
-    pix_below_threshold = model_vecs / xp.max(model_vecs, axis=0) < model_threshold
-    trimmed_model_vecs = model_vecs.copy()
-    trimmed_model_vecs[pix_below_threshold] = 0
+    trimmed_model_vecs = trim_model_vecs(model_vecs, trap_params.model_trim_threshold)
     planet_signal_threshold = trap_params.model_pix_threshold
     median_timeseries = xp.median(image_vecs, axis=0)
     image_vecs_medsub = image_vecs - median_timeseries
 
     if trap_params.precomputed_basis is None:
-        pix_with_planet_signal = xp.any(trimmed_model_vecs / xp.max(trimmed_model_vecs, axis=0),axis=1) > planet_signal_threshold
-        pix_used = xp.count_nonzero(~pix_with_planet_signal)
-        assert 0 < pix_used < trimmed_model_vecs.shape[0]
-        ref_vecs = image_vecs_medsub[~pix_with_planet_signal]
+        ref_vecs_mask, pix_used = trap_ref_vecs_mask(trimmed_model_vecs, trap_params.model_pix_threshold)
+        ref_vecs = image_vecs_medsub[ref_vecs_mask]
         log.debug(f"Using {pix_used} pixel time series for TRAP basis with {trap_params.k_modes} modes")
         trap_basis = trap_phase_1(ref_vecs, trap_params)
     else:
@@ -559,9 +568,32 @@ def trap_phase_1(ref_vecs, trap_params):
     time_sec = time.perf_counter()
     _, _, mtx_v = decomposer(scaled_ref_vecs, k_modes)
     time_sec = time.perf_counter() - time_sec
-    log.debug(f"SVD complete in {time_sec} sec, constructing operator")
+    log.debug(f"SVD complete in {time_sec} sec")
     temporal_basis = mtx_v  # shape = (nframes, ncomponents)
     return TrapBasis(temporal_basis, time_sec, ref_vecs.shape[0])
+
+def klip_transpose(image_vecs, model_vecs, trap_params : TrapParams):
+    xp = core.get_array_module(image_vecs)
+    was_gpu_array = xp is core.cupy
+    timers = {}
+    trimmed_model_vecs = trim_model_vecs(model_vecs, trap_params.model_trim_threshold)
+    median_timeseries = xp.median(image_vecs, axis=0)
+    image_vecs_medsub = image_vecs - median_timeseries
+    if trap_params.precomputed_basis is None:
+        ref_vecs_mask, pix_used = trap_ref_vecs_mask(trimmed_model_vecs, trap_params.model_pix_threshold)
+        ref_vecs = image_vecs_medsub[ref_vecs_mask]
+        log.debug(f"Using {pix_used} pixel time series for KLIP^T basis with {trap_params.k_modes} modes")
+        trap_basis = trap_phase_1(ref_vecs, trap_params)
+    else:
+        trap_basis = trap_phase_1(None, trap_params)
+    if trap_params.return_basis and not was_gpu_array:
+        if core.get_array_module(trap_basis.temporal_basis) is core.cupy:
+            trap_basis.temporal_basis = trap_basis.temporal_basis.get()
+        return trap_basis
+    image_resid_vecs = (image_vecs_medsub.T - trap_basis.temporal_basis @ (trap_basis.temporal_basis.T @ image_vecs_medsub.T)).T
+    model_resid_vecs = (model_vecs.T - trap_basis.temporal_basis @ (trap_basis.temporal_basis.T @ model_vecs.T)).T
+    timers['time_svd_sec'] = trap_basis.time_sec
+    return image_resid_vecs, model_resid_vecs, timers, trap_basis.pix_used
 
 def trap_phase_2(image_vecs_medsub, model_vecs, temporal_basis, trap_params : TrapParams):
     xp = core.get_array_module(image_vecs_medsub)
@@ -616,8 +648,19 @@ def trap_phase_2(image_vecs_medsub, model_vecs, temporal_basis, trap_params : Tr
         )
         xinv = cgls_result[0]
     else:
-        soln = lsqr.lsqr(op, image_megavec, x0=None, atol=trap_params.tol, damp=trap_params.damp)
+        soln = lsqr.lsqr(
+            op,
+            image_megavec,
+            x0=None,
+            atol=trap_params.tol,
+            damp=trap_params.damp,
+            # show=True,
+            # calc_var=True,
+        )
         xinv = soln[0]
+        # import matplotlib.pyplot as plt
+        # plt.plot(soln[-1])
+        # plt.yscale('log')
     timers['invert'] = time.perf_counter() - timers['invert']
     log.debug(f"Finished RegularizedInversion in {timers['invert']} sec")
     if core.get_array_module(xinv) is cp:

@@ -1,4 +1,5 @@
 import time
+from astropy.convolution import convolve_fft
 from dataclasses import dataclass
 from xpipeline.core import cupy as cp
 import itertools
@@ -16,14 +17,18 @@ from xpipeline.ref import clio
 from xpipeline import pipelines, utils
 import logging
 log = logging.getLogger(__name__)
-BYTES_PER_GB = 1024 * 1024 * 1024
-
+BYTES_PER_MB = 1024 * 1024
 @xconf.config
-class LocalRayConfig:
+class CommonRayConfig:
+    env_vars : Optional[dict[str, str]] = xconf.field(default_factory=dict, help="Environment variables to set for worker processes")
+@xconf.config
+class LocalRayConfig(CommonRayConfig):
     cpus : Optional[int] = xconf.field(default=None, help="CPUs available to built-in Ray cluster (default is auto-detected)")
     gpus : Optional[int] = xconf.field(default=None, help="GPUs available to built-in Ray cluster (default is auto-detected)")
-    ram_gb : Optional[float] = xconf.field(default=None, help="RAM available to built-in Ray cluster")
-
+    resources : Optional[dict[str, float]] = xconf.field(default_factory=dict, help="Node resources available when running in standalone mode")
+@xconf.config
+class RemoteRayConfig(CommonRayConfig):
+    url : str = xconf.field(help="URL to existing Ray cluster head node")
 
 @xconf.config
 class ContrastProbesConfig:
@@ -33,9 +38,6 @@ class ContrastProbesConfig:
     iwa_px : float = xconf.field(help="Inner working angle (px)")
     owa_px : float = xconf.field(help="Outer working angle (px)")
 
-@xconf.config
-class RemoteRayConfig:
-    url : str = xconf.field(help="URL to existing Ray cluster head node")
 
 @xconf.config
 class PerTaskConfig:
@@ -63,7 +65,7 @@ def generate_probes(config : Optional[ContrastProbesConfig]):
     if config is None:
         return []
     iwa_px, owa_px = config.iwa_px, config.owa_px
-    radii_dpx = (owa_px - iwa_px) / config.n_radii
+    radii_dpx = (owa_px - iwa_px) / (config.n_radii - 1)
     for i in range(config.n_radii):
         r_px = iwa_px + i * radii_dpx
         circumference = np.pi * 2 * r_px
@@ -107,18 +109,21 @@ def test_particle(n_sec):
     time.sleep(5)
     print(f"Done sleeping")
 
-def _measure_ram_for_step(func, *args, **kwargs):
+def _measure_ram_for_step(func, *args, measure_gpu_ram=False, **kwargs):
     from memory_profiler import memory_usage
-    initial_ram = memory_usage(-1, max_usage=True)
+    gpu_prof = utils.CupyRamHook() if measure_gpu_ram else utils.DummyRamHook()
+    initial_ram_mb = memory_usage(-1, max_usage=True)
     time_sec = time.perf_counter()
-    print(f"inner timer {time_sec=}")
-    mem_mb_series = memory_usage((func, args, kwargs))
-    final_ram = memory_usage(-1, max_usage=True)
-    mem_gb = (np.max(mem_mb_series) - final_ram) / 1024
-    time_sec = time.perf_counter() - time_sec
-    print(f"inner timer end {time.perf_counter()=}")
-    print(f"{initial_ram/1024=} {mem_gb=} {final_ram/1024=} {time_sec=}")
-    return mem_gb, time_sec
+    log.debug(f"{func=} inner timer start @ {time_sec}\n{ray.get_runtime_context().get()=}")
+    with gpu_prof:
+        mem_mb_series = memory_usage((func, args, kwargs))
+    gpu_ram_usage_mb = gpu_prof.used_bytes / BYTES_PER_MB
+    final_ram_mb = memory_usage(-1, max_usage=True)
+    ram_usage_mb = np.max(mem_mb_series) - final_ram_mb
+    end_time_sec = time.perf_counter()
+    time_sec = end_time_sec - time_sec
+    log.debug(f"{func=} inner timer end @ {end_time_sec}, duration {time_sec}. {ram_usage_mb=} {gpu_ram_usage_mb=}")
+    return ram_usage_mb, gpu_ram_usage_mb, time_sec
 measure_ram_for_step = ray.remote(_measure_ram_for_step)
 
 
@@ -159,7 +164,62 @@ def _evaluate_point(out_idx, row, inject_image_vecs, model_inputs, k_modes, prec
     return out_idx, row
 evaluate_point = ray.remote(_evaluate_point)
 
-def grid_generate(k_modes_vals, covered_pix_mask, every_n_pix, contrast_probes_config):
+def _evaluate_point_kt(out_idx, row, inject_image_vecs, model_inputs, k_modes, precomputed_trap_basis, resel_px, coverage_mask, resels_planet=2, resels_ring=2, exclude_nearest=1):
+    # just use klip-transpose / ADI / matched filter, no simultaneous fit
+    start = time.perf_counter()
+    row = row.copy() # since ray is r/o
+    companion_r_px, companion_pa_deg = float(row['r_px']), float(row['pa_deg'])  # convert to primitive type so numba doesn't complain
+    model_vecs = generate_model(model_inputs, companion_r_px, companion_pa_deg)
+    params_kt = starlight_subtraction.TrapParams(
+        k_modes=k_modes,
+        compute_residuals=True,
+        precomputed_basis=precomputed_trap_basis,
+    )
+    image_resid_vecs, model_resid_vecs, timers, pix_used = starlight_subtraction.klip_transpose(inject_image_vecs, model_vecs, params_kt)
+    resid_cube_kt = improc.wrap_matrix(image_resid_vecs, model_inputs.mask)
+    mf_cube_kt = improc.wrap_matrix(model_resid_vecs, model_inputs.mask)
+
+    finim = pipelines.adi(resid_cube_kt, model_inputs.angles, pipelines.CombineOperation.SUM)
+    mf_finim = pipelines.adi(mf_cube_kt, model_inputs.angles, pipelines.CombineOperation.SUM)
+    dx, dy = characterization.r_pa_to_x_y(companion_r_px, companion_pa_deg, 0, 0)
+    dx, dy = float(dx), float(dy)
+    mf_ctr = improc.shift2(mf_finim, -dx, -dy)
+    mf_ctr[np.abs(mf_ctr) < params_kt.model_trim_threshold * np.max(mf_ctr)] = 0
+    mf_ctr /= np.nansum(mf_ctr**2)
+    fltrd = convolve_fft(finim, np.flip(mf_ctr, axis=(0, 1)), normalize_kernel=False, nan_treatment='fill')
+    fltrd[~coverage_mask] = np.nan
+
+    snr, signal = characterization.snr_from_convolution(
+        fltrd,
+        companion_r_px,
+        companion_pa_deg,
+        aperture_diameter_px=resel_px,
+        exclude_nearest=exclude_nearest
+    )
+
+    hdul = fits.HDUList([
+        fits.PrimaryHDU(),
+        fits.ImageHDU(finim, name='finim'),
+        fits.ImageHDU(mf_finim, name='mf_finim'),
+        fits.ImageHDU(mf_ctr, name='mf_ctr'),
+        fits.ImageHDU(fltrd, name='fltrd')
+        # fits.ImageHDU(planet_mask.astype(int), name='planet_mask'),
+        # fits.ImageHDU(ring_mask.astype(int), name='ring_mask'),
+    ])
+    import os
+    os.makedirs('./gridpoints/', exist_ok=True)
+    outfile = f'./gridpoints/point_{int(out_idx)}.fits'
+    hdul.writeto(outfile, overwrite=True)
+    print(os.path.abspath(outfile))
+    row['time_total_sec'] = time.perf_counter() - start
+    row['time_precompute_svd_sec'] = timers['time_svd_sec']
+    row['pix_used'] = pix_used
+    row['signal'] = signal
+    row['snr'] = snr
+    return out_idx, row
+evaluate_point_kt = ray.remote(_evaluate_point_kt)
+
+def grid_generate(k_modes_vals, covered_pix_mask, every_n_pix, contrast_probes_config, use_klip_transpose):
     log.debug(f"{contrast_probes_config=}")
     rhos, pa_degs, xx, yy = improc.downsampled_grid_r_pa(covered_pix_mask, every_n_pix)
     # static: every_n_pix, every_t_frames, min_coverage
@@ -175,12 +235,21 @@ def grid_generate(k_modes_vals, covered_pix_mask, every_n_pix, contrast_probes_c
         ('pa_deg', float),
         ('x', int),
         ('y', int),
-        ('pix_used', int),
-        ('model_coeff', float),
         ('time_total_sec', float),
+        ('pix_used', int),
         ('time_precompute_svd_sec', float),
-        ('time_invert_sec', float),
     ]
+    if use_klip_transpose:
+        cols_dtype.extend([
+            ('signal', float),
+            ('noise', float),
+            ('snr', float),
+        ])
+    else:
+        cols_dtype.extend([
+            ('model_coeff', float),
+            ('time_invert_sec', float),
+        ])
     grid = np.zeros(n_rows, dtype=cols_dtype)
     for idx, (k_modes, inner_idx) in enumerate(itertools.product(k_modes_vals, range(len(rhos)))):
         grid[idx]['k_modes'] = k_modes
@@ -190,7 +259,8 @@ def grid_generate(k_modes_vals, covered_pix_mask, every_n_pix, contrast_probes_c
         grid[idx]['y'] = yy[inner_idx]
 
     probes = list(generate_probes(contrast_probes_config))
-    n_comp_rows = 2 * len(k_modes_vals) * len(probes)
+    # n_comp_rows = 2 * len(k_modes_vals) * len(probes)
+    n_comp_rows = len(k_modes_vals) * len(probes)
     log.debug(f"Evaluating {len(probes)} positions/contrast levels at {len(k_modes_vals)} k values and 2 map locations")
     comp_grid = np.zeros(n_comp_rows, dtype=cols_dtype)
     # for every probe location and value for scale:
@@ -198,11 +268,14 @@ def grid_generate(k_modes_vals, covered_pix_mask, every_n_pix, contrast_probes_c
         comp_x, comp_y = characterization.r_pa_to_x_y(companion.r_px, companion.pa_deg, *improc.arr_center(covered_pix_mask))
         nearest_grid_idx = np.argmin((grid['x'] - comp_x)**2 + (grid['y'] - comp_y)**2)
         nearest_grid_point = grid[nearest_grid_idx]
-        log.debug(f"{nearest_grid_point=}")
+        # log.debug(f"{nearest_grid_point=}")
         assert nearest_grid_point['inject_scale'] == 0
         # for every number of modes:
         for kidx, k_modes in enumerate(k_modes_vals):
-            grid_idx = cidx * (len(k_modes_vals) * 2) + 2 * kidx
+            # grid_idx = cidx * (len(k_modes_vals) * 2) + 2 * kidx
+            grid_idx = cidx * len(k_modes_vals) + kidx
+            print(f"{grid_idx=} {cidx=} {kidx=}")
+            assert comp_grid[grid_idx]['inject_scale'] == 0, "visiting same index more than once in grid gen"
 
             # - compute fit coefficient for nearest r, pa from overall grid
             comp_grid[grid_idx]['inject_r_px'] = companion.r_px
@@ -213,52 +286,47 @@ def grid_generate(k_modes_vals, covered_pix_mask, every_n_pix, contrast_probes_c
             comp_grid[grid_idx]['pa_deg'] = nearest_grid_point['pa_deg']
             comp_grid[grid_idx]['x'] = nearest_grid_point['x']
             comp_grid[grid_idx]['y'] = nearest_grid_point['y']
-            print(grid_idx, f"{comp_grid[grid_idx]=}")
+            # print(grid_idx, f"{comp_grid[grid_idx]=}")
             # - compute fit coefficient for exact r, pa
-            comp_grid[grid_idx + 1]['inject_r_px'] = companion.r_px
-            comp_grid[grid_idx + 1]['inject_pa_deg'] = companion.pa_deg
-            comp_grid[grid_idx + 1]['inject_scale'] = companion.scale
-            comp_grid[grid_idx + 1]['k_modes'] = k_modes
-            comp_grid[grid_idx + 1]['r_px'] = companion.r_px
-            comp_grid[grid_idx + 1]['pa_deg'] = companion.pa_deg
-            comp_grid[grid_idx + 1]['x'] = comp_x
-            comp_grid[grid_idx + 1]['y'] = comp_y
-            print(grid_idx + 1, f"{comp_grid[grid_idx + 1]=}")
+            # comp_grid[grid_idx + 1]['inject_r_px'] = companion.r_px
+            # comp_grid[grid_idx + 1]['inject_pa_deg'] = companion.pa_deg
+            # comp_grid[grid_idx + 1]['inject_scale'] = companion.scale
+            # comp_grid[grid_idx + 1]['k_modes'] = k_modes
+            # comp_grid[grid_idx + 1]['r_px'] = companion.r_px
+            # comp_grid[grid_idx + 1]['pa_deg'] = companion.pa_deg
+            # comp_grid[grid_idx + 1]['x'] = comp_x
+            # comp_grid[grid_idx + 1]['y'] = comp_y
+            # print(grid_idx + 1, f"{comp_grid[grid_idx + 1]=}")
     grid = np.concatenate((grid, comp_grid))
     return grid
 
-def worker_init(num_cpus):
+def init_worker():
     import matplotlib
     matplotlib.use("Agg")
-    import mkl
-    mkl.set_num_threads(num_cpus)
-    import numba
-    numba.set_num_threads(num_cpus)
-    from xpipeline.core import torch, HAVE_TORCH
-    if HAVE_TORCH:
-        torch.set_num_threads(num_cpus)
     from xpipeline.cli import Dispatcher
     Dispatcher.configure_logging(None, 'INFO')
+    log.info(f"Worker logging initalized")
 
-def _measure_ram(func, options, *args, ram_pad_factor=1.2, **kwargs):
-    log.info(f"Submitting measure_ram_for_step for {func}")
+def _measure_ram(func, options, *args, ram_pad_factor=1.1, measure_gpu_ram=False, **kwargs):
+    log.info(f"Submitting measure_ram_for_step for {func} with {options=}")
     measure_ref = measure_ram_for_step.options(**options).remote(
         func,
         *args,
+        measure_gpu_ram=measure_gpu_ram,
         **kwargs
     )
     outside_time_sec = time.perf_counter()
-    log.debug(f"{outside_time_sec=} at start")
-    ram_use_gb, inside_time_sec = ray.get(measure_ref)
-    log.debug(f"end time {time.perf_counter()}")
+    log.debug(f"{func} {outside_time_sec=} at start, ref is {measure_ref}")
+    ram_usage_mb, gpu_ram_usage_mb, inside_time_sec = ray.get(measure_ref)
+    end_time_sec = time.perf_counter()
+    log.debug(f"{func} end time {end_time_sec}")
     outside_time_sec = time.perf_counter() - outside_time_sec
-    log.info(f"Measured {func} RAM use of {ram_use_gb:1.3f} GB, runtime of {inside_time_sec:1.2f} sec inside and {outside_time_sec:1.2f} sec outside")
-    ram_requirement_gb = ram_pad_factor * ram_use_gb
-    if ram_requirement_gb >= 1.0:
-        # surprise! "ValueError: Resource quantities >1 must be whole numbers." from ray
-        ram_requirement_gb = int(np.ceil(ram_requirement_gb))
-    log.info(f"Setting RAM requirement {ram_requirement_gb:1.3f} GB (pad factor: {ram_pad_factor:1.2f})")
-    return ram_requirement_gb
+    log.info(f"Measured {func} RAM use of {ram_usage_mb:1.3f} MB, GPU RAM use of {gpu_ram_usage_mb:1.3f}, runtime of {inside_time_sec:1.2f} sec inside and {outside_time_sec:1.2f} sec outside")
+    # surprise! "ValueError: Resource quantities >1 must be whole numbers." from ray
+    ram_requirement_mb = int(np.ceil(ram_pad_factor * ram_usage_mb))
+    gpu_ram_requirement_mb = int(np.ceil(ram_pad_factor * gpu_ram_usage_mb))
+    log.info(f"Setting {func} RAM requirements {ram_requirement_mb:1.3f} MB RAM and {gpu_ram_requirement_mb:1.3f} MB GPU RAM (pad factor: {ram_pad_factor:1.2f})")
+    return ram_requirement_mb, gpu_ram_requirement_mb
 
 
 def launch_grid(grid,
@@ -266,7 +334,8 @@ def launch_grid(grid,
                 model_inputs, ring_exclude_px,
                 force_gpu_decomposition, force_gpu_fit,
                 generate_options=None, decompose_options=None, evaluate_options=None,
-                measure_ram=False, efficient_decomp_reuse=False, split_bg=False, use_cgls=False):
+                measure_ram=False, efficient_decomp_reuse=False, split_bg=False, use_cgls=False,
+                use_klip_transpose=False, resel_px=8, coverage_mask=None):
     if generate_options is None:
         generate_options = {}
     if decompose_options is None:
@@ -326,7 +395,7 @@ def launch_grid(grid,
         # Measure injection using first location (assumes at least 1 unique value for
         # injection parameters, even if it's zero)
         log.debug(f"Measuring RAM use in inject_model()")
-        injection_ram_gb = _measure_ram(
+        injection_ram_mb, injection_gpu_ram_mb = _measure_ram(
             _inject_model,
             generate_options,
             image_vecs_ref,
@@ -335,7 +404,12 @@ def launch_grid(grid,
             injection_locs[0]['inject_pa_deg'],
             injection_locs[0]['inject_scale'],
         )
-        generate_options['memory'] = injection_ram_gb * BYTES_PER_GB
+        generate_options['memory'] = injection_ram_mb * BYTES_PER_MB
+        if injection_gpu_ram_mb > 0:
+            resdict = generate_options.get('resources', {})
+            resdict['gpu_memory_mb'] = injection_gpu_ram_mb
+            generate_options['resources'] = resdict
+        log.debug(f"{generate_options=}")
 
         # End up precomputing twice, but use the same args at least...
         precomp_args = (
@@ -348,30 +422,60 @@ def launch_grid(grid,
         )
         # precompute to measure
         log.debug(f"Measuring RAM use in precompute_basis()")
-        precomp_ram_gb = _measure_ram(
+        precomp_ram_mb, precomp_gpu_ram_mb = _measure_ram(
             _precompute_basis,
             decompose_options,
-            *precomp_args
+            *precomp_args,
+            measure_gpu_ram=force_gpu_decomposition,
         )
-        decompose_options['memory'] = precomp_ram_gb * BYTES_PER_GB
+        decompose_options['memory'] = precomp_ram_mb * BYTES_PER_MB
+        log.debug(f"After setting decompose_options {generate_options=} {decompose_options=} {evaluate_options=}")
+        if precomp_gpu_ram_mb > 0:
+            resdict = decompose_options.get('resources', {})
+            resdict['gpu_memory_mb'] = precomp_gpu_ram_mb
+            decompose_options['resources'] = resdict
+        log.debug(f"{decompose_options=}")
+
         # precompute to use as input for evaluate_point
         temp_precompute_ref = precompute_basis.options(**decompose_options).remote(*precomp_args)
+        log.debug(f"Submitting precompute as input to evaluate_point {temp_precompute_ref=}")
 
-        log.debug(f"Measuring RAM use in evaluate_point()")
-        ram_requirement_gb = _measure_ram(
-            _evaluate_point,
-            evaluate_options,
-            0,
-            remaining_grid[0],
-            image_vecs_ref,  # no injection needed
-            model_inputs_ref,
-            max_k_modes,
-            temp_precompute_ref,
-            left_pix_vec,
-            force_gpu_fit,
-            use_cgls,
-        )
-        evaluate_options['memory'] = ram_requirement_gb * BYTES_PER_GB
+        log.debug(f"Measuring RAM use in evaluate_point() {evaluate_options=}")
+        if use_klip_transpose:
+            ram_requirement_mb, gpu_ram_requirement_mb = _measure_ram(
+                _evaluate_point_kt,
+                evaluate_options,
+                0,
+                remaining_grid[0],
+                image_vecs_ref,  # no injection needed
+                model_inputs_ref,
+                max_k_modes,
+                temp_precompute_ref,
+                resel_px,
+                coverage_mask,
+                measure_gpu_ram=force_gpu_decomposition and not efficient_decomp_reuse,
+            )
+        else:
+            ram_requirement_mb, gpu_ram_requirement_mb = _measure_ram(
+                _evaluate_point,
+                evaluate_options,
+                0,
+                remaining_grid[0],
+                image_vecs_ref,  # no injection needed
+                model_inputs_ref,
+                max_k_modes,
+                temp_precompute_ref,
+                left_pix_vec,
+                force_gpu_fit,
+                use_cgls,
+                measure_gpu_ram=force_gpu_fit or not efficient_decomp_reuse,
+            )
+        evaluate_options['memory'] = ram_requirement_mb * BYTES_PER_MB
+        if gpu_ram_requirement_mb > 0:
+            resdict = evaluate_options.get('resources', {})
+            resdict['gpu_memory_mb'] = gpu_ram_requirement_mb
+            evaluate_options['resources'] = resdict
+        log.debug(f"{generate_options=} {decompose_options=} {evaluate_options=}")
 
     made = 0
     for row in injection_locs:
@@ -418,17 +522,29 @@ def launch_grid(grid,
         else:
             precompute_ref = None
         k_modes = int(row['k_modes'])
-        point_ref = evaluate_point.options(**evaluate_options).remote(
-            idx,
-            row,
-            inject_ref,
-            model_inputs_ref,
-            k_modes,
-            precompute_ref,
-            left_pix_vec,
-            force_gpu_fit,
-            use_cgls,
-        )
+        if use_klip_transpose:
+            point_ref = evaluate_point_kt.options(**evaluate_options).remote(
+                idx,
+                row,
+                inject_ref,
+                model_inputs_ref,
+                k_modes,
+                precompute_ref,
+                resel_px,
+                coverage_mask,
+            )
+        else:
+            point_ref = evaluate_point.options(**evaluate_options).remote(
+                idx,
+                row,
+                inject_ref,
+                model_inputs_ref,
+                k_modes,
+                precompute_ref,
+                left_pix_vec,
+                force_gpu_fit,
+                use_cgls,
+            )
         remaining_point_refs.append(point_ref)
     log.debug(f"Applying TRAP++ for {len(remaining_idxs)} points in the parameter grid")
     return remaining_point_refs
@@ -456,14 +572,14 @@ class VappTrap(xconf.Command):
         help="Ray distributed framework configuration"
     )
     ring_exclude_px : float = xconf.field(default=12, help="When selecting reference pixel timeseries, determines width of ring centered at radius of interest for which pixel vectors are excluded")
-    gpus_per_task : Union[float, PerTaskConfig, None] = xconf.field(default=None, help="")
-    ram_gb_per_task : Union[float, str, PerTaskConfig, None] = xconf.field(default=None, help="")
-    # ram_gb_for_generate : Optional[float] = xconf.field(default=None, help="")
-    # ram_gb_for_decompose : Optional[float] = xconf.field(default=None, help="")
-    # ram_gb_for_evaluate : Optional[float] = xconf.field(default=None, help="")
+    resel_px : float = xconf.field(default=8, help="Resolution element in pixels for these data")
+    gpu_ram_mb_per_task : Union[float, str, PerTaskConfig, None] = xconf.field(default=None, help="Maximum amount of GPU RAM used by a stage or grid point, or 'measure'")
+    max_tasks_per_gpu : float = xconf.field(default=1, help="When GPU is utilized, this is the maximum number of tasks scheduled on the same GPU (RAM permitting)")
+    ram_mb_per_task : Union[float, str, PerTaskConfig, None] = xconf.field(default=None, help="Maximum amount of RAM used by a stage or grid point, or 'measure'")
     use_gpu_decomposition : bool = xconf.field(default=False, help="")
     use_gpu_fit : bool = xconf.field(default=False, help="")
     use_cgls : bool = xconf.field(default=False, help="")
+    use_klip_transpose : bool = xconf.field(default=False, help="")
     benchmark : bool = xconf.field(default=False, help="")
     benchmark_trials : int = xconf.field(default=2, help="")
     split_bg_model : bool = xconf.field(default=True, help="Use split BG model along clio symmetry ax for vAPP")
@@ -505,46 +621,54 @@ class VappTrap(xconf.Command):
         )
 
         # init ray
+        ray_init_kwargs = {'runtime_env': {'env_vars': {'RAY_USER_SETUP_FUNCTION': 'xpipeline.commands.vapp_trap.init_worker'}}}
         if isinstance(self.ray, RemoteRayConfig):
-            ray.init(self.ray.url)
+            ray.init(self.ray.url, **ray_init_kwargs)
         else:
             resources = {}
-            if self.ray.ram_gb is not None:
-                resources['ram_gb'] = self.ray.ram_gb
             ray.init(
                 num_cpus=self.ray.cpus,
                 num_gpus=self.ray.gpus,
-                resources=resources,
+                resources=self.ray.resources,
+                **ray_init_kwargs
             )
         options = {'resources':{}}
         generate_options = options.copy()
         decompose_options = options.copy()
         evaluate_options = options.copy()
         measure_ram = False
-        if isinstance(self.ram_gb_per_task, PerTaskConfig):
-            generate_options['memory'] = self.ram_gb_per_task.generate * BYTES_PER_GB
-            decompose_options['memory'] = self.ram_gb_per_task.decompose * BYTES_PER_GB
-            evaluate_options['memory'] = self.ram_gb_per_task.evaluate * BYTES_PER_GB
-        elif self.ram_gb_per_task == "measure":
+        if isinstance(self.ram_mb_per_task, PerTaskConfig):
+            generate_options['memory'] = self.ram_mb_per_task.generate * BYTES_PER_MB
+            decompose_options['memory'] = self.ram_mb_per_task.decompose * BYTES_PER_MB
+            evaluate_options['memory'] = self.ram_mb_per_task.evaluate * BYTES_PER_MB
+        elif self.ram_mb_per_task == "measure":
             measure_ram = True
-        elif self.ram_gb_per_task is not None:
+        elif self.ram_mb_per_task is not None:
             # number or None
-            generate_options['memory'] = self.ram_gb_per_task * BYTES_PER_GB
-            decompose_options['memory'] = self.ram_gb_per_task * BYTES_PER_GB
-            evaluate_options['memory'] = self.ram_gb_per_task * BYTES_PER_GB
+            generate_options['memory'] = self.ram_mb_per_task * BYTES_PER_MB
+            decompose_options['memory'] = self.ram_mb_per_task * BYTES_PER_MB
+            evaluate_options['memory'] = self.ram_mb_per_task * BYTES_PER_MB
 
         if self.use_gpu_decomposition or self.use_gpu_fit:
-            if self.gpus_per_task is None:
-                raise RuntimeError(f"Specify GPUs per task")
-            if isinstance(self.gpus_per_task, PerTaskConfig):
-                generate_options['num_gpus'] = self.gpus_per_task.generate
-                decompose_options['num_gpus'] = self.gpus_per_task.decompose
-                evaluate_options['num_gpus'] = self.gpus_per_task.evaluate
+            gpu_frac = 1 / self.max_tasks_per_gpu
+            log.debug(f"Using {self.max_tasks_per_gpu} tasks per GPU, {gpu_frac=}")
+            # generate_options['num_gpus'] = gpu_frac
+            decompose_options['num_gpus'] = gpu_frac
+            evaluate_options['num_gpus'] = gpu_frac
+
+            if self.gpu_ram_mb_per_task is None:
+                raise RuntimeError(f"Specify GPU RAM per task")
+            if isinstance(self.gpu_ram_mb_per_task, PerTaskConfig):
+                generate_options['resources'] = {'gpu_memory_mb': self.gpu_ram_mb_per_task.generate}
+                decompose_options['resources'] = {'gpu_memory_mb': self.gpu_ram_mb_per_task.decompose}
+                evaluate_options['resources'] = {'gpu_memory_mb': self.gpu_ram_mb_per_task.evaluate}
+            elif self.gpu_ram_mb_per_task == "measure":
+                measure_ram = True
             else:
                 # number or None
-                generate_options['num_gpus'] = self.gpus_per_task
-                decompose_options['num_gpus'] = self.gpus_per_task
-                evaluate_options['num_gpus'] = self.gpus_per_task
+                generate_options['resources'] = {'gpu_memory_mb': self.gpu_ram_mb_per_task}
+                decompose_options['resources'] = {'gpu_memory_mb': self.gpu_ram_mb_per_task}
+                evaluate_options['resources'] = {'gpu_memory_mb': self.gpu_ram_mb_per_task}
 
         coverage_map_path = f'./coverage_t{self.every_t_frames}.fits'
         if not os.path.exists(coverage_map_path):
@@ -567,6 +691,7 @@ class VappTrap(xconf.Command):
             covered_pix_mask,
             self.every_n_pix,
             self.contrast_probes,
+            self.use_klip_transpose,
         )
         if not self.benchmark:
             try:
@@ -601,6 +726,9 @@ class VappTrap(xconf.Command):
             efficient_decomp_reuse=self.efficient_decomp_reuse,
             split_bg=self.split_bg_model,
             use_cgls=self.use_cgls,
+            use_klip_transpose=self.use_klip_transpose,
+            resel_px=self.resel_px,
+            coverage_mask=covered_pix_mask,
         )
         if self.benchmark:
             log.debug(f"Running {self.benchmark_trials} trials...")
