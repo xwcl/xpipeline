@@ -1,3 +1,5 @@
+from re import M
+import toml
 import time
 from astropy.convolution import convolve_fft
 from dataclasses import dataclass
@@ -11,10 +13,11 @@ import os.path
 from astropy.io import fits
 from typing import Optional, Union
 from xpipeline.types import FITS_EXT
-from xpipeline.commands.base import FitsConfig, FitsTableColumnConfig, CompanionConfig
+from xpipeline.commands.base import FitsConfig, FitsTableColumnConfig, CompanionConfig, InputCommand
 from xpipeline.tasks import iofits, vapp, improc, starlight_subtraction, characterization
 from xpipeline.ref import clio
 from xpipeline import pipelines, utils
+from tqdm import tqdm
 import logging
 log = logging.getLogger(__name__)
 BYTES_PER_MB = 1024 * 1024
@@ -31,12 +34,19 @@ class RemoteRayConfig(CommonRayConfig):
     url : str = xconf.field(help="URL to existing Ray cluster head node")
 
 @xconf.config
-class ContrastProbesConfig:
+class SamplingConfig:
     n_radii : int = xconf.field(help="Number of steps in radius at which to probe contrast")
     spacing_px : float = xconf.field(help="Spacing in pixels between contrast probes along circle (sets number of probes at radius by 2 * pi * r / spacing)")
-    scales : list[float] = xconf.field(help="Probe contrast levels (C = companion / host)")
+    scales : list[float] = xconf.field(default_factory=lambda: [0.0], help="Probe contrast levels (C = companion / host)")
     iwa_px : float = xconf.field(help="Inner working angle (px)")
     owa_px : float = xconf.field(help="Outer working angle (px)")
+
+    def __post_init__(self):
+        # to make use of this for detection, we must also apply the matched
+        # filter in the no-injection case for each combination of parameters
+        self.scales = [float(s) for s in self.scales]
+        if 0.0 not in self.scales:
+            self.scales.insert(0, 0.0)
 
 
 @xconf.config
@@ -54,28 +64,6 @@ class ModelInputs:
     right_scales : np.ndarray
     angles : np.ndarray
     mask : np.ndarray
-
-def generate_probes(config : Optional[ContrastProbesConfig]):
-    '''Generator returning CompanionSpec objects for
-    radii / PA / contrast scales that cover the region from iwa to owa
-    in steps as specificed by `config`
-
-    When config.n_radii == 1, only iwa_px matters
-    '''
-    if config is None:
-        return []
-    iwa_px, owa_px = config.iwa_px, config.owa_px
-    radii_dpx = (owa_px - iwa_px) / (config.n_radii - 1)
-    for i in range(config.n_radii):
-        r_px = iwa_px + i * radii_dpx
-        circumference = np.pi * 2 * r_px
-        n_probes = int(circumference // config.spacing_px)
-        angles_ddeg = 360 / n_probes
-        for j in range(n_probes):
-            pa_deg = j * angles_ddeg
-            for scl in config.scales:
-                yield characterization.CompanionSpec(r_px, pa_deg, scl)
-
 
 def generate_model(model_inputs : ModelInputs, companion_r_px, companion_pa_deg):
     companion_spec = characterization.CompanionSpec(companion_r_px, companion_pa_deg, 1.0)
@@ -104,15 +92,9 @@ def _inject_model(image_vecs, model_inputs : ModelInputs, companion_r_px, compan
     return image_vecs + companion_scale * model_vecs
 inject_model = ray.remote(_inject_model)
 
-def test_particle(n_sec):
-    print(f"Going to sleep for {n_sec} sec")
-    time.sleep(5)
-    print(f"Done sleeping")
-
 def _measure_ram_for_step(func, *args, measure_gpu_ram=False, **kwargs):
     from memory_profiler import memory_usage
     gpu_prof = utils.CupyRamHook() if measure_gpu_ram else utils.DummyRamHook()
-    initial_ram_mb = memory_usage(-1, max_usage=True)
     time_sec = time.perf_counter()
     log.debug(f"{func=} inner timer start @ {time_sec}\n{ray.get_runtime_context().get()=}")
     with gpu_prof:
@@ -142,29 +124,7 @@ def _precompute_basis(image_vecs, model_inputs : ModelInputs, r_px, ring_exclude
     return precomputed_trap_basis
 precompute_basis = ray.remote(_precompute_basis)
 
-def _evaluate_point(out_idx, row, inject_image_vecs, model_inputs, k_modes, precomputed_trap_basis, left_pix_vec, force_gpu_fit, use_cgls):
-    start = time.perf_counter()
-    row = row.copy() # since ray is r/o
-    model_vecs = generate_model(model_inputs, row['r_px'], row['pa_deg'])
-    params = starlight_subtraction.TrapParams(
-        k_modes=k_modes,
-        compute_residuals=False,
-        precomputed_basis=precomputed_trap_basis,
-        background_split_mask=left_pix_vec,
-        force_gpu_fit=force_gpu_fit,
-        use_cgls=use_cgls,
-    )
-    model_coeff, timers, pix_used, _ = starlight_subtraction.trap_mtx(inject_image_vecs, model_vecs, params)
-    row['model_coeff'] = model_coeff
-    row['pix_used'] = pix_used
-    row['time_precompute_svd_sec'] = timers['time_svd_sec']
-    row['time_invert_sec'] = timers['invert']
-    row['time_total_sec'] = time.perf_counter() - start
-    log.info(f"Evaluated {out_idx=} in {row['time_total_sec']} sec")
-    return out_idx, row
-evaluate_point = ray.remote(_evaluate_point)
-
-def _evaluate_point_kt(out_idx, row, inject_image_vecs, model_inputs, k_modes, precomputed_trap_basis, resel_px, coverage_mask, resels_planet=2, resels_ring=2, exclude_nearest=1):
+def _evaluate_point_kt(out_idx, row, inject_image_vecs, model_inputs, k_modes, precomputed_trap_basis, resel_px, coverage_mask, exclude_nearest=1, save_images=False):
     # just use klip-transpose / ADI / matched filter, no simultaneous fit
     start = time.perf_counter()
     row = row.copy() # since ray is r/o
@@ -197,20 +157,21 @@ def _evaluate_point_kt(out_idx, row, inject_image_vecs, model_inputs, k_modes, p
         exclude_nearest=exclude_nearest
     )
 
-    hdul = fits.HDUList([
-        fits.PrimaryHDU(),
-        fits.ImageHDU(finim, name='finim'),
-        fits.ImageHDU(mf_finim, name='mf_finim'),
-        fits.ImageHDU(mf_ctr, name='mf_ctr'),
-        fits.ImageHDU(fltrd, name='fltrd')
-        # fits.ImageHDU(planet_mask.astype(int), name='planet_mask'),
-        # fits.ImageHDU(ring_mask.astype(int), name='ring_mask'),
-    ])
-    import os
-    os.makedirs('./gridpoints/', exist_ok=True)
-    outfile = f'./gridpoints/point_{int(out_idx)}.fits'
-    hdul.writeto(outfile, overwrite=True)
-    print(os.path.abspath(outfile))
+    if save_images:
+        hdul = fits.HDUList([
+            fits.PrimaryHDU(),
+            fits.ImageHDU(finim, name='finim'),
+            fits.ImageHDU(mf_finim, name='mf_finim'),
+            fits.ImageHDU(mf_ctr, name='mf_ctr'),
+            fits.ImageHDU(fltrd, name='fltrd')
+            # fits.ImageHDU(planet_mask.astype(int), name='planet_mask'),
+            # fits.ImageHDU(ring_mask.astype(int), name='ring_mask'),
+        ])
+        import os
+        os.makedirs('./gridpoints/', exist_ok=True)
+        outfile = f'./gridpoints/point_{int(out_idx)}.fits'
+        hdul.writeto(outfile, overwrite=True)
+        print(os.path.abspath(outfile))
     row['time_total_sec'] = time.perf_counter() - start
     row['time_precompute_svd_sec'] = timers['time_svd_sec']
     row['pix_used'] = pix_used
@@ -219,86 +180,45 @@ def _evaluate_point_kt(out_idx, row, inject_image_vecs, model_inputs, k_modes, p
     return out_idx, row
 evaluate_point_kt = ray.remote(_evaluate_point_kt)
 
-def grid_generate(k_modes_vals, covered_pix_mask, every_n_pix, contrast_probes_config, use_klip_transpose):
-    log.debug(f"{contrast_probes_config=}")
-    rhos, pa_degs, xx, yy = improc.downsampled_grid_r_pa(covered_pix_mask, every_n_pix)
-    # static: every_n_pix, every_t_frames, min_coverage
-    # varying: k_modes, inject_r_px, inject_pa_deg, inject_scale, r_px, pa_deg, x, y
-    # computed: model_coeff, time_total, time_model, time_decomp, time_fit
-    n_rows = len(k_modes_vals) * len(rhos)
+def grid_generate(k_modes_vals, mask_shape, sampling_config : SamplingConfig):
     cols_dtype = [
-        ('inject_r_px', float),
-        ('inject_pa_deg', float),
-        ('inject_scale', float),
-        ('k_modes', int),
         ('r_px', float),
         ('pa_deg', float),
-        ('x', int),
-        ('y', int),
+        ('x', float),
+        ('y', float),
+        ('inject_scale', float),
+        ('k_modes', int),
         ('time_total_sec', float),
         ('pix_used', int),
         ('time_precompute_svd_sec', float),
+        ('signal', float),
+        ('noise', float),
+        ('snr', float),
     ]
-    if use_klip_transpose:
-        cols_dtype.extend([
-            ('signal', float),
-            ('noise', float),
-            ('snr', float),
-        ])
-    else:
-        cols_dtype.extend([
-            ('model_coeff', float),
-            ('time_invert_sec', float),
-        ])
-    grid = np.zeros(n_rows, dtype=cols_dtype)
-    for idx, (k_modes, inner_idx) in enumerate(itertools.product(k_modes_vals, range(len(rhos)))):
-        grid[idx]['k_modes'] = k_modes
-        grid[idx]['r_px'] = rhos[inner_idx]
-        grid[idx]['pa_deg'] = pa_degs[inner_idx]
-        grid[idx]['x'] = xx[inner_idx]
-        grid[idx]['y'] = yy[inner_idx]
 
-    probes = list(generate_probes(contrast_probes_config))
-    # n_comp_rows = 2 * len(k_modes_vals) * len(probes)
+    probes = list(characterization.generate_probes(
+        sampling_config.iwa_px,
+        sampling_config.owa_px,
+        sampling_config.n_radii,
+        sampling_config.spacing_px,
+        sampling_config.scales
+    ))
     n_comp_rows = len(k_modes_vals) * len(probes)
-    log.debug(f"Evaluating {len(probes)} positions/contrast levels at {len(k_modes_vals)} k values and 2 map locations")
+    log.debug(f"Evaluating {len(probes)} positions/contrast levels at {len(k_modes_vals)} k values")
     comp_grid = np.zeros(n_comp_rows, dtype=cols_dtype)
-    # for every probe location and value for scale:
-    for cidx, companion in enumerate(probes):
-        comp_x, comp_y = characterization.r_pa_to_x_y(companion.r_px, companion.pa_deg, *improc.arr_center(covered_pix_mask))
-        nearest_grid_idx = np.argmin((grid['x'] - comp_x)**2 + (grid['y'] - comp_y)**2)
-        nearest_grid_point = grid[nearest_grid_idx]
-        # log.debug(f"{nearest_grid_point=}")
-        assert nearest_grid_point['inject_scale'] == 0
+    flattened_idx = 0
+    for idx, comp in enumerate(probes):
+        comp_x, comp_y = characterization.r_pa_to_x_y(comp.r_px, comp.pa_deg, *improc.arr_center(mask_shape))
         # for every number of modes:
-        for kidx, k_modes in enumerate(k_modes_vals):
-            # grid_idx = cidx * (len(k_modes_vals) * 2) + 2 * kidx
-            grid_idx = cidx * len(k_modes_vals) + kidx
-            print(f"{grid_idx=} {cidx=} {kidx=}")
-            assert comp_grid[grid_idx]['inject_scale'] == 0, "visiting same index more than once in grid gen"
-
-            # - compute fit coefficient for nearest r, pa from overall grid
-            comp_grid[grid_idx]['inject_r_px'] = companion.r_px
-            comp_grid[grid_idx]['inject_pa_deg'] = companion.pa_deg
-            comp_grid[grid_idx]['inject_scale'] = companion.scale
-            comp_grid[grid_idx]['k_modes'] = k_modes
-            comp_grid[grid_idx]['r_px'] = nearest_grid_point['r_px']
-            comp_grid[grid_idx]['pa_deg'] = nearest_grid_point['pa_deg']
-            comp_grid[grid_idx]['x'] = nearest_grid_point['x']
-            comp_grid[grid_idx]['y'] = nearest_grid_point['y']
-            # print(grid_idx, f"{comp_grid[grid_idx]=}")
-            # - compute fit coefficient for exact r, pa
-            # comp_grid[grid_idx + 1]['inject_r_px'] = companion.r_px
-            # comp_grid[grid_idx + 1]['inject_pa_deg'] = companion.pa_deg
-            # comp_grid[grid_idx + 1]['inject_scale'] = companion.scale
-            # comp_grid[grid_idx + 1]['k_modes'] = k_modes
-            # comp_grid[grid_idx + 1]['r_px'] = companion.r_px
-            # comp_grid[grid_idx + 1]['pa_deg'] = companion.pa_deg
-            # comp_grid[grid_idx + 1]['x'] = comp_x
-            # comp_grid[grid_idx + 1]['y'] = comp_y
-            # print(grid_idx + 1, f"{comp_grid[grid_idx + 1]=}")
-    grid = np.concatenate((grid, comp_grid))
-    return grid
+        for k_modes in k_modes_vals:
+            comp_grid[flattened_idx]['r_px'] = comp.r_px
+            comp_grid[flattened_idx]['pa_deg'] = comp.pa_deg
+            comp_grid[flattened_idx]['x'] = comp_x
+            comp_grid[flattened_idx]['y'] = comp_y
+            comp_grid[flattened_idx]['inject_scale'] = comp.scale
+            comp_grid[flattened_idx]['k_modes'] = k_modes
+            flattened_idx += 1
+    return comp_grid
 
 def init_worker():
     import matplotlib
@@ -377,9 +297,9 @@ def launch_grid(grid,
             return tuple(float(row[colname]) for colname in columns)
         return key_maker
     inject_refs = {}
-    inject_key_maker = key_maker_maker('inject_r_px', 'inject_pa_deg', 'inject_scale')
+    inject_key_maker = key_maker_maker('r_px', 'pa_deg', 'inject_scale')
     precompute_refs = {}
-    precompute_key_maker = key_maker_maker('inject_r_px', 'inject_pa_deg', 'inject_scale', 'r_px')
+    precompute_key_maker = key_maker_maker('r_px', 'pa_deg', 'inject_scale')
 
     stitched_cube = pipelines.vapp_stitch(left_cube, right_cube, clio.VAPP_PSF_ROTATION_DEG)
     image_vecs = improc.unwrap_cube(stitched_cube, model_inputs.mask)
@@ -387,9 +307,9 @@ def launch_grid(grid,
     image_vecs_ref = ray.put(image_vecs)
 
     # unique (r, pa, scale) for *injected*
-    injection_locs = np.unique(remaining_grid[['inject_r_px', 'inject_pa_deg', 'inject_scale']])
-    # unique (inject_r, inject_pa, inject_scale, r, pa) for precomputing basis
-    precompute_locs = np.unique(remaining_grid[['inject_r_px', 'inject_pa_deg', 'inject_scale', 'r_px']])
+    injection_locs = np.unique(remaining_grid[['r_px', 'pa_deg', 'inject_scale']])
+    # unique (inject_r, inject_pa, inject_scale, r, pa(?)) for precomputing basis
+    precompute_locs = np.unique(remaining_grid[['r_px', 'pa_deg', 'inject_scale']])
     # try to avoid bottlenecking submission on ram measurement
     if measure_ram:
         # Measure injection using first location (assumes at least 1 unique value for
@@ -400,8 +320,8 @@ def launch_grid(grid,
             generate_options,
             image_vecs_ref,
             model_inputs_ref,
-            injection_locs[0]['inject_r_px'],
-            injection_locs[0]['inject_pa_deg'],
+            injection_locs[0]['r_px'],
+            injection_locs[0]['pa_deg'],
             injection_locs[0]['inject_scale'],
         )
         generate_options['memory'] = injection_ram_mb * BYTES_PER_MB
@@ -441,40 +361,35 @@ def launch_grid(grid,
         log.debug(f"Submitting precompute as input to evaluate_point {temp_precompute_ref=}")
 
         log.debug(f"Measuring RAM use in evaluate_point() {evaluate_options=}")
-        if use_klip_transpose:
-            ram_requirement_mb, gpu_ram_requirement_mb = _measure_ram(
-                _evaluate_point_kt,
-                evaluate_options,
-                0,
-                remaining_grid[0],
-                image_vecs_ref,  # no injection needed
-                model_inputs_ref,
-                max_k_modes,
-                temp_precompute_ref,
-                resel_px,
-                coverage_mask,
-                measure_gpu_ram=force_gpu_decomposition and not efficient_decomp_reuse,
-            )
-        else:
-            ram_requirement_mb, gpu_ram_requirement_mb = _measure_ram(
-                _evaluate_point,
-                evaluate_options,
-                0,
-                remaining_grid[0],
-                image_vecs_ref,  # no injection needed
-                model_inputs_ref,
-                max_k_modes,
-                temp_precompute_ref,
-                left_pix_vec,
-                force_gpu_fit,
-                use_cgls,
-                measure_gpu_ram=force_gpu_fit or not efficient_decomp_reuse,
-            )
+        ram_requirement_mb, gpu_ram_requirement_mb = _measure_ram(
+            _evaluate_point_kt,
+            evaluate_options,
+            0,
+            remaining_grid[0],
+            image_vecs_ref,  # no injection needed
+            model_inputs_ref,
+            max_k_modes,
+            temp_precompute_ref,
+            resel_px,
+            coverage_mask,
+            measure_gpu_ram=force_gpu_decomposition and not efficient_decomp_reuse,
+        )
         evaluate_options['memory'] = ram_requirement_mb * BYTES_PER_MB
         if gpu_ram_requirement_mb > 0:
             resdict = evaluate_options.get('resources', {})
             resdict['gpu_memory_mb'] = gpu_ram_requirement_mb
             evaluate_options['resources'] = resdict
+        # ram_mb_per_task = { generate = 10768, decompose = 982, evaluate = 10768 }
+        log.info("RAM config:\n\n" + toml.dumps({'ram_mb_per_task': {
+            'generate': int(injection_ram_mb),
+            'decompose': int(precomp_ram_mb),
+            'evaluate': int(ram_requirement_mb),
+        }}))
+        log.info("GPU RAM config:\n\n" + toml.dumps({'gpu_ram_mb_per_task': {
+            'generate': int(injection_gpu_ram_mb),
+            'decompose': int(precomp_gpu_ram_mb),
+            'evaluate': int(gpu_ram_requirement_mb),
+        }}))
         log.debug(f"{generate_options=} {decompose_options=} {evaluate_options=}")
 
     made = 0
@@ -486,8 +401,8 @@ def launch_grid(grid,
             inject_refs[inject_key] = inject_model.options(**generate_options).remote(
                 image_vecs_ref,
                 model_inputs_ref,
-                row['inject_r_px'],
-                row['inject_pa_deg'],
+                row['r_px'],
+                row['pa_deg'],
                 row['inject_scale'],
             )
             made += 1
@@ -522,39 +437,26 @@ def launch_grid(grid,
         else:
             precompute_ref = None
         k_modes = int(row['k_modes'])
-        if use_klip_transpose:
-            point_ref = evaluate_point_kt.options(**evaluate_options).remote(
-                idx,
-                row,
-                inject_ref,
-                model_inputs_ref,
-                k_modes,
-                precompute_ref,
-                resel_px,
-                coverage_mask,
-            )
-        else:
-            point_ref = evaluate_point.options(**evaluate_options).remote(
-                idx,
-                row,
-                inject_ref,
-                model_inputs_ref,
-                k_modes,
-                precompute_ref,
-                left_pix_vec,
-                force_gpu_fit,
-                use_cgls,
-            )
+        point_ref = evaluate_point_kt.options(**evaluate_options).remote(
+            idx,
+            row,
+            inject_ref,
+            model_inputs_ref,
+            k_modes,
+            precompute_ref,
+            resel_px,
+            coverage_mask,
+        )
         remaining_point_refs.append(point_ref)
-    log.debug(f"Applying TRAP++ for {len(remaining_idxs)} points in the parameter grid")
+    log.debug(f"Applying for {len(remaining_idxs)} points in the parameter grid")
     return remaining_point_refs
 
 @xconf.config
-class VappTrap(xconf.Command):
-    every_n_pix : int = xconf.field(default=1, help="Evaluate a forward model centered on every Nth pixel")
+class VappTrap(InputCommand):
+    checkpoint : str = xconf.field(default=None, help="Save checkpoints to this path, and/or resume grid from this checkpoint (no verification of parameters used to generate the grid is performed)")
+    checkpoint_every_x : int = xconf.field(default=10, help="Write current state of grid to disk every X iterations")
     every_t_frames : int = xconf.field(default=1, help="Use every Tth frame as the input cube")
     k_modes_vals : list[int] = xconf.field(default_factory=lambda: [15, 100], help="")
-    dataset : str = xconf.field(help="")
     left_extname : FITS_EXT = xconf.field(help="")
     left_template : FitsConfig = xconf.field(help="")
     right_template : FitsConfig = xconf.field(help="")
@@ -564,8 +466,7 @@ class VappTrap(xconf.Command):
     left_mask : FitsConfig = xconf.field(help="")
     right_mask : FitsConfig = xconf.field(help="")
     angles : Union[FitsConfig,FitsTableColumnConfig] = xconf.field(help="")
-    contrast_probes : Optional[ContrastProbesConfig] = xconf.field(default=None, help="")
-    # companions : list[CompanionConfig] = xconf.field(default_factory=list, help="")
+    sampling : SamplingConfig = xconf.field(help="Configure the sampling of the final derotated field for detection and contrast calibration")
     min_coverage_frac : float = xconf.field(help="")
     ray : Union[LocalRayConfig,RemoteRayConfig] = xconf.field(
         default=LocalRayConfig(),
@@ -579,18 +480,22 @@ class VappTrap(xconf.Command):
     use_gpu_decomposition : bool = xconf.field(default=False, help="")
     use_gpu_fit : bool = xconf.field(default=False, help="")
     use_cgls : bool = xconf.field(default=False, help="")
-    use_klip_transpose : bool = xconf.field(default=False, help="")
     benchmark : bool = xconf.field(default=False, help="")
     benchmark_trials : int = xconf.field(default=2, help="")
-    split_bg_model : bool = xconf.field(default=True, help="Use split BG model along clio symmetry ax for vAPP")
     efficient_decomp_reuse : bool = xconf.field(default=True, help="Use a single decomposition for all PAs at given separation by masking a ring")
-    # ray_url : Optional[str] = xconf.field(help="")
-    checkpoint_every_x : int = xconf.field(default=10, help="Write current state of grid to disk every X iterations")
-    # max_jobs_chunk_size : int = xconf.field(default=1, help="Number of grid points to submit as single Ray task")
 
     def main(self):
-        hdul = iofits.load_fits_from_path(self.dataset)
-        log.debug(f"Loaded from {self.dataset}")
+        dest_fs = self.get_dest_fs()
+        coverage_map_fn = f'coverage_t{self.every_t_frames}.fits'
+        covered_pix_mask_fn = f'coverage_t{self.every_t_frames}_{self.min_coverage_frac}.fits'
+        output_filepath, coverage_map_path, covered_pix_mask_path = self.get_output_paths(
+            "grid.fits",
+            coverage_map_fn,
+            covered_pix_mask_fn,
+        )
+
+        hdul = iofits.load_fits_from_path(self.input)
+        log.debug(f"Loaded from {self.input}")
 
         # decimate
         left_cube = hdul[self.left_extname].data[::self.every_t_frames]
@@ -621,11 +526,17 @@ class VappTrap(xconf.Command):
         )
 
         # init ray
-        ray_init_kwargs = {'runtime_env': {'env_vars': {'RAY_USER_SETUP_FUNCTION': 'xpipeline.commands.vapp_trap.init_worker'}}}
+        ray_init_kwargs = {'runtime_env': {
+            'env_vars': {
+                'RAY_USER_SETUP_FUNCTION': 'xpipeline.commands.vapp_trap.init_worker',
+                'MKL_NUM_THREADS': '1',
+                'OMP_NUM_THREADS': '1',
+                'NUMBA_NUM_THREADS': '1',
+            }}
+        }
         if isinstance(self.ray, RemoteRayConfig):
             ray.init(self.ray.url, **ray_init_kwargs)
         else:
-            resources = {}
             ray.init(
                 num_cpus=self.ray.cpus,
                 num_gpus=self.ray.gpus,
@@ -670,40 +581,38 @@ class VappTrap(xconf.Command):
                 decompose_options['resources'] = {'gpu_memory_mb': self.gpu_ram_mb_per_task}
                 evaluate_options['resources'] = {'gpu_memory_mb': self.gpu_ram_mb_per_task}
 
-        coverage_map_path = f'./coverage_t{self.every_t_frames}.fits'
-        if not os.path.exists(coverage_map_path):
+
+        if not dest_fs.exists(coverage_map_path):
             log.debug(f"Computing coverage map")
             final_coverage = pipelines.adi_coverage(mask, angles)
-            fits.PrimaryHDU(final_coverage).writeto(coverage_map_path, overwrite=True)
+            iofits.write_fits(iofits.DaskHDUList([iofits.DaskHDU(final_coverage)]), coverage_map_path)
+            log.debug(f"Wrote coverage map to {coverage_map_path}")
         else:
-            final_coverage = fits.getdata(coverage_map_path)
+            final_coverage = iofits.load_fits_from_path(coverage_map_path)[0].data
 
         n_frames = len(angles)
         covered_pix_mask = final_coverage > int(n_frames * self.min_coverage_frac)
         from skimage.morphology import binary_closing
         covered_pix_mask = binary_closing(covered_pix_mask)
         log.debug(f"Coverage map with {self.min_coverage_frac} fraction gives {np.count_nonzero(covered_pix_mask)} possible pixels to analyze")
-        fits.PrimaryHDU(covered_pix_mask.astype(int)).writeto(coverage_map_path.replace('.fits', f'_{self.min_coverage_frac}.fits'), overwrite=True)
+        if not dest_fs.exists(covered_pix_mask_path):
+            iofits.write_fits(iofits.DaskHDUList([iofits.DaskHDU(covered_pix_mask.astype(int))]), covered_pix_mask_path)
+            log.debug(f"Wrote covered pix mask to {covered_pix_mask_path}")
 
         log.debug("Generating grid")
         grid = grid_generate(
             self.k_modes_vals,
-            covered_pix_mask,
-            self.every_n_pix,
-            self.contrast_probes,
-            self.use_klip_transpose,
+            covered_pix_mask.shape,
+            self.sampling,
         )
         if not self.benchmark:
-            try:
-                # load checkpoint
-                with open("./grid.fits", 'rb') as fh:
-                    hdul = fits.open(fh)
+            if self.checkpoint is not None and utils.get_fs(self.checkpoint).exists(self.checkpoint):
+                try:
+                    hdul = iofits.load_fits_from_path(self.checkpoint)
                     grid = np.asarray(hdul['grid'].data)
-                log.debug(f"Loaded checkpoint successfully")
-            except FileNotFoundError:
-                with open("./grid.fits", 'wb') as fh:
-                    hdu = fits.BinTableHDU(grid, name='grid')
-                    hdu.writeto('./grid.fits')
+                    log.debug(f"Loaded checkpoint successfully")
+                except Exception as e:
+                    log.exception("Checkpoint loading failed, starting with empty grid")
         else:
             # select most costly points
             bench_mask = grid['k_modes'] == max(self.k_modes_vals)
@@ -724,9 +633,6 @@ class VappTrap(xconf.Command):
             evaluate_options=evaluate_options,
             measure_ram=measure_ram,
             efficient_decomp_reuse=self.efficient_decomp_reuse,
-            split_bg=self.split_bg_model,
-            use_cgls=self.use_cgls,
-            use_klip_transpose=self.use_klip_transpose,
             resel_px=self.resel_px,
             coverage_mask=covered_pix_mask,
         )
@@ -739,21 +645,24 @@ class VappTrap(xconf.Command):
 
         # Wait for results, checkpointing as we go
         pending = result_refs
-        total = len(result_refs)
-        n_complete = 0
-        while pending:
-            complete, pending = ray.wait(pending, timeout=5, num_returns=min(self.checkpoint_every_x, len(pending)))
-            for (idx, result) in ray.get(complete):
-                grid[idx] = result
-            if len(complete):
-                n_complete += len(complete)
-                dt = time.time() - start_time
-                complete_per_sec = n_complete / dt
-                sec_per_point = 1/complete_per_sec
-                est_remaining = sec_per_point * (total - n_complete)
-                log.debug(f"{n_complete=} / {total=} ({complete_per_sec=} {sec_per_point=}, {est_remaining=} sec or {est_remaining/60} min)")
-                with open("./grid.fits~", 'wb') as fh:
-                    hdu = fits.BinTableHDU(grid, name='grid')
-                    hdu.writeto(fh)
-                    shutil.move("./grid.fits~", "./grid.fits")
+        total = len(grid)
+        restored_from_checkpoint = np.count_nonzero(grid['time_total_sec'] != 0)
+
+        def make_hdul(grid):
+            return iofits.DaskHDUList([
+                iofits.DaskHDU(None, kind="primary"),
+                iofits.DaskHDU(grid, kind="bintable", name="grid")
+            ])
+
+        with tqdm(total=total) as pbar:
+            pbar.update(restored_from_checkpoint)
+            while pending:
+                complete, pending = ray.wait(pending, timeout=5, num_returns=min(self.checkpoint_every_x, len(pending)))
+                for (idx, result) in ray.get(complete):
+                    grid[idx] = result
+                if len(complete):
+                    pbar.update(len(complete))
+                    if self.checkpoint is not None:
+                        iofits.write_fits(make_hdul(grid), self.checkpoint, overwrite=True)
+        iofits.write_fits(make_hdul(grid), output_filepath, overwrite=True)
         ray.shutdown()

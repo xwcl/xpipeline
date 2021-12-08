@@ -241,7 +241,7 @@ def load_fits_from_path(url_or_path):
             return load_fits(file_handle)
 
 
-def write_fits(hdul, destination_path, overwrite=False):
+def write_fits(hdul, destination_path, overwrite=False) -> str:
     log.debug(f"Writing to {destination_path}")
     fs = utils.get_fs(destination_path)
     exists = fs.exists(destination_path)

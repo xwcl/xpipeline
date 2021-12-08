@@ -47,6 +47,8 @@ setup(
         'memory-profiler>=0.58.0',
         'ray>=1.8',
         'pylops>=1.14,<2.0',
+        'tqdm>=4.62',
+        'pandas>=1.3.4',
     ],
     entry_points={
         'console_scripts': [

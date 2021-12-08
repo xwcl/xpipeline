@@ -3,6 +3,7 @@ import dataclasses
 import logging
 import warnings
 import numpy as np
+import pandas as pd
 from typing import List, Optional, Union
 from dataclasses import dataclass
 import numba
@@ -211,6 +212,26 @@ def _simple_aperture_locations(r_px, pa_deg, resolution_element_px, xcenter=0, y
     return np.stack((offset_x[good_offsets] + xcenter, offset_y[good_offsets] + ycenter), axis=-1)
 
 
+# TODO eliminate some redundancy with simple aperture locator
+def generate_probes(iwa_px : float, owa_px : float, n_radii : int, spacing_px : float, scales : list[float]):
+    '''Generator returning CompanionSpec objects for
+    radii / PA / contrast scales that cover the region from iwa to owa.
+    A scale of 0.0 for the no-injection case is added if not passed in
+    `scales`
+
+    When config.n_radii == 1, only iwa_px matters
+    '''
+    radii_dpx = (owa_px - iwa_px) / (n_radii - 1) if n_radii > 1 else 0
+    for i in range(n_radii):
+        r_px = iwa_px + i * radii_dpx
+        circumference = np.pi * 2 * r_px
+        n_probes = int(circumference // spacing_px)
+        angles_ddeg = 360 / n_probes
+        for j in range(n_probes):
+            pa_deg = j * angles_ddeg
+            for scl in scales:
+                yield CompanionSpec(r_px, pa_deg, scl)
+
 def simple_aperture_locations(r_px, pa_deg, resolution_element_px, exclude_nearest=0,
                               exclude_planet=False, xcenter=0, ycenter=0, good_pixel_mask=None):
     """Returns (x_center, y_center) for apertures in a ring of
@@ -401,7 +422,7 @@ def _calc_snr_image(convolved_image, rho, theta, mask, aperture_diameter_px, exc
                 continue
             loc_rho, loc_theta = rho[y, x], theta[y, x]
             loc_pa_deg = np.rad2deg(loc_theta) - 90
-            
+
             calculated_snr, _ = snr_from_convolution(convolved_image, loc_rho, loc_pa_deg, aperture_diameter_px, exclude_nearest)
             snr_image_out[y, x] = calculated_snr
     return snr_image_out
@@ -586,3 +607,38 @@ def detection_map_cube_from_table(tbl, coverage_mask, ring_px=3, **kwargs):
             **final_kwargs
         )
     return filters, detection_map_cube
+
+def summarize_grid(grid_df : pd.DataFrame,
+                   r_px_colname : str,
+                   pa_deg_colname : str,
+                   snr_colname : str,
+                   injected_scale_colname : str,
+                   hyperparameter_colnames : list[str]):
+    injections = grid_df[(grid_df[injected_scale_colname] > 0) & (grid_df[snr_colname] > 0)].copy()
+
+    injections['contrast_limit_5sigma'] = injections[injected_scale_colname] / injections[snr_colname] * 5
+    grouping_colnames = [r_px_colname, pa_deg_colname]
+    grouping_colnames.extend(hyperparameter_colnames)
+    detections = grid_df[grid_df[injected_scale_colname] == 0].copy()
+
+    def interpolate_5sigma_contrast(grp):
+        rec = grp.iloc[:1].copy()
+        for colname in rec.columns:
+            if colname not in grouping_colnames and colname != 'contrast_limit_5sigma':
+                del rec[colname]
+        try:
+            rec['contrast_limit_5sigma'] = interp1d(grp[snr_colname], grp['contrast_limit_5sigma'])(5)
+        except ValueError:
+            rec['contrast_limit_5sigma'] = pd.NA
+        return rec
+
+    injections_interpolated = injections.groupby(grouping_colnames).apply(interpolate_5sigma_contrast)
+    best_params = injections_interpolated.droplevel(
+        grouping_colnames
+    ).groupby(
+        [r_px_colname, pa_deg_colname]
+    ).apply(lambda grp: grp[grp['contrast_limit_5sigma'] == grp['contrast_limit_5sigma'].min()])
+
+    detections = detections.join(best_params.set_index(grouping_colnames), on=grouping_colnames)
+
+    return best_params, detections
