@@ -121,11 +121,27 @@ def _precompute_basis(image_vecs, model_inputs : ModelInputs, r_px, ring_exclude
         return_basis=True,
     )
     precomputed_trap_basis = starlight_subtraction.trap_phase_1(ref_vecs, params)
+    if force_gpu_decomposition:
+        precomputed_trap_basis.temporal_basis = precomputed_trap_basis.temporal_basis.get()
     return precomputed_trap_basis
 precompute_basis = ray.remote(_precompute_basis)
 
-def _evaluate_point_kt(out_idx, row, inject_image_vecs, model_inputs, k_modes, precomputed_trap_basis, resel_px, coverage_mask, exclude_nearest=1, save_images=False):
+def _evaluate_point_kt(
+        out_idx, 
+        row, 
+        inject_image_vecs, 
+        model_inputs, 
+        k_modes, 
+        precomputed_trap_basis, 
+        resel_px, 
+        coverage_mask, 
+        exclude_nearest=1, 
+        save_images=False, 
+        force_gpu_fit=False
+    ):
     # just use klip-transpose / ADI / matched filter, no simultaneous fit
+    print(f"evaluate_point_kt start {time.time()=}")
+    log.info(f"evaluate_point_kt start {time.time()=}")
     start = time.perf_counter()
     row = row.copy() # since ray is r/o
     companion_r_px, companion_pa_deg = float(row['r_px']), float(row['pa_deg'])  # convert to primitive type so numba doesn't complain
@@ -135,7 +151,13 @@ def _evaluate_point_kt(out_idx, row, inject_image_vecs, model_inputs, k_modes, p
         compute_residuals=True,
         precomputed_basis=precomputed_trap_basis,
     )
+    if force_gpu_fit:
+        precomputed_trap_basis.temporal_basis = cp.asarray(precomputed_trap_basis.temporal_basis)
+        inject_image_vecs = cp.asarray(inject_image_vecs)
+        model_vecs = cp.asarray(model_vecs)
     image_resid_vecs, model_resid_vecs, timers, pix_used = starlight_subtraction.klip_transpose(inject_image_vecs, model_vecs, params_kt)
+    if force_gpu_fit:
+        image_resid_vecs, model_resid_vecs = image_resid_vecs.get(), model_resid_vecs.get()
     resid_cube_kt = improc.wrap_matrix(image_resid_vecs, model_inputs.mask)
     mf_cube_kt = improc.wrap_matrix(model_resid_vecs, model_inputs.mask)
 
@@ -177,6 +199,8 @@ def _evaluate_point_kt(out_idx, row, inject_image_vecs, model_inputs, k_modes, p
     row['pix_used'] = pix_used
     row['signal'] = signal
     row['snr'] = snr
+    print(f"evaluate_point_kt end {time.time()=}")
+    log.info(f"evaluate_point_kt end {time.time()=}")
     return out_idx, row
 evaluate_point_kt = ray.remote(_evaluate_point_kt)
 
@@ -192,7 +216,6 @@ def grid_generate(k_modes_vals, mask_shape, sampling_config : SamplingConfig):
         ('pix_used', int),
         ('time_precompute_svd_sec', float),
         ('signal', float),
-        ('noise', float),
         ('snr', float),
     ]
 
@@ -235,12 +258,12 @@ def _measure_ram(func, options, *args, ram_pad_factor=1.1, measure_gpu_ram=False
         measure_gpu_ram=measure_gpu_ram,
         **kwargs
     )
-    outside_time_sec = time.perf_counter()
+    outside_time_sec = time.time()
     log.debug(f"{func} {outside_time_sec=} at start, ref is {measure_ref}")
     ram_usage_mb, gpu_ram_usage_mb, inside_time_sec = ray.get(measure_ref)
-    end_time_sec = time.perf_counter()
+    end_time_sec = time.time()
     log.debug(f"{func} end time {end_time_sec}")
-    outside_time_sec = time.perf_counter() - outside_time_sec
+    outside_time_sec = time.time() - outside_time_sec
     log.info(f"Measured {func} RAM use of {ram_usage_mb:1.3f} MB, GPU RAM use of {gpu_ram_usage_mb:1.3f}, runtime of {inside_time_sec:1.2f} sec inside and {outside_time_sec:1.2f} sec outside")
     # surprise! "ValueError: Resource quantities >1 must be whole numbers." from ray
     ram_requirement_mb = int(np.ceil(ram_pad_factor * ram_usage_mb))
@@ -254,8 +277,7 @@ def launch_grid(grid,
                 model_inputs, ring_exclude_px,
                 force_gpu_decomposition, force_gpu_fit,
                 generate_options=None, decompose_options=None, evaluate_options=None,
-                measure_ram=False, efficient_decomp_reuse=False, split_bg=False, use_cgls=False,
-                use_klip_transpose=False, resel_px=8, coverage_mask=None):
+                measure_ram=False, efficient_decomp_reuse=False, resel_px=8, coverage_mask=None):
     if generate_options is None:
         generate_options = {}
     if decompose_options is None:
@@ -276,15 +298,6 @@ def launch_grid(grid,
     # precomputation will use the max number of modes, computed once, trimmed as needed
     log.debug(f"{np.unique(remaining_grid['k_modes'])=}")
     max_k_modes = int(max(remaining_grid['k_modes']))
-
-    # left_pix_vec is true where vector entries correspond to pixels
-    # used from the left half of the image in the final stitched cube
-    # for purposes of creating the two background offset terms
-    if split_bg:
-        left_half, _ = vapp.mask_along_angle(model_inputs.mask.shape, clio.VAPP_PSF_ROTATION_DEG)
-        left_pix_vec = improc.unwrap_image(left_half, model_inputs.mask)
-    else:
-        left_pix_vec = None
 
     model_inputs_ref = ray.put(model_inputs)
     log.debug(f"Put model inputs into Ray.")
@@ -308,8 +321,9 @@ def launch_grid(grid,
 
     # unique (r, pa, scale) for *injected*
     injection_locs = np.unique(remaining_grid[['r_px', 'pa_deg', 'inject_scale']])
-    # unique (inject_r, inject_pa, inject_scale, r, pa(?)) for precomputing basis
+    # unique (target r, target pa, injection scale) for precomputing basis
     precompute_locs = np.unique(remaining_grid[['r_px', 'pa_deg', 'inject_scale']])
+
     # try to avoid bottlenecking submission on ram measurement
     if measure_ram:
         # Measure injection using first location (assumes at least 1 unique value for
@@ -359,6 +373,8 @@ def launch_grid(grid,
         # precompute to use as input for evaluate_point
         temp_precompute_ref = precompute_basis.options(**decompose_options).remote(*precomp_args)
         log.debug(f"Submitting precompute as input to evaluate_point {temp_precompute_ref=}")
+        ray.wait(temp_precompute_ref, fetch_local=False)
+        log.debug(f"{temp_precompute_ref=} is ready")
 
         log.debug(f"Measuring RAM use in evaluate_point() {evaluate_options=}")
         ram_requirement_mb, gpu_ram_requirement_mb = _measure_ram(
@@ -372,7 +388,8 @@ def launch_grid(grid,
             temp_precompute_ref,
             resel_px,
             coverage_mask,
-            measure_gpu_ram=force_gpu_decomposition and not efficient_decomp_reuse,
+            force_gpu_fit=force_gpu_fit,
+            measure_gpu_ram=force_gpu_fit or (force_gpu_decomposition and not efficient_decomp_reuse),
         )
         evaluate_options['memory'] = ram_requirement_mb * BYTES_PER_MB
         if gpu_ram_requirement_mb > 0:
@@ -560,12 +577,12 @@ class VappTrap(InputCommand):
             decompose_options['memory'] = self.ram_mb_per_task * BYTES_PER_MB
             evaluate_options['memory'] = self.ram_mb_per_task * BYTES_PER_MB
 
-        if self.use_gpu_decomposition or self.use_gpu_fit:
+        if self.use_gpu_decomposition:
             gpu_frac = 1 / self.max_tasks_per_gpu
             log.debug(f"Using {self.max_tasks_per_gpu} tasks per GPU, {gpu_frac=}")
             # generate_options['num_gpus'] = gpu_frac
             decompose_options['num_gpus'] = gpu_frac
-            evaluate_options['num_gpus'] = gpu_frac
+            # evaluate_options['num_gpus'] = gpu_frac
 
             if self.gpu_ram_mb_per_task is None:
                 raise RuntimeError(f"Specify GPU RAM per task")
