@@ -590,8 +590,16 @@ def klip_transpose(image_vecs, model_vecs, trap_params : TrapParams):
         if core.get_array_module(trap_basis.temporal_basis) is core.cupy:
             trap_basis.temporal_basis = trap_basis.temporal_basis.get()
         return trap_basis
+    # compute projections into eigentimeseries and subtract that from real pixel timeseries
+    timers['time_starlight_subtract_sec'] = time.perf_counter()
     image_resid_vecs = (image_vecs_medsub.T - trap_basis.temporal_basis @ (trap_basis.temporal_basis.T @ image_vecs_medsub.T)).T
+    timers['time_starlight_subtract_sec'] = timers['time_starlight_subtract_sec'] - time.perf_counter()
+
+    # compute projections into eigentimeseries and subtract that from companion model pixel timeseries
+    timers['time_model_subtract_sec'] = time.perf_counter()
     model_resid_vecs = (model_vecs.T - trap_basis.temporal_basis @ (trap_basis.temporal_basis.T @ model_vecs.T)).T
+    timers['time_model_subtract_sec'] = timers['time_model_subtract_sec'] - time.perf_counter()
+
     timers['time_svd_sec'] = trap_basis.time_sec
     return image_resid_vecs, model_resid_vecs, timers, trap_basis.pix_used
 

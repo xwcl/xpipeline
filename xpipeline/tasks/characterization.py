@@ -3,6 +3,7 @@ import dataclasses
 import logging
 import warnings
 import numpy as np
+import astropy.units as u
 import pandas as pd
 from typing import List, Optional, Union
 from dataclasses import dataclass
@@ -540,6 +541,15 @@ def _scale_trap_noise(tbl, ring_px, exclude_rows_mask):
         emp_snr[tbl['r_px'] == r_px] /= new_sigma
     return emp_snr, np.asarray(radii), np.asarray(sigmas)
 
+def points_to_map(xs, ys, zs, mask):
+    yy, xx = np.indices(mask.shape, dtype=float)
+    post_grid_mask = mask == 1
+    points = np.stack((ys, xs), axis=-1)
+    newpoints = np.stack((yy.flatten(), xx.flatten()), axis=-1)
+    outim = griddata(points, zs, newpoints).reshape(mask.shape)
+    outim[~post_grid_mask] = np.nan
+    return outim
+
 def detection_map_from_table(tbl, coverage_mask, ring_px=3, exclude_rows_mask=None, **kwargs):
     '''
     Parameters
@@ -613,8 +623,9 @@ def summarize_grid(grid_df : pd.DataFrame,
                    pa_deg_colname : str,
                    snr_colname : str,
                    injected_scale_colname : str,
-                   hyperparameter_colnames : list[str]):
-    injections = grid_df[(grid_df[injected_scale_colname] > 0) & (grid_df[snr_colname] > 0)].copy()
+                   hyperparameter_colnames : list[str],
+                   min_snr_for_injection=2):
+    injections = grid_df[(grid_df[injected_scale_colname] > 0) & (grid_df[snr_colname] > min_snr_for_injection)].copy()
 
     injections['contrast_limit_5sigma'] = injections[injected_scale_colname] / injections[snr_colname] * 5
     grouping_colnames = [r_px_colname, pa_deg_colname]
@@ -629,16 +640,60 @@ def summarize_grid(grid_df : pd.DataFrame,
         try:
             rec['contrast_limit_5sigma'] = interp1d(grp[snr_colname], grp['contrast_limit_5sigma'])(5)
         except ValueError:
-            rec['contrast_limit_5sigma'] = pd.NA
+            rec['contrast_limit_5sigma'] = grp['contrast_limit_5sigma'].min()
         return rec
 
     injections_interpolated = injections.groupby(grouping_colnames).apply(interpolate_5sigma_contrast)
-    best_params = injections_interpolated.droplevel(
+    best_params : pd.DataFrame = injections_interpolated.droplevel(
         grouping_colnames
     ).groupby(
         [r_px_colname, pa_deg_colname]
-    ).apply(lambda grp: grp[grp['contrast_limit_5sigma'] == grp['contrast_limit_5sigma'].min()])
+    ).apply(
+        lambda grp: grp[grp['contrast_limit_5sigma'] == grp['contrast_limit_5sigma'].min()]
+    ).droplevel(['r_px', 'pa_deg'])
 
-    detections = detections.join(best_params.set_index(grouping_colnames), on=grouping_colnames)
-
+    detections = best_params.merge(detections)
     return best_params, detections
+
+
+
+def apparent_mag(absolute_mag, d):
+    '''Scale an `absolute_mag` to an apparent magnitude using
+    the distance modulus for `d`
+    '''
+    if not d.unit.is_equivalent(u.pc):
+        raise ValueError(f"d must be units of distance, got {d.unit}")
+    return 5 * np.log10(d / (10 * u.pc)) + absolute_mag
+
+def absolute_mag(apparent_mag, d):
+    '''Scale an `apparent_mag` at distance `d` to `d` = 10 pc
+    '''
+    if not d.unit.is_equivalent(u.pc):
+        raise ValueError(f"d must be units of distance, got {d.unit}")
+    return apparent_mag - 5 * np.log10(d / (10 * u.pc))
+
+def contrast_to_deltamag(contrast):
+    '''contrast as :math:`10^{-X}` to delta magnitude'''
+    return -2.5 * np.log10(contrast)
+
+def deltamag_to_contrast(deltamag):
+    '''delta mag as an exponent in :math:`10^{-X}`'''
+    return np.power(10, deltamag / -2.5)
+
+def stddev_to_mag_err(value, stddev):
+    # f = a log_10 (b * A)
+    # sigma_f^2 = (a * sigma_A / (A * ln(10)))^2
+    # sigma_f = |a * sigma_A / (A * ln(10))|
+    # for magnitudes a = -2.5, b = 1
+    return np.abs(-2.5 * stddev / (value * np.log(10)))
+
+def lambda_over_d_to_arcsec(lambda_over_d, wavelength, d):
+    unit_lambda_over_d = (wavelength.to(u.m) / d.to(u.m)).si.value * u.radian
+    return (lambda_over_d * unit_lambda_over_d).to(u.arcsec)
+
+def arcsec_to_lambda_over_d(arcsec, wavelength, d):
+    unit_lambda_over_d = ((wavelength.to(u.m) / d.to(u.m)).si.value * u.radian).to(
+        u.arcsec
+    )
+    lambda_over_d = (arcsec / unit_lambda_over_d).si
+    return lambda_over_d

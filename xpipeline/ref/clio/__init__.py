@@ -9,7 +9,9 @@ from dataclasses import dataclass
 
 import dateutil
 
-from ...tasks import iofits, improc, vapp, detector, obs_table
+from xpipeline.tasks.characterization import lambda_over_d_to_arcsec
+
+from ...tasks import iofits, improc, vapp, detector, obs_table, characterization
 from ... import constants
 from .. import magellan
 from ... import utils
@@ -37,28 +39,20 @@ VAPP_OFFSET_LAMD = 1.44
 # on the dark hole edge
 VAPP_GLINT_FREE_RADIUS_LAMD = 10
 
+lambda_over_d_to_arcsec = partial(characterization.lambda_over_d_to_arcsec, d=magellan.PRIMARY_MIRROR_DIAMETER)
+arcsec_to_lambda_over_d = partial(characterization.arcsec_to_lambda_over_d, d=magellan.PRIMARY_MIRROR_DIAMETER)
 
-def lambda_over_d_to_arcsec(
-    lambda_over_d, wavelength, d=magellan.PRIMARY_MIRROR_DIAMETER
-):
-    unit_lambda_over_d = (wavelength.to(u.m) / d.to(u.m)).si.value * u.radian
-    return (lambda_over_d * unit_lambda_over_d).to(u.arcsec)
+def arcsec_to_pixel(arcsec):
+    return (arcsec / CLIO2_PIXEL_SCALE).to(u.pixel)
 
-
-def arcsec_to_lambda_over_d(arcsec, wavelength, d=magellan.PRIMARY_MIRROR_DIAMETER):
-    unit_lambda_over_d = ((wavelength.to(u.m) / d.to(u.m)).si.value * u.radian).to(
-        u.arcsec
-    )
-    lambda_over_d = (arcsec / unit_lambda_over_d).si
-    return lambda_over_d
-
+def pixel_to_arcsec(arcsec):
+    return (arcsec * CLIO2_PIXEL_SCALE).to(u.arcsec)
 
 def lambda_over_d_to_pixel(
     lambda_over_d, wavelength, d=magellan.PRIMARY_MIRROR_DIAMETER
 ):
     arcsec = lambda_over_d_to_arcsec(lambda_over_d, wavelength, d=d)
     return (arcsec / CLIO2_PIXEL_SCALE).to(u.pixel)
-
 
 def pixel_to_lambda_over_d(px, wavelength, d=magellan.PRIMARY_MIRROR_DIAMETER):
     arcsec = (px * CLIO2_PIXEL_SCALE).to(u.arcsec)

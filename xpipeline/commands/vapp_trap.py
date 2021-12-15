@@ -145,7 +145,9 @@ def _evaluate_point_kt(
     start = time.perf_counter()
     row = row.copy() # since ray is r/o
     companion_r_px, companion_pa_deg = float(row['r_px']), float(row['pa_deg'])  # convert to primitive type so numba doesn't complain
+    model_gen_sec = time.perf_counter()
     model_vecs = generate_model(model_inputs, companion_r_px, companion_pa_deg)
+    model_gen_sec = model_gen_sec - time.perf_counter()
     params_kt = starlight_subtraction.TrapParams(
         k_modes=k_modes,
         compute_residuals=True,
@@ -195,7 +197,8 @@ def _evaluate_point_kt(
         hdul.writeto(outfile, overwrite=True)
         print(os.path.abspath(outfile))
     row['time_total_sec'] = time.perf_counter() - start
-    row['time_precompute_svd_sec'] = timers['time_svd_sec']
+    row['time_generate_sec'] = time.perf_counter() - model_gen_sec
+    row['time_decompose_sec'] = timers['time_svd_sec']
     row['pix_used'] = pix_used
     row['signal'] = signal
     row['snr'] = snr
@@ -210,11 +213,12 @@ def grid_generate(k_modes_vals, mask_shape, sampling_config : SamplingConfig):
         ('pa_deg', float),
         ('x', float),
         ('y', float),
-        ('inject_scale', float),
+        ('injected_scale', float),
         ('k_modes', int),
-        ('time_total_sec', float),
         ('pix_used', int),
-        ('time_precompute_svd_sec', float),
+        ('time_total_sec', float),
+        ('time_generate_sec', float),
+        ('time_decompose_sec', float),
         ('signal', float),
         ('snr', float),
     ]
@@ -373,7 +377,7 @@ def launch_grid(grid,
         # precompute to use as input for evaluate_point
         temp_precompute_ref = precompute_basis.options(**decompose_options).remote(*precomp_args)
         log.debug(f"Submitting precompute as input to evaluate_point {temp_precompute_ref=}")
-        ray.wait(temp_precompute_ref, fetch_local=False)
+        ray.wait([temp_precompute_ref], fetch_local=False)
         log.debug(f"{temp_precompute_ref=} is ready")
 
         log.debug(f"Measuring RAM use in evaluate_point() {evaluate_options=}")
