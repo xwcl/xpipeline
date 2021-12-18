@@ -42,12 +42,6 @@ class SummarizeGrid(InputCommand):
         grid_tbl = grid_hdul[self.ext].data
         log.info(f"Loaded {len(grid_tbl)} points for evaluation")
         grid_df = pd.DataFrame(grid_tbl)
-        grid_df['r_as'] = (grid_df['r_px'].to_numpy() * u.pix * self.arcsec_per_pixel).value
-        grid_df['r_lambda_over_d'] = characterization.arcsec_to_lambda_over_d(
-            grid_df['r_as'].to_numpy() * u.arcsec,
-            self.wavelength_um * u.um,
-            d=self.primary_diameter_m * u.m
-        )
 
         import pandas as pd
 
@@ -60,6 +54,13 @@ class SummarizeGrid(InputCommand):
             hyperparameter_colnames=self.columns.hyperparameters,
         )
         limits_df['delta_mag_contrast_limit_5sigma'] = characterization.contrast_to_deltamag(limits_df['contrast_limit_5sigma'].to_numpy())
+        for df in [limits_df, detections_df]:
+            df['r_as'] = (limits_df['r_px'].to_numpy() * u.pix * self.arcsec_per_pixel).value
+            df['r_lambda_over_d'] = characterization.arcsec_to_lambda_over_d(
+                df['r_as'].to_numpy() * u.arcsec,
+                self.wavelength_um * u.um,
+                d=self.primary_diameter_m * u.m
+            )
         log.info(f"Sampled {len(limits_df)} locations for contrast limits and detection")
 
         lim_xs, lim_ys = characterization.r_pa_to_x_y(limits_df[self.columns.r_px], limits_df[self.columns.pa_deg], xc, yc)
