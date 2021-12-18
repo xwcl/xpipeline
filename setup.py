@@ -8,7 +8,7 @@ setup(
     # version='0.0.1.dev',
     use_scm_version=True,
     setup_requires=['setuptools_scm'],
-    url='https://github.com/magao-x/xpipeline',
+    url='https://github.com/xwcl/xpipeline',
     description=description,
     author='Joseph D. Long',
     author_email='me@joseph-long.com',
