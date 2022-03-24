@@ -215,15 +215,16 @@ register_generic(DaskHDUList)
 
 
 def load_fits(file_handle):
-    hdul = fits.open(file_handle, mode="readonly", memmap=False)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        log.debug(f"Validating FITS headers")
-        hdul.verify("fix")
-        for hdu in hdul:
-            hdu.header.add_history("xpipeline loaded and validated format")
-    log.debug(f"Converting to DaskHDUList")
-    dask_hdul = DaskHDUList.from_fits(hdul)
+    with file_handle:
+        hdul = fits.open(file_handle, mode="readonly", memmap=False)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            log.debug(f"Validating FITS headers")
+            hdul.verify("fix")
+            for hdu in hdul:
+                hdu.header.add_history("xpipeline loaded and validated format")
+        log.debug(f"Converting to DaskHDUList")
+        dask_hdul = DaskHDUList.from_fits(hdul)
     log.debug(f"Loaded {file_handle}: {dask_hdul.hdus}")
     return dask_hdul
 

@@ -5,6 +5,8 @@ import os
 import sys
 import os.path
 import xconf
+from xconf.contrib import LocalRayConfig as _LocalRayConfig
+from xconf.contrib import RemoteRayConfig as _RemoteRayConfig
 from .. import core, utils, types
 
 log = logging.getLogger(__name__)
@@ -69,7 +71,6 @@ class BaseCommand(xconf.Command):
 @xconf.config
 class InputCommand(BaseCommand):
     input : str = xconf.field(help="Input file path")
-
 
 @xconf.config
 class MultiInputCommand(InputCommand):
@@ -151,19 +152,20 @@ class AngleRangeConfig:
 class FileConfig:
     path : str = xconf.field(help="File path")
 
-    def open(self, mode='r'):
+    def open(self, mode='rb'):
         from ..utils import get_fs
         fs = get_fs(self.path)
         return fs.open(self.path, mode)
 
 @xconf.config
-class FitsConfig:
+class FitsConfig(FileConfig):
     path : str = xconf.field(help="Path from which to load the containing FITS file")
     ext : typing.Union[int,str] = xconf.field(default=0, help="Extension from which to load")
 
     def load(self):
         from ..tasks import iofits
-        hdul = iofits.load_fits_from_path(self.path)
+        with self.open() as fh:
+            hdul = iofits.load_fits(fh)
         return hdul[self.ext].data
 
 @xconf.config
@@ -173,5 +175,24 @@ class FitsTableColumnConfig(FitsConfig):
 
     def load(self):
         from ..tasks import iofits
-        hdul = iofits.load_fits_from_path(self.path)
+        with self.open() as fh:
+            print(fh)
+            hdul = iofits.load_fits(fh)
         return hdul[self.ext].data[self.table_column]
+
+def init_worker():
+    import matplotlib
+    matplotlib.use("Agg")
+    from xpipeline.cli import Dispatcher
+    Dispatcher.configure_logging(None, 'INFO')
+    log.info(f"Worker logging initalized")
+
+@xconf.config
+class LocalRayConfig(_LocalRayConfig):
+    setup_function_path : typing.ClassVar[str] = "xpipeline.commands.base.init_worker"
+
+@xconf.config
+class RemoteRayConfig(_RemoteRayConfig):
+    setup_function_path : typing.ClassVar[str] = "xpipeline.commands.base.init_worker"
+
+AnyRayConfig = typing.Union[LocalRayConfig, RemoteRayConfig]

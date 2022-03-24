@@ -27,6 +27,7 @@ from .commands import (
     evaluate,
     vapp_trap,
     summarize_grid,
+    klipt_fm,
 )
 
 log = logging.getLogger(__name__)
@@ -54,6 +55,7 @@ COMMANDS = {
     evaluate.Evaluate,
     vapp_trap.VappTrap,
     summarize_grid.SummarizeGrid,
+    klipt_fm.KlipTFm
 }
 
 class Dispatcher(xconf.Dispatcher):
@@ -63,10 +65,11 @@ class Dispatcher(xconf.Dispatcher):
         for h in root_logger.handlers:
             root_logger.removeHandler(h)
         # apply verbosity
-        pkglog = logging.getLogger('xpipeline')
-        pkglog.setLevel(level)
-        # add colors (if a tty)
-        coloredlogs.install(level=level, logger=pkglog)
+        for logger_name in ['xpipeline', 'xconf']:
+            pkglog = logging.getLogger(logger_name)
+            pkglog.setLevel(level)
+            # add colors (if a tty)
+            coloredlogs.install(level=level, logger=pkglog)
 
 
 def main():
