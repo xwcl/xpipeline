@@ -120,9 +120,9 @@ def _precompute_basis(image_vecs, model_inputs : ModelInputs, r_px, ring_exclude
         force_gpu_decomposition=force_gpu_decomposition,
         return_basis=True,
     )
-    precomputed_trap_basis = starlight_subtraction.trap_phase_1(ref_vecs, params)
+    precomputed_trap_basis = starlight_subtraction.compute_temporal_basis(ref_vecs, params)
     if force_gpu_decomposition:
-        precomputed_trap_basis.temporal_basis = precomputed_trap_basis.temporal_basis.get()
+        precomputed_trap_basis.vectors = precomputed_trap_basis.vectors.get()
     return precomputed_trap_basis
 precompute_basis = ray.remote(_precompute_basis)
 
@@ -154,7 +154,7 @@ def _evaluate_point_kt(
         precomputed_basis=precomputed_trap_basis,
     )
     if force_gpu_fit:
-        precomputed_trap_basis.temporal_basis = cp.asarray(precomputed_trap_basis.temporal_basis)
+        precomputed_trap_basis.vectors = cp.asarray(precomputed_trap_basis.vectors)
         inject_image_vecs = cp.asarray(inject_image_vecs)
         model_vecs = cp.asarray(model_vecs)
     image_resid_vecs, model_resid_vecs, timers, pix_used = starlight_subtraction.klip_transpose(inject_image_vecs, model_vecs, params_kt)

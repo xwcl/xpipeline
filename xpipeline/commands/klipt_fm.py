@@ -136,7 +136,7 @@ def _precompute_basis(image_vecs, model_inputs : ModelInputs, r_px, ring_exclude
         force_gpu_decomposition=decompose_on_gpu,
         return_basis=True,
     )
-    precomputed_trap_basis = starlight_subtraction.trap_phase_1(ref_vecs, params)
+    precomputed_trap_basis = starlight_subtraction.compute_temporal_basis(ref_vecs, params)
     if decompose_on_gpu:
         precomputed_trap_basis.temporal_basis = precomputed_trap_basis.temporal_basis.get()
     return precomputed_trap_basis
@@ -146,7 +146,7 @@ def _evaluate_point_kt(
     row, 
     inject_image_vecs,
     model_inputs,
-    precomputed_trap_basis, 
+    precomputed_basis, 
     resel_px, 
     coverage_mask, 
     exclude_nearest=1, 
@@ -161,13 +161,13 @@ def _evaluate_point_kt(
     model_gen_sec = time.perf_counter()
     model_vecs = generate_model(model_inputs, companion_r_px, companion_pa_deg)
     model_gen_sec = model_gen_sec - time.perf_counter()
-    params_kt = starlight_subtraction.TrapParams(
+    params_kt = starlight_subtraction.KlipTParams(
         k_modes=row['k_modes'],
         compute_residuals=True,
-        precomputed_basis=precomputed_trap_basis,
+        precomputed_basis=precomputed_basis,
     )
     if evaluate_on_gpu:
-        precomputed_trap_basis.temporal_basis = cp.asarray(precomputed_trap_basis.temporal_basis)
+        precomputed_basis.temporal_basis = cp.asarray(precomputed_basis.temporal_basis)
         inject_image_vecs = cp.asarray(inject_image_vecs)
         model_vecs = cp.asarray(model_vecs)
     image_resid_vecs, model_resid_vecs, timers, pix_used = starlight_subtraction.klip_transpose(inject_image_vecs, model_vecs, params_kt)

@@ -281,19 +281,6 @@ def exclusions_to_range(n_images, current_idx, exclusion_values, exclusion_delta
     return min_excluded_idx, max_excluded_idx
 
 @njit(
-    # TODO figure out the right signature to compile this at import time
-    # (
-    #     numba.float32[:,:],
-    #     numba.intp,
-    #     numba.float32[:,:],
-    #     numba.float32[:],
-    #     numba.float32[:,:],
-    #     numba.intc,
-    #     numba.boolean,
-    #     numba.typeof(constants.KlipStrategy.SVD),
-    #     numba.optional(numba.float32[:,:]),
-    #     numba.optional(numba.float32[:,:])
-    # ),
     parallel=True
 )
 def klip_chunk_svd(
@@ -449,10 +436,31 @@ DEFAULT_DECOMPOSERS = {
 }
 
 @dataclass
-class TrapBasis:
-    temporal_basis : np.ndarray
+class TemporalBasis:
+    vectors : np.ndarray
     time_sec : float
     pix_used : int
+
+@dataclass
+class KlipTParams:
+    # modes_frac : float = 0.3
+    k_modes : int
+    model_trim_threshold : float = 0.2  # fraction of peak model intensity in a frame below which model is trimmed to zero
+    model_pix_threshold : float = 0.3  # max level in model pix for data pix to be included in ref vecs
+    compute_residuals : bool = True
+    incorporate_offset : bool = True
+    scale_ref_std : bool = True
+    scale_model_std : bool = True
+    dense_decomposer : callable = learning.generic_svd
+    iterative_decomposer : callable = learning.cpu_top_k_svd_arpack
+    min_modes_frac_for_dense : float = 0.15  # dense solver presumed faster when more than this fraction of all modes requested
+    min_dim_for_iterative : int = 1000   # dense solver is as fast or faster below some matrix dimension
+    force_gpu_decomposition : bool = False
+    force_gpu_fit : bool = False
+    # make it possible to pass in basis
+    return_basis : bool = False
+    precomputed_basis : Optional[TemporalBasis] = None
+
 
 @dataclass
 class TrapParams:
@@ -475,7 +483,7 @@ class TrapParams:
     tol : float = 1e-8
     # make it possible to pass in basis
     return_basis : bool = False
-    precomputed_basis : Optional[TrapBasis] = None
+    precomputed_basis : Optional[TemporalBasis] = None
     background_split_mask: Optional[np.ndarray] = None
     use_cgls : bool = False
 
@@ -486,7 +494,7 @@ def trim_model_vecs(model_vecs: np.ndarray, model_trim_threshold: float):
     trimmed_model_vecs[pix_below_threshold] = 0
     return trimmed_model_vecs
 
-def trap_ref_vecs_mask(trimmed_model_vecs, planet_signal_threshold):
+def make_pix_without_planet_signal_mask(trimmed_model_vecs, planet_signal_threshold):
     xp = core.get_array_module(trimmed_model_vecs)
     pix_with_planet_signal = xp.any(trimmed_model_vecs / xp.max(trimmed_model_vecs, axis=0),axis=1) > planet_signal_threshold
     pix_used = xp.count_nonzero(~pix_with_planet_signal)
@@ -503,24 +511,24 @@ def trap_mtx(image_vecs, model_vecs, trap_params : TrapParams):
     image_vecs_medsub = image_vecs - median_timeseries
 
     if trap_params.precomputed_basis is None:
-        ref_vecs_mask, pix_used = trap_ref_vecs_mask(trimmed_model_vecs, trap_params.model_pix_threshold)
+        ref_vecs_mask, pix_used = make_pix_without_planet_signal_mask(trimmed_model_vecs, trap_params.model_pix_threshold)
         ref_vecs = image_vecs_medsub[ref_vecs_mask]
         log.debug(f"Using {pix_used} pixel time series for TRAP basis with {trap_params.k_modes} modes")
-        trap_basis = trap_phase_1(ref_vecs, trap_params)
+        temporal_basis = compute_temporal_basis(ref_vecs, trap_params)
     else:
-        trap_basis = trap_phase_1(None, trap_params)
+        temporal_basis = compute_temporal_basis(None, trap_params)
     if trap_params.return_basis and not was_gpu_array:
-        if get_array_module(trap_basis.temporal_basis) is core.cupy:
-            trap_basis.temporal_basis = trap_basis.temporal_basis.get()
-        return trap_basis
-    timers['time_svd_sec'] = trap_basis.time_sec
+        if get_array_module(temporal_basis.vectors) is core.cupy:
+            temporal_basis.vectors = temporal_basis.vectors.get()
+        return temporal_basis
+    timers['time_svd_sec'] = temporal_basis.time_sec
     if trap_params.force_gpu_fit and not was_gpu_array:
         image_vecs_medsub_, trimmed_model_vecs_ = cp.asarray(image_vecs_medsub), cp.asarray(trimmed_model_vecs)
         del image_vecs_medsub, trimmed_model_vecs
         image_vecs_medsub, trimmed_model_vecs = image_vecs_medsub_, trimmed_model_vecs_
-        temporal_basis = cp.asarray(trap_basis.temporal_basis)
+        temporal_basis = cp.asarray(temporal_basis.vectors)
     else:
-        temporal_basis = trap_basis.temporal_basis
+        temporal_basis = temporal_basis.vectors
     model_coeff, inv_timers, maybe_resid_vecs = trap_phase_2(
         image_vecs_medsub, trimmed_model_vecs,
         temporal_basis, trap_params
@@ -530,39 +538,39 @@ def trap_mtx(image_vecs, model_vecs, trap_params : TrapParams):
         if maybe_resid_vecs is not None:
             maybe_resid_vecs = maybe_resid_vecs.get()
         model_coeff = model_coeff.get()
-    return model_coeff, timers, trap_basis.pix_used, maybe_resid_vecs
+    return model_coeff, timers, temporal_basis.pix_used, maybe_resid_vecs
 
-def trap_phase_1(ref_vecs, trap_params):
-    if trap_params.precomputed_basis is not None:
-        basis = trap_params.precomputed_basis
-        temporal_basis = basis.temporal_basis
+def compute_temporal_basis(ref_vecs, params: Union[TrapParams,KlipTParams]):
+    if params.precomputed_basis is not None:
+        basis : TemporalBasis = params.precomputed_basis
+        temporal_basis = basis.vectors
         xp = core.get_array_module(temporal_basis)
-        temporal_basis = xp.ascontiguousarray(temporal_basis[:,:trap_params.k_modes])
-        return TrapBasis(temporal_basis, basis.time_sec, basis.pix_used)
+        temporal_basis = xp.ascontiguousarray(temporal_basis[:,:params.k_modes])
+        return TemporalBasis(temporal_basis, basis.time_sec, basis.pix_used)
     xp = core.get_array_module(ref_vecs)
     # k_modes = int(min(image_vecs_medsub.shape) * trap_params.modes_frac)
-    k_modes = trap_params.k_modes
+    k_modes = params.k_modes
     max_modes = min(ref_vecs.shape)
 
     # Using the std of each pixel's timeseries to scale it before decomposition reduces the weight of the brightest pixels
-    if trap_params.scale_ref_std:
+    if params.scale_ref_std:
         ref_vecs_std = xp.std(ref_vecs, axis=1)
         scaled_ref_vecs = ref_vecs / ref_vecs_std[:,np.newaxis]
     else:
         scaled_ref_vecs = ref_vecs
-    if trap_params.force_gpu_decomposition:
+    if params.force_gpu_decomposition:
         scaled_ref_vecs = cp.asarray(scaled_ref_vecs)
         xp = core.cupy
 
     # select decomposer based on mode fraction and whether we're on GPU
     if xp is core.cupy:
-        decomposer = trap_params.dense_decomposer
-    elif k_modes > trap_params.min_modes_frac_for_dense * max_modes:
-        decomposer = trap_params.dense_decomposer
-    elif max_modes < trap_params.min_dim_for_iterative:
-        decomposer = trap_params.dense_decomposer
+        decomposer = params.dense_decomposer
+    elif k_modes > params.min_modes_frac_for_dense * max_modes:
+        decomposer = params.dense_decomposer
+    elif max_modes < params.min_dim_for_iterative:
+        decomposer = params.dense_decomposer
     else:
-        decomposer = trap_params.iterative_decomposer
+        decomposer = params.iterative_decomposer
 
     log.debug(f"Begin SVD with {decomposer=}...")
     time_sec = time.perf_counter()
@@ -570,34 +578,34 @@ def trap_phase_1(ref_vecs, trap_params):
     time_sec = time.perf_counter() - time_sec
     log.debug(f"SVD complete in {time_sec} sec")
     temporal_basis = mtx_v  # shape = (nframes, ncomponents)
-    return TrapBasis(temporal_basis, time_sec, ref_vecs.shape[0])
+    return TemporalBasis(temporal_basis, time_sec, ref_vecs.shape[0])
 
-def klip_transpose(image_vecs, model_vecs, trap_params : TrapParams):
+def klip_transpose(image_vecs, model_vecs, klipt_params : KlipTParams):
     xp = core.get_array_module(image_vecs)
     was_gpu_array = xp is core.cupy
     timers = {}
-    trimmed_model_vecs = trim_model_vecs(model_vecs, trap_params.model_trim_threshold)
+    trimmed_model_vecs = trim_model_vecs(model_vecs, klipt_params.model_trim_threshold)
     median_timeseries = xp.median(image_vecs, axis=0)
     image_vecs_medsub = image_vecs - median_timeseries
-    if trap_params.precomputed_basis is None:
-        ref_vecs_mask, pix_used = trap_ref_vecs_mask(trimmed_model_vecs, trap_params.model_pix_threshold)
+    if klipt_params.precomputed_basis is None:
+        ref_vecs_mask, pix_used = make_pix_without_planet_signal_mask(trimmed_model_vecs, klipt_params.model_pix_threshold)
         ref_vecs = image_vecs_medsub[ref_vecs_mask]
-        log.debug(f"Using {pix_used} pixel time series for KLIP^T basis with {trap_params.k_modes} modes")
-        trap_basis = trap_phase_1(ref_vecs, trap_params)
+        log.debug(f"Using {pix_used} pixel time series for KLIP^T basis with {klipt_params.k_modes} modes")
+        trap_basis = compute_temporal_basis(ref_vecs, klipt_params)
     else:
-        trap_basis = trap_phase_1(None, trap_params)
-    if trap_params.return_basis and not was_gpu_array:
-        if core.get_array_module(trap_basis.temporal_basis) is core.cupy:
-            trap_basis.temporal_basis = trap_basis.temporal_basis.get()
+        trap_basis = compute_temporal_basis(None, klipt_params)
+    if klipt_params.return_basis and not was_gpu_array:
+        if core.get_array_module(trap_basis.vectors) is core.cupy:
+            trap_basis.vectors = trap_basis.vectors.get()
         return trap_basis
     # compute projections into eigentimeseries and subtract that from real pixel timeseries
     timers['time_starlight_subtract_sec'] = time.perf_counter()
-    image_resid_vecs = (image_vecs_medsub.T - trap_basis.temporal_basis @ (trap_basis.temporal_basis.T @ image_vecs_medsub.T)).T
+    image_resid_vecs = (image_vecs_medsub.T - trap_basis.vectors @ (trap_basis.vectors.T @ image_vecs_medsub.T)).T
     timers['time_starlight_subtract_sec'] = timers['time_starlight_subtract_sec'] - time.perf_counter()
 
     # compute projections into eigentimeseries and subtract that from companion model pixel timeseries
     timers['time_model_subtract_sec'] = time.perf_counter()
-    model_resid_vecs = (model_vecs.T - trap_basis.temporal_basis @ (trap_basis.temporal_basis.T @ model_vecs.T)).T
+    model_resid_vecs = (model_vecs.T - trap_basis.vectors @ (trap_basis.vectors.T @ model_vecs.T)).T
     timers['time_model_subtract_sec'] = timers['time_model_subtract_sec'] - time.perf_counter()
 
     timers['time_svd_sec'] = trap_basis.time_sec
