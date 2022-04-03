@@ -70,7 +70,7 @@ class SummarizeGrid(InputCommand):
 
         hdus = [iofits.DaskHDU(None, kind="primary")]
         hdus.append(iofits.DaskHDU(contrast_lim_map, name="limits_5sigma_contrast_map"))
-        hdus.append(iofits.DaskHDU(limits_df.to_records(), kind="bintable", name="limits"))
+        hdus.append(iofits.DaskHDU(limits_df.to_records(index=False), kind="bintable", name="limits"))
         hdus.append(iofits.DaskHDU(detection_map, name="detection_snr_map"))
-        hdus.append(iofits.DaskHDU(detections_df.to_records(), kind="bintable", name="detection"))
+        hdus.append(iofits.DaskHDU(detections_df.to_records(index=False), kind="bintable", name="detection"))
         iofits.write_fits(iofits.DaskHDUList(hdus), output_filepath)

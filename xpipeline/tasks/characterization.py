@@ -644,18 +644,14 @@ def summarize_grid(grid_df : pd.DataFrame,
         return rec
 
     injections_interpolated = injections.groupby(grouping_colnames).apply(interpolate_5sigma_contrast)
-    best_params : pd.DataFrame = injections_interpolated.droplevel(
-        grouping_colnames
-    ).groupby(
+    best_params : pd.DataFrame = injections_interpolated.groupby(
         [r_px_colname, pa_deg_colname]
     ).apply(
         lambda grp: grp[grp['contrast_limit_5sigma'] == grp['contrast_limit_5sigma'].min()]
-    ).droplevel(['r_px', 'pa_deg'])
+    ).droplevel([r_px_colname, pa_deg_colname])
 
     detections = best_params.merge(detections)
     return best_params, detections
-
-
 
 def apparent_mag(absolute_mag, d):
     '''Scale an `absolute_mag` to an apparent magnitude using
