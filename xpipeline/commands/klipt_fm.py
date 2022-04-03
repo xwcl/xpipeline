@@ -406,6 +406,7 @@ class KlipTFm(BaseCommand, BaseRayGrid):
         gridpoints_dir = join(self.destination.path, "gridpoints")
         if self.save_images and dest_fs.exists(self.destination.path):
             log.debug(f"Checking {self.destination.path} for existing saved images")
+            dest_fs.makedirs(gridpoints_dir, exist_ok=True)
             gridpoint_image_paths = dest_fs.ls(gridpoints_dir, detail=False)
             print(f"{gridpoint_image_paths=}")
             for i in range(len(tbl)):
