@@ -554,18 +554,10 @@ class KlipTFm(BaseCommand, BaseRayGrid):
         del stitched_cube
         image_vecs_ref = ray.put(image_vecs)
 
-        # unique (r, pa, scale) for *injected*
-        # print(f"{pending_tbl=}")
-        # import IPython
-        # IPython.embed()
-        injection_locs = np.unique(pending_tbl[['r_px', 'pa_deg', 'injected_scale']])
-        # unique (target r, target pa, injection scale) for precomputing basis
-        precompute_locs = np.unique(pending_tbl[['r_px', 'pa_deg', 'injected_scale']])
-
         # try to avoid bottlenecking submission on ram measurement
         if measure_ram:
             test_row = pending_tbl[np.argmax(pending_tbl['k_modes'])]
-            self.measure_ram(
+            task_options = self.measure_ram(
                 task_options,
                 image_vecs_ref,
                 model_inputs_ref, 
@@ -573,31 +565,24 @@ class KlipTFm(BaseCommand, BaseRayGrid):
                 test_row,
             )
 
-        made = 0
-        for row in injection_locs:
+        max_k_modes = np.max(pending_tbl['k_modes'])
+        injected_count, decomposed_count = 0, 0
+        remaining_point_refs = []
+        for row in pending_tbl:
             inject_key = inject_key_maker(row)
-            if row['injected_scale'] == 0:
-                inject_refs[inject_key] = image_vecs_ref
-            else:
-                inject_refs[inject_key] = inject_model.options(**task_options.generate).remote(
+            precompute_key = precompute_key_maker(row)
+            if inject_key not in inject_refs:
+                inject_image_vecs_ref = inject_model.options(**task_options.generate).remote(
                     image_vecs_ref,
                     model_inputs_ref,
                     row['r_px'],
                     row['pa_deg'],
                     row['injected_scale'],
                 )
-                made += 1
-        log.debug(f"Generating {made} datasets with model planet injection")
-
-        if self.efficient_decomp_reuse:
-            max_k_modes = np.max(pending_tbl['k_modes'])
-            for row in precompute_locs:
-                # submit initial_decomposition with max_k_modes
-                precompute_key = precompute_key_maker(row)
-                inject_key = inject_key_maker(row)
-                inject_image_vecs_ref = inject_refs[inject_key]
-
-                precompute_refs[precompute_key] = precompute_basis.options(**task_options.decompose).remote(
+                inject_refs[inject_key] = inject_image_vecs_ref
+                injected_count += 1
+            if precompute_key not in precompute_refs:
+                precompute_ref = precompute_basis.options(**task_options.decompose).remote(
                     inject_image_vecs_ref,
                     model_inputs_ref,
                     row['r_px'],
@@ -605,21 +590,11 @@ class KlipTFm(BaseCommand, BaseRayGrid):
                     max_k_modes,
                     self.decompose_on_gpu,
                 )
-            log.debug(f"Precomputing {len(precompute_locs)} basis sets with {max_k_modes=}")
-
-        remaining_point_refs = []
-
-        for row in pending_tbl:
-            inject_key = inject_key_maker(row)
-            inject_ref = inject_refs[inject_key]
-            if self.efficient_decomp_reuse:
-                precompute_key = precompute_key_maker(row)
-                precompute_ref = precompute_refs[precompute_key]
-            else:
-                precompute_ref = None
+                precompute_refs[precompute_key] = precompute_ref
+                decomposed_count += 1
             point_ref = evaluate_point_kt.options(**task_options.evaluate).remote(
                 row,
-                inject_ref,
+                inject_image_vecs_ref,
                 model_inputs_ref,
                 precompute_ref,
                 self.resel_px,
@@ -627,5 +602,6 @@ class KlipTFm(BaseCommand, BaseRayGrid):
                 save_to_dir=self.destination if self.save_images else None,
             )
             remaining_point_refs.append(point_ref)
+        log.debug(f"Generated {injected_count} fake-injected datasets, launched {decomposed_count} basis computations")
         log.debug(f"Applying for {len(pending_tbl)} points in the parameter grid")
         return remaining_point_refs
