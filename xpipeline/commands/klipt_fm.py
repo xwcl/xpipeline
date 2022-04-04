@@ -572,13 +572,16 @@ class KlipTFm(BaseCommand, BaseRayGrid):
             inject_key = inject_key_maker(row)
             precompute_key = precompute_key_maker(row)
             if inject_key not in inject_refs:
-                inject_image_vecs_ref = inject_model.options(**task_options.generate).remote(
-                    image_vecs_ref,
-                    model_inputs_ref,
-                    row['r_px'],
-                    row['pa_deg'],
-                    row['injected_scale'],
-                )
+                if row['injected_scale'] == 0:
+                    inject_image_vecs_ref = image_vecs_ref
+                else:
+                    inject_image_vecs_ref = inject_model.options(**task_options.generate).remote(
+                        image_vecs_ref,
+                        model_inputs_ref,
+                        row['r_px'],
+                        row['pa_deg'],
+                        row['injected_scale'],
+                    )
                 inject_refs[inject_key] = inject_image_vecs_ref
                 injected_count += 1
             if precompute_key not in precompute_refs:
