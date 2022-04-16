@@ -1232,7 +1232,9 @@ def shift2(image, dx, dy, output_shape=None, fill_value=0.0, anchor_to_center=Tr
     matrix_transform_image(image, xform, output, fill_value)
     return output
 
-@numba.njit(parallel=True)
+@numba.njit(
+    parallel=True
+)
 def _derotate_cube(cube, derotation_angles, output, fill_value):
     for idx in numba.prange(cube.shape[0]):
         transform_mtx = make_rotation_about_center(cube[idx].shape, derotation_angles[idx])

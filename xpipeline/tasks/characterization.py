@@ -414,19 +414,7 @@ def snr_from_convolution(convolved_image, loc_rho, loc_pa_deg, aperture_diameter
         noises[i] = convolved_image[round(noise_y),round(noise_x)]
     return _calc_snr_mawet(signal, noises), signal
 
-@njit(parallel=True, cache=True)
-def _calc_snr_image(convolved_image, rho, theta, mask, aperture_diameter_px, exclude_nearest, snr_image_out):
-    height, width = convolved_image.shape
-    for y in numba.prange(height):
-        for x in range(width):
-            if not mask[y, x]:
-                continue
-            loc_rho, loc_theta = rho[y, x], theta[y, x]
-            loc_pa_deg = np.rad2deg(loc_theta) - 90
 
-            calculated_snr, _ = snr_from_convolution(convolved_image, loc_rho, loc_pa_deg, aperture_diameter_px, exclude_nearest)
-            snr_image_out[y, x] = calculated_snr
-    return snr_image_out
 
 def working_radii_from_aperture_spacing(image_shape, aperture_diameter_px, exclude_nearest, data_min_r_px=None, data_max_r_px=None):
     aperture_r = aperture_diameter_px / 2
@@ -460,7 +448,21 @@ def tophat_kernel(aperture_diameter_px):
     kernel[kernel_rho <= aperture_diameter_px/2] = 1
     return kernel
 
-def calc_snr_image(image, aperture_diameter_px, data_min_r_px, data_max_r_px, exclude_nearest):
+@njit(parallel=True, cache=True)
+def _calc_snr_image(convolved_image, rho, theta, mask, aperture_diameter_px, exclude_nearest, snr_image_out):
+    height, width = convolved_image.shape
+    for y in numba.prange(height):
+        for x in range(width):
+            if not mask[y, x]:
+                continue
+            loc_rho, loc_theta = rho[y, x], theta[y, x]
+            loc_pa_deg = np.rad2deg(loc_theta) - 90
+
+            calculated_snr, _ = snr_from_convolution(convolved_image, loc_rho, loc_pa_deg, aperture_diameter_px, exclude_nearest)
+            snr_image_out[y, x] = calculated_snr
+    return snr_image_out
+
+def calc_snr_image(image, aperture_diameter_px, data_min_r_px, data_max_r_px, exclude_nearest, convolve=True):
     """Compute simple aperture photometry SNR at each pixel and return an image
     with the SNR map"""
     iwa_px, owa_px = working_radii_from_aperture_spacing(image.shape, aperture_diameter_px, exclude_nearest, data_min_r_px=data_min_r_px, data_max_r_px=data_max_r_px)
@@ -469,7 +471,10 @@ def calc_snr_image(image, aperture_diameter_px, data_min_r_px, data_max_r_px, ex
     kernel = tophat_kernel(aperture_diameter_px)
     image = image.copy()
     image[np.isnan(image)] = 0
-    convolved_image = fftconvolve(image, kernel, mode='same')
+    if convolve:
+        convolved_image = fftconvolve(image, kernel, mode='same')
+    else:
+        convolved_image = image
     snr_image = np.zeros_like(convolved_image)
     _calc_snr_image(convolved_image, rho, theta, mask, aperture_diameter_px, exclude_nearest, snr_image)
     return snr_image, (iwa_px, owa_px)
@@ -643,9 +648,9 @@ def summarize_grid(grid_df : pd.DataFrame,
             rec['contrast_limit_5sigma'] = grp['contrast_limit_5sigma'].min()
         return rec
 
-    injections_interpolated = injections.groupby(grouping_colnames).apply(interpolate_5sigma_contrast)
+    injections_interpolated = injections.groupby(grouping_colnames).apply(interpolate_5sigma_contrast).reset_index(drop = True) #, inplace = True)
     best_params : pd.DataFrame = injections_interpolated.groupby(
-        [r_px_colname, pa_deg_colname]
+        by=[r_px_colname, pa_deg_colname],
     ).apply(
         lambda grp: grp[grp['contrast_limit_5sigma'] == grp['contrast_limit_5sigma'].min()]
     ).droplevel([r_px_colname, pa_deg_colname])

@@ -389,10 +389,12 @@ class KlipTFm(BaseCommand, BaseRayGrid):
 
     def compare_grid_to_checkpoint(self, checkpoint_tbl, grid_tbl):
         parameters = ['index', 'r_px', 'pa_deg', 'x', 'y', 'injected_scale', 'k_modes']
-        if np.all(np.unique(checkpoint_tbl[parameters]) == np.unique(grid_tbl[parameters])):
-            return True
-        else:
-            return False
+        for param in parameters:
+            # print(param, 'chk', np.unique(checkpoint_tbl[param]))
+            # print(param, 'grid_tbl', np.unique(grid_tbl[param]))
+            if not np.allclose(checkpoint_tbl[param], grid_tbl[param]):
+                return False
+        return True
 
     def filter_grid(self, tbl):
         if len(self.only_indices):

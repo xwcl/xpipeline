@@ -14,7 +14,7 @@ log = logging.getLogger(__name__)
 
 @xconf.config
 class GaussianTemplate:
-    sigma_px : float = xconf.field(default=10, help="Template PSF kernel stddev in pixels")
+    sigma_px : float = xconf.field(default=1, help="Template PSF kernel stddev in pixels")
     size_px : int = xconf.field(default=128, help="Size of generated Gaussian template in pixels")
 
 @xconf.config
@@ -41,6 +41,10 @@ class CutoutConfig:
     Template cross-correlated with the search region to align images to a common grid, either given as a FITS image
     or specified as a centered 2D Gaussian with given FWHM
     """))
+    use_first_as_template : bool = xconf.field(
+        default=False,
+        help="Use the template to cross correlate with the first frame, then correlate subsequent frames with that one"
+    )
 
 
 DEFAULT_CUTOUT = CutoutConfig(search_box=Box(), template=GaussianTemplate())
@@ -54,11 +58,12 @@ class AlignedCutouts(base.MultiInputCommand):
         help="Specify one or more cutouts with names and template PSFs to generate aligned cutouts for",
     )
     ext : typing.Union[str, int] = xconf.field(default=0, help="Extension index or name to load from input files")
+    excluded_regions : typing.Optional[base.FileConfig] = xconf.field(default_factory=list, help="Regions to fill with zeros before cross-registration, stored as DS9 region file (reg format)")
 
     def main(self):
         import dask
         from .. import pipelines
-        from ..tasks import iofits, improc
+        from ..tasks import iofits, improc, regions
 
         log.debug(self)
         dest_fs = utils.get_fs(self.destination)
@@ -77,6 +82,13 @@ class AlignedCutouts(base.MultiInputCommand):
         dimensions = example_hdul[self.ext].data.shape
         default_height, default_width = dimensions
         cutout_specs = []
+        if isinstance(self.excluded_regions, base.FileConfig):
+            with self.excluded_regions.open() as fh:
+                excluded_regions = regions.load_file(fh)
+            excluded_pixels_mask = regions.make_mask(excluded_regions, dimensions)
+        else:
+            excluded_pixels_mask = np.zeros(dimensions, dtype=bool)
+
         for name, cutout_config in self.cutouts.items():
             search_box = self._search_box_to_bbox(cutout_config.search_box, default_height, default_width)
             tpl = cutout_config.template
@@ -91,9 +103,20 @@ class AlignedCutouts(base.MultiInputCommand):
                 template=template_array,
                 name=name
             )
+            if cutout_config.use_first_as_template:
+                data = example_hdul[self.ext].data
+                data_driven_template = improc.aligned_cutout(data, spec)
+                improc.interpolate_nonfinite(data_driven_template, data_driven_template)
+                import numpy as np
+                if np.any(np.isnan(data_driven_template)):
+                    import doodads as dd
+                    print(dd.describe(data_driven_template))
+                    from astropy.io import fits
+                    fits.PrimaryHDU(data_driven_template).writeto('./shifted_first_frame.fits', overwrite=True)
+                spec.template = data_driven_template
             cutout_specs.append(spec)
             log.debug(spec)
-        output_coll = pipelines.align_to_templates(coll, cutout_specs)
+        output_coll = pipelines.align_to_templates(coll, cutout_specs, excluded_pixels_mask)
         res = output_coll.zip_map(iofits.write_fits, output_filepaths, overwrite=True)
 
         result = res.compute()

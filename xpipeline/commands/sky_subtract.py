@@ -22,6 +22,7 @@ class SkySubtract(MultiInputCommand):
         from .. import pipelines
         from ..ref import clio
         from ..tasks import iofits, sky_model, regions
+        import numpy as np
 
         destination = self.destination
         dest_fs = utils.get_fs(destination)
@@ -34,13 +35,15 @@ class SkySubtract(MultiInputCommand):
         output_filepaths = [utils.join(destination, f"sky_subtract_{i:04}.fits") for i in range(n_output_files)]
         self.quit_if_outputs_exist(output_filepaths)
 
-        if isinstance(self.excluded_regions, FileConfig):
-            with self.excluded_regions.open() as fh:
-                excluded_regions = regions.load_file(fh)
         coll = LazyPipelineCollection(all_inputs).map(iofits.load_fits_from_path)
         hdul = iofits.load_fits_from_path(self.sky_model_path)
         model_sky = sky_model.SkyModel.from_hdulist(hdul)
-        excluded_pixels_mask = regions.make_mask(excluded_regions, model_sky.mean_sky.shape)
+        if isinstance(self.excluded_regions, FileConfig):
+            with self.excluded_regions.open() as fh:
+                excluded_regions = regions.load_file(fh)
+            excluded_pixels_mask = regions.make_mask(excluded_regions, model_sky.mean_sky.shape)
+        else:
+            excluded_pixels_mask = np.zeros_like(model_sky.mean_sky, dtype=bool)
 
         output_coll = pipelines.sky_subtract(coll, model_sky, self.mask_dilate_iters, self.n_sigma, excluded_pixels_mask=excluded_pixels_mask)
         result = output_coll.zip_map(iofits.write_fits, output_filepaths, overwrite=True).compute()

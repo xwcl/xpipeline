@@ -181,7 +181,7 @@ def klip_mtx(image_vecs, params : KlipParams, signal_vecs=None):
     # this will make each column contiguous
     image_vecs_meansub = np.asfortranarray(image_vecs_meansub)
     if signal_vecs is not None:
-        signal_vecs = np.asfortranarray(signal_vecs - mean_vec)
+        signal_vecs = np.asfortranarray(signal_vecs - mean_vec[:, np.newaxis])
     if params.strategy in (constants.KlipStrategy.DOWNDATE_SVD, constants.KlipStrategy.SVD):
         return klip_mtx_svd(image_vecs_meansub, params, signal_vecs), mean_vec
     elif params.strategy is constants.KlipStrategy.COVARIANCE:
@@ -290,9 +290,10 @@ def klip_chunk_svd(
     n_frames = image_vecs_meansub.shape[1]
     output = np.zeros_like(image_vecs_meansub)
     if signal_vecs is not None:
-        output_model = np.zeros_like(signal_vecs)
+        output_model = np.ascontiguousarray(signal_vecs)
     else:
-        output_model = None
+        output_model = np.zeros_like(image_vecs_meansub)
+    
     print('klip_chunk_svd running with', numba.get_num_threads(), 'threads on', n_frames, 'frames')
     for i in numba.prange(n_frames):
         if not reuse:
@@ -330,6 +331,10 @@ def klip_chunk_svd(
         # and silences the NumbaPerformanceWarning
         eigenimages = np.ascontiguousarray(eigenimages)
         output[:, i] = meansub_target - eigenimages @ (eigenimages.T @ meansub_target)
+        if signal_vecs is not None:
+            output_model[:, i] = signal_vecs[:, i] - eigenimages @ (eigenimages.T @ signal_vecs[:, i])
+        else:
+            pass
     return output, output_model
 
 def _exclusions_to_arrays(params):
@@ -366,8 +371,10 @@ def klip_mtx_svd(image_vecs_meansub, params : KlipParams, signal_vecs):
         if initial_decomposition is None:
             # All hands on deck for initial decomposition
             core.set_num_mkl_threads(core.MKL_MAX_THREADS)
+            ref_vecs_std = np.std(image_vecs_meansub, axis=1)
+            scaled_ref_vecs = image_vecs_meansub / ref_vecs_std[:,np.newaxis]
             log.info(f'Computing initial decomposition')
-            mtx_u0, diag_s0, mtx_v0 = learning.generic_svd(image_vecs_meansub, initial_k)
+            mtx_u0, diag_s0, mtx_v0 = learning.generic_svd(scaled_ref_vecs, initial_k)
             # Maximize number of independent subproblems
             core.set_num_mkl_threads(1)
             log.info(f"Done computing initial decomposition")

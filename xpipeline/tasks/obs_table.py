@@ -21,7 +21,9 @@ def _construct_dtype(varying_kw, columns):
     dateful = []
     for kw in varying_kw:
         example = columns[kw][0]
-        if isinstance(example, str):
+        if any([isinstance(x, float) for x in columns[kw]]):
+            dtype.append((kw, np.float32))
+        elif isinstance(example, str):
             max_length = max([len(entry) for entry in columns[kw]])
             dtype.append((kw, str, max_length))
             try:
@@ -29,8 +31,6 @@ def _construct_dtype(varying_kw, columns):
                 dateful.append(kw)
             except ValueError:
                 pass
-        elif isinstance(example, float):
-            dtype.append((kw, np.float32))
         else:
             dtype.append((kw, type(example)))
     return dtype, dateful
@@ -100,7 +100,10 @@ def construct_headers_table(all_headers : list[fits.Header]):
                     tbl_data[idx][kw] = header[kw]
                     tbl_data[idx][kw+"_TS"] = _datetime_str_to_posix_time(header[kw])
                 else:
-                    tbl_data[idx][kw] = header[kw]
+                    try:
+                        tbl_data[idx][kw] = header[kw]
+                    except ValueError:
+                        tbl_mask[idx][kw] = True  # true where invalid for inferred dtype
             else:
                 tbl_mask[idx][kw] = True  # true where value is missing/imputed and should be masked in maskedarray
 
