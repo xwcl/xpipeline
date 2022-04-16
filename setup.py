@@ -49,6 +49,7 @@ setup(
         'pylops>=1.14,<2.0',
         'tqdm>=4.62',
         'pandas>=1.3.4',
+        'pylops>=1.16.0'
     ],
     entry_points={
         'console_scripts': [

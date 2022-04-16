@@ -371,10 +371,8 @@ def klip_mtx_svd(image_vecs_meansub, params : KlipParams, signal_vecs):
         if initial_decomposition is None:
             # All hands on deck for initial decomposition
             core.set_num_mkl_threads(core.MKL_MAX_THREADS)
-            ref_vecs_std = np.std(image_vecs_meansub, axis=1)
-            scaled_ref_vecs = image_vecs_meansub / ref_vecs_std[:,np.newaxis]
             log.info(f'Computing initial decomposition')
-            mtx_u0, diag_s0, mtx_v0 = learning.generic_svd(scaled_ref_vecs, initial_k)
+            mtx_u0, diag_s0, mtx_v0 = learning.generic_svd(image_vecs_meansub, initial_k)
             # Maximize number of independent subproblems
             core.set_num_mkl_threads(1)
             log.info(f"Done computing initial decomposition")
