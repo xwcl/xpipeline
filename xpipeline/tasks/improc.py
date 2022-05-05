@@ -933,7 +933,7 @@ def make_rotation_about_center(image_shape, rotation_deg):
     else:
         return np.eye(3)
 
-@numba.jit(nopython=True, cache=True)
+@numba.jit(inline='always', nopython=True, cache=True)
 def cpu_cubic1d(t, f_minus1, f_0, f_1, f_2):
     a = 2 * f_0
     b = -1 * f_minus1 + f_1
@@ -941,7 +941,7 @@ def cpu_cubic1d(t, f_minus1, f_0, f_1, f_2):
     d = -1 * f_minus1 + 3 * f_0 - 3 * f_1 + f_2
     return 0.5 * (a + t * b + t ** 2 * c + t ** 3 * d)
 
-@numba.jit(nopython=True, cache=True)
+@numba.jit(inline='always', nopython=True, cache=True)
 def cpu_bicubic(dx, dy, region):
     # Perform 4 1D interpolations by dx along the rows of region
     b_minus1 = cpu_cubic1d(dx, region[0, 0], region[0, 1], region[0, 2], region[0, 3])
@@ -952,7 +952,7 @@ def cpu_bicubic(dx, dy, region):
     interpolated_value = cpu_cubic1d(dy, b_minus1, b_0, b_1, b_2)
     return interpolated_value
 
-@numba.jit(nopython=True, cache=True)
+@numba.jit(inline='always', nopython=True, cache=True)
 def get_or_fill(arr, y, x, fill_value):
     """Returns arr[y, x] unless that would
     be out of bounds, in which case returns `fill_value`"""
@@ -1000,20 +1000,16 @@ def interpolate_nonfinite(source_image, dest_image=None):
 
 @numba.jit(nopython=True, cache=True)
 def matrix_transform_image(source_image, transform_mtx, dest_image, fill_value):
-    transform_mtx = np.ascontiguousarray(transform_mtx)  # should be a no-op but silences NumbaPerformanceWarning
+    cutout = np.zeros((4, 4))
     for dest_y in range(dest_image.shape[0]):
         for dest_x in range(dest_image.shape[1]):
-            xform_coord = transform_mtx @ np.array([dest_x, dest_y, 1.0])
-
-            x = xform_coord[0]
+            x = transform_mtx[0, 0] * dest_x + transform_mtx[0, 1] * dest_y + transform_mtx[0, 2]
+            y = transform_mtx[1, 0] * dest_x + transform_mtx[1, 1] * dest_y + transform_mtx[1, 2]
             x_int = int(math.floor(x))
             x_frac = x - x_int
-
-            y = xform_coord[1]
             y_int = int(math.floor(y))
             y_frac = y - y_int
 
-            cutout = np.zeros((4, 4))
             for i in range(4):
                 for j in range(4):
                     src_y, src_x = y_int + (i - 1), x_int + (j - 1)

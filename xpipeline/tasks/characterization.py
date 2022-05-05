@@ -69,6 +69,36 @@ class TemplateSignal:
     signal : np.ndarray
     scale_factors : Union[np.ndarray,float]
 
+def generate_signal(
+    shape: tuple,
+    r_px: float,
+    pa_deg: float,
+    template: np.ndarray,
+    derotation_angles: np.ndarray = None,
+    template_scale_factors: Union[np.ndarray,float,None] = None,
+    outcube: Union[np.ndarray,None] = None,
+    scale: float = 1.0
+):
+    if np.any(~np.isfinite(template)):
+        raise ValueError("Non-finite values in template")
+    if outcube is None:
+        outcube = np.zeros(shape, dtype=template.dtype)
+    n_obs, frame_shape = shape[0], shape[1:]
+
+    if template_scale_factors is None:
+        template_scale_factors = np.ones(n_obs)
+    if np.isscalar(template_scale_factors):
+        template_scale_factors = np.repeat(np.array([template_scale_factors]), n_obs)
+    if derotation_angles is None:
+        derotation_angles = np.zeros(n_obs)
+
+    theta = np.deg2rad(90 + pa_deg - derotation_angles)
+    for i in range(n_obs):
+        dx = r_px * np.cos(theta[i])
+        dy = r_px * np.sin(theta[i])
+        outcube[i] += scale * template_scale_factors[i] * improc.shift2(template, dx, dy, output_shape=frame_shape)
+    return outcube
+
 def generate_signals(
     shape: tuple,
     specs: list[CompanionSpec],
@@ -97,29 +127,21 @@ def generate_signals(
     -------
     outcube : np.ndarray
     '''
-
     outcube = np.zeros(shape, dtype=template.dtype)
-    n_obs = shape[0]
-    template = improc.shift2(template, 0, 0, output_shape=shape[1:])
-    ft_template = fft.fft2(template)
-    xfreqs = fft.fftfreq(shape[2])
-    yfreqs = fft.fftfreq(shape[1])
-    if template_scale_factors is None:
-        template_scale_factors = np.ones(n_obs)
-    if np.isscalar(template_scale_factors):
-        template_scale_factors = np.repeat(np.array([template_scale_factors]), n_obs)
-    if derotation_angles is None:
-        derotation_angles = np.zeros(n_obs)
     for spec in specs:
-        theta = np.deg2rad(90 + spec.pa_deg - derotation_angles)
-        for i in range(n_obs):
-            dx = spec.r_px * np.cos(theta[i])
-            dy = spec.r_px * np.sin(theta[i])
-            shifter = np.exp(2j * np.pi * ((-dx * xfreqs[np.newaxis, :]) + (-dy * yfreqs[:, np.newaxis])))
-            cube_contribution = fft.ifft2(ft_template * shifter).real
-            cube_contribution *= template_scale_factors[i] * spec.scale
-            outcube[i] += cube_contribution
+        # generate in-place in outcube
+        generate_signal(
+            outcube.shape,
+            spec.r_px,
+            spec.pa_deg,
+            template,
+            derotation_angles,
+            template_scale_factors,
+            scale=spec.scale,
+            outcube=outcube
+        )
     return outcube
+
 
 def inject_signals(
     cube: np.ndarray,
