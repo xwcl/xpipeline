@@ -596,10 +596,7 @@ def pad_to_match(arr_a: np.ndarray, arr_b: np.ndarray):
     assert arr_a.shape == arr_b.shape
     return arr_a, arr_b
 
-
-def aligned_cutout(
-    sci_arr: np.ndarray, spec: CutoutTemplateSpec, upsample_factor: int = 100
-):
+def shifts_from_cutout(sci_arr, spec, upsample_factor=100):
     # cut out bbox
     log.debug(f'{spec.search_box.slices=}')
     rough_cutout = sci_arr[spec.search_box.slices]
@@ -614,7 +611,18 @@ def aligned_cutout(
         moving_image=interp_cutout,
         upsample_factor=upsample_factor,
     )
+    return shifts
 
+def subpixel_location_from_cutout(sci_arr, spec: CutoutTemplateSpec, upsample_factor=100):
+    '''assuming the spec template is centered at the array center (npix-1)/2'''
+    shifts = shifts_from_cutout(sci_arr, spec, upsample_factor=upsample_factor)
+    return Point(spec.search_box.center.y + shifts[0], spec.search_box.center.x + shifts[1])
+
+
+def aligned_cutout(
+    sci_arr: np.ndarray, spec: CutoutTemplateSpec, upsample_factor: int = 100
+):
+    shifts = shifts_from_cutout(sci_arr, spec, upsample_factor=upsample_factor)
     subarr = interpolate_nonfinite(sci_arr)
     subpix_subarr = shift2(
         subarr,
