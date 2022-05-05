@@ -928,8 +928,19 @@ def make_rotation_about_center(image_shape, rotation_deg):
     '''
     npix_y, npix_x = image_shape
     ctr_x, ctr_y = (npix_x - 1) / 2, (npix_y - 1) / 2
+    theta = np.deg2rad(-rotation_deg)
+    sin_theta = np.sin(theta)
+    cos_theta = np.cos(theta)
     if rotation_deg != 0:
-        return translation_matrix(ctr_x, ctr_y) @ rotation_matrix(np.deg2rad(-rotation_deg)) @ translation_matrix(-ctr_x, -ctr_y)
+        xform = np.zeros((3, 3))
+        xform[0,0] = cos_theta
+        xform[0,1] = -sin_theta
+        xform[0,2] = sin_theta * ctr_y - cos_theta * ctr_x + ctr_x
+        xform[1,0] = sin_theta
+        xform[1,1] = cos_theta
+        xform[1,2] = -ctr_x * sin_theta + -ctr_y * cos_theta + ctr_y
+        xform[2,2] = 1
+        return xform
     else:
         return np.eye(3)
 

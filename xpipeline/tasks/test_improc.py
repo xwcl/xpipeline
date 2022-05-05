@@ -167,6 +167,13 @@ def test_rotate():
     result3 = improc.rotate(image, -90, fill_value=0.0)  # TODO flip arrays first and only rotate the remaining <90deg
     assert np.allclose(result3, np.rot90(image)), "CPU interpolated image disagrees with simple 90deg rotation"
 
+def test_make_rotation_about_center():
+    shape = 10, 10
+    ctr_x, ctr_y = 4.5, 4.5
+    rotation_deg = 45
+    xform = improc.translation_matrix(ctr_x, ctr_y) @ improc.rotation_matrix(np.deg2rad(-rotation_deg)) @ improc.translation_matrix(-ctr_x, -ctr_y)
+    assert np.allclose(xform, improc.make_rotation_about_center(shape, rotation_deg))
+
 def test_matrix_transform_cube():
     npix = 50
     cube = np.array([
