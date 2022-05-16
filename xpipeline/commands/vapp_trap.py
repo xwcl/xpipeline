@@ -157,7 +157,7 @@ def _evaluate_point_kt(
         precomputed_trap_basis.vectors = cp.asarray(precomputed_trap_basis.vectors)
         inject_image_vecs = cp.asarray(inject_image_vecs)
         model_vecs = cp.asarray(model_vecs)
-    image_resid_vecs, model_resid_vecs, timers, pix_used = starlight_subtraction.klip_transpose(inject_image_vecs, model_vecs, params_kt)
+    image_resid_vecs, model_resid_vecs = starlight_subtraction.klip_transpose(inject_image_vecs, model_vecs, params_kt)
     if force_gpu_fit:
         image_resid_vecs, model_resid_vecs = image_resid_vecs.get(), model_resid_vecs.get()
     resid_cube_kt = improc.wrap_matrix(image_resid_vecs, model_inputs.mask)

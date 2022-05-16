@@ -176,7 +176,6 @@ class FitsTableColumnConfig(FitsConfig):
     def load(self):
         from ..tasks import iofits
         with self.open() as fh:
-            print(fh)
             hdul = iofits.load_fits(fh)
         return hdul[self.ext].data[self.table_column]
 

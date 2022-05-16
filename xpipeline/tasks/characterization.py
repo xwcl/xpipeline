@@ -91,6 +91,8 @@ def generate_signal(
         template_scale_factors = np.repeat(np.array([template_scale_factors]), n_obs)
     if derotation_angles is None:
         derotation_angles = np.zeros(n_obs)
+    else:
+        assert derotation_angles.shape[0] == shape[0]
 
     theta = np.deg2rad(90 + pa_deg - derotation_angles)
     for i in range(n_obs):
@@ -236,11 +238,9 @@ def _simple_aperture_locations(r_px, pa_deg, resolution_element_px, xcenter=0, y
 
 
 # TODO eliminate some redundancy with simple aperture locator
-def generate_probes(iwa_px : float, owa_px : float, n_radii : int, spacing_px : float, scales : list[float]):
+def generate_probes(iwa_px : float, owa_px : float, n_radii : int, spacing_px : float, scales : list[float], starting_pa_deg : float = 0):
     '''Generator returning CompanionSpec objects for
-    radii / PA / contrast scales that cover the region from iwa to owa.
-    A scale of 0.0 for the no-injection case is added if not passed in
-    `scales`
+    radii / PA / contrast scales that cover the region from iwa to owa
 
     When config.n_radii == 1, only iwa_px matters
     '''
@@ -251,7 +251,7 @@ def generate_probes(iwa_px : float, owa_px : float, n_radii : int, spacing_px : 
         n_probes = int(circumference // spacing_px)
         angles_ddeg = 360 / n_probes
         for j in range(n_probes):
-            pa_deg = j * angles_ddeg
+            pa_deg = (starting_pa_deg + j * angles_ddeg) % 360.0
             for scl in scales:
                 yield CompanionSpec(r_px, pa_deg, scl)
 
@@ -497,6 +497,7 @@ def calc_snr_image(image, aperture_diameter_px, data_min_r_px, data_max_r_px, ex
         convolved_image = fftconvolve(image, kernel, mode='same')
     else:
         convolved_image = image
+    # return convolved_image
     snr_image = np.zeros_like(convolved_image)
     _calc_snr_image(convolved_image, rho, theta, mask, aperture_diameter_px, exclude_nearest, snr_image)
     return snr_image, (iwa_px, owa_px)

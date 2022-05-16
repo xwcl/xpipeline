@@ -109,8 +109,6 @@ class AlignedCutouts(base.MultiInputCommand):
                 improc.interpolate_nonfinite(data_driven_template, data_driven_template)
                 import numpy as np
                 if np.any(np.isnan(data_driven_template)):
-                    import doodads as dd
-                    print(dd.describe(data_driven_template))
                     from astropy.io import fits
                     fits.PrimaryHDU(data_driven_template).writeto('./shifted_first_frame.fits', overwrite=True)
                 spec.template = data_driven_template

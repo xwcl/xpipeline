@@ -1,8 +1,11 @@
 import logging
+from typing import Optional
+from dataclasses import dataclass
 import random
 import numpy as np
 from .. import core
 cp = core.cupy
+from enum import Enum
 from scipy import linalg
 
 from scipy.sparse.linalg import aslinearoperator, svds
@@ -229,3 +232,33 @@ def minimal_downdate(
     else:
         new_mtx_v = None
     return new_mtx_u, new_diag_s, new_mtx_v
+
+
+class Decomposers(Enum):
+    svd = "svd"
+    svd_top_k = "svd_top_k"
+    cov_eigenvecs = "cov_eigenvecs"
+    cov_eigenvecs_top_k = "cov_eigenvecs_top_k"
+
+    def to_callable(self):
+        if self is Decomposers.svd:
+            return generic_svd
+        elif self is Decomposers.svd_top_k:
+            return cpu_top_k_svd_arpack
+        elif self is Decomposers.cov_eigenvecs:
+            return eigh_full_decomposition
+        elif self is Decomposers.cov_eigenvecs_top_k:
+            return eigh_top_k
+        else:
+            raise ValueError(f"Unknown callable corresponding to {self}")
+
+
+@dataclass
+class PrecomputedDecomposition:
+    mtx_u0 : Optional[np.ndarray] = None
+    diag_s0 : Optional[np.ndarray] = None
+    mtx_v0 : Optional[np.ndarray] = None
+
+    def __post_init__(self):
+        if self.mtx_u0 is None and self.mtx_v0 is None:
+            raise ValueError("Cannot have None for both mtx_u and mtx_v")
