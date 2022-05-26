@@ -49,6 +49,7 @@ n = 35
 
 
 def make_G():
+    np.random.seed(0)
     # Set up a test problem
     G = np.eye(n)
     normal = np.random.normal
@@ -64,6 +65,7 @@ def make_G():
 G = pytest.fixture(make_G)
 
 def make_b():
+    np.random.seed(0)
     return np.random.normal(size=n)
 b = pytest.fixture(make_b)
 

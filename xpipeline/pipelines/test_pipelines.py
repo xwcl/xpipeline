@@ -1,6 +1,7 @@
 import pytest
 from .new import (
     StarlightSubtractPipeline,
+    StarlightSubtractionDataConfig,
     KlipTransposePipeline,
     PipelineInputConfig,
     ModelSignalInputConfig,
@@ -8,14 +9,18 @@ from .new import (
     CompanionConfig,
     PreloadedArray,
     KlipTranspose,
+    Klip,
 )
 
-from ..tasks.characterization import snr_from_convolution
+from ..tasks.characterization import calculate_snr
 from ..tasks.test_common import naco_betapic_data
 import numpy as np
 
-@pytest.mark.parametrize('strategy_cls', [KlipTranspose, Klip])
-def test_klip_pipeline(naco_betapic_data, strategy_cls):
+@pytest.mark.parametrize(
+    'strategy_cls, snr_threshold',
+    [(KlipTranspose, 31.24), (Klip, 15.63)]
+)
+def test_klip_pipeline(naco_betapic_data, strategy_cls, snr_threshold):
     threshold = 2200  # fake, just to test masking
     cube = naco_betapic_data["cube"]
     good_pix_mask = np.average(cube, axis=0) < threshold
@@ -33,9 +38,7 @@ def test_klip_pipeline(naco_betapic_data, strategy_cls):
         )
     )
     r_px, pa_deg = 18.4, -42.8
-    aperture_diameter_px = 8
-    k_modes_values = [12]
-    pl = StarlightSubtractPipeline(
+    data_config = StarlightSubtractionDataConfig(
         inputs=[input_config],
         angles=PreloadedArray(angles),
         companion=CompanionConfig(
@@ -43,13 +46,24 @@ def test_klip_pipeline(naco_betapic_data, strategy_cls):
             pa_deg=pa_deg,
             scale=0.0,
         ),
+    )
+    aperture_diameter_px = 4
+    k_modes_values = [5]
+    pl = StarlightSubtractPipeline(
+        data=data_config,
         strategy=strategy_cls(),
         k_modes_values=k_modes_values,
     )
     result = pl.execute()
     finim = result.modes[k_modes_values[0]].destination_images["finim"]
-    snr, signal = snr_from_convolution(finim, r_px, pa_deg, aperture_diameter_px, exclude_nearest=1)
-    assert False == (snr, signal)
+    snr = calculate_snr(
+        finim,
+        r_px,
+        pa_deg,
+        aperture_diameter_px,
+        exclude_nearest=1,
+    )
+    assert snr_threshold < snr
     # data = naco_betapic_data
 
     # threshold = 2200  # fake, just to test masking

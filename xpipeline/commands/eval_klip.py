@@ -185,7 +185,7 @@ class EvalKlip(Klip):
         recovered_signals = characterization.recover_signals(
             out_image, specs, aperture_diameter_px, apertures_to_exclude
         )
-
+        print(recovered_signals)
         if self.search.min_r_px is None:
             self.search.min_r_px = self.mask_min_r_px
         if self.search.max_r_px is None:

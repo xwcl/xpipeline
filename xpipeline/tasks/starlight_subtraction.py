@@ -175,20 +175,26 @@ def klip_to_modes(image_vecs, decomp_class, n_modes, exclude_nearest=0):
     return output
 
 
-def klip_mtx(image_vecs, params : KlipParams):
+def klip_mtx(image_vecs, params : KlipParams, probe_model_vecs: Optional[np.ndarray] = None):
     image_vecs_meansub, mean_vec = mean_subtract_vecs(image_vecs)
     # since the klip implementation is going column-wise
     # this will make each column contiguous
     image_vecs_meansub = np.asfortranarray(image_vecs_meansub)
+    if probe_model_vecs is not None:
+        probe_model_vecs_meansub, _ = mean_subtract_vecs(probe_model_vecs)
+        probe_model_vecs_meansub = np.asfortranarray(probe_model_vecs)
+    else:
+        probe_model_vecs_meansub = None
     if params.strategy in (constants.KlipStrategy.DOWNDATE_SVD, constants.KlipStrategy.SVD):
-        return klip_mtx_svd(image_vecs_meansub, params)
+        output, output_probe, initial_decomposition = klip_mtx_svd(image_vecs_meansub, params, probe_model_vecs_meansub)
     elif params.strategy is constants.KlipStrategy.COVARIANCE:
-        return klip_mtx_covariance(image_vecs_meansub, params)
+        output, output_probe, initial_decomposition = klip_mtx_covariance(image_vecs_meansub, params, probe_model_vecs_meansub)
     else:
         raise ValueError(f"Unknown strategy value in {params=}")
+    return output, output_probe, initial_decomposition, mean_vec
 
 
-def klip_mtx_covariance(image_vecs_meansub : np.ndarray, params : KlipParams):
+def klip_mtx_covariance(image_vecs_meansub : np.ndarray, params : KlipParams, probe_model_vecs_meansub: Optional[np.ndarray] = None):
     '''Apply KLIP to mean-subtracted image column vectors
 
     Parameters
@@ -197,10 +203,15 @@ def klip_mtx_covariance(image_vecs_meansub : np.ndarray, params : KlipParams):
         image vectors, one column per image
     params : KlipParams
         configuration for tunable parameters
+    probe_model_vecs_meansub : np.ndarray
+        probe model image vectors, one column per image
     '''
     k_klip = params.k_klip
-
     output = np.zeros_like(image_vecs_meansub)
+    if probe_model_vecs_meansub is not None:
+        output_probe = np.zeros_like(image_vecs_meansub)
+    else:
+        output_probe = None
     mtx_e_all = image_vecs_meansub.T @ image_vecs_meansub
     n_images = image_vecs_meansub.shape[1]
     exclusion_values, exclusion_deltas = _exclusions_to_arrays(params)
@@ -225,9 +236,13 @@ def klip_mtx_covariance(image_vecs_meansub : np.ndarray, params : KlipParams):
             ref_subset = np.hstack((image_vecs_meansub[:,:min_excluded_idx], image_vecs_meansub[:,max_excluded_idx+1:]))
             eigenimages = ref_subset @ (mtx_c * np.power(lambda_values, -1/2))
 
-        meansub_target = image_vecs_meansub[:,i]
-        output[:,i] = meansub_target - eigenimages @ (eigenimages.T @ meansub_target)
-    return output
+        image_target = image_vecs_meansub[:,i]
+        output[:,i] = image_target - eigenimages @ (eigenimages.T @ image_target)
+        if probe_model_vecs_meansub is not None:
+            probe_target = probe_model_vecs_meansub[:, i]
+            output_probe[:, i] = probe_target - eigenimages @ (eigenimages.T @ probe_target)
+    decomposition = learning.PrecomputedDecomposition(eigenimages, None, None) if params.reuse else None
+    return output, output_probe, decomposition
 
 @njit(cache=True)
 def get_excluded_mask(values, exclude_within_delta, current_value=None):
@@ -279,10 +294,14 @@ def exclusions_to_range(n_images, current_idx, exclusion_values, exclusion_delta
 # )
 def klip_chunk_svd(
     image_vecs_meansub, n_images, mtx_u0, diag_s0, mtx_v0, k_klip, reuse, strategy,
-    exclusion_values, exclusion_deltas, verbose=False
+    exclusion_values, exclusion_deltas, verbose=False, probe_model_vecs_meansub: Optional[np.ndarray] = None
 ):
     n_frames = image_vecs_meansub.shape[1]
     output = np.zeros_like(image_vecs_meansub)
+    if probe_model_vecs_meansub is not None:
+        output_probe = np.zeros_like(image_vecs_meansub)
+    else:
+        output_probe = None
     print('klip_chunk_svd running with', numba.get_num_threads(), 'threads on', n_frames, 'frames')
     for i in numba.prange(n_frames):
         if not reuse:
@@ -321,7 +340,10 @@ def klip_chunk_svd(
         # and silences the NumbaPerformanceWarning
         eigenimages = np.ascontiguousarray(eigenimages)
         output[:, i] = meansub_target - eigenimages @ (eigenimages.T @ meansub_target)
-    return output
+        if probe_model_vecs_meansub is not None:
+            probe_vec = probe_model_vecs_meansub[:, i]
+            output_probe[:, i] = probe_vec - eigenimages @ (eigenimages.T @ probe_vec)
+    return output, output_probe
 
 def _exclusions_to_arrays(params):
     if not params.reuse and len(params.exclusions) > 0:
@@ -331,7 +353,7 @@ def _exclusions_to_arrays(params):
         exclusion_values = exclusion_deltas = None
     return exclusion_values, exclusion_deltas
 
-def klip_mtx_svd(image_vecs_meansub, params : KlipParams):
+def klip_mtx_svd(image_vecs_meansub, params : KlipParams, probe_model_vecs_meansub: Optional[np.ndarray] = None):
     k_klip = params.k_klip
     total_n_frames = image_vecs_meansub.shape[1]
     if not params.reuse and params.strategy is constants.KlipStrategy.DOWNDATE_SVD:
@@ -367,17 +389,18 @@ def klip_mtx_svd(image_vecs_meansub, params : KlipParams):
                 raise ValueError(f"Initial decomposition has {mtx_u0.shape=} but {image_vecs_meansub.shape=}. Mask changed?")
             if mtx_v0.shape[0] != image_vecs_meansub.shape[1]:
                 raise ValueError(f"Initial decomposition has {mtx_v0.shape=} but {image_vecs_meansub.shape=}. Combination parameters changed?")
+        initial_decomposition = learning.PrecomputedDecomposition(mtx_u0, diag_s0, mtx_v0)
     else:
         mtx_u0 = diag_s0 = mtx_v0 = None
-
+        initial_decomposition = None
     if params.initial_decomposition_only:
         log.debug("Bailing out early to store decomposition")
-        return learning.PrecomputedDecomposition(mtx_u0, diag_s0, mtx_v0)
+        return None, None, initial_decomposition
 
     exclusion_values, exclusion_deltas = _exclusions_to_arrays(params)
     log.info(f'Computing KLIPed vectors')
     start = time.perf_counter()
-    output = klip_chunk_svd(
+    output, output_probe = klip_chunk_svd(
         image_vecs_meansub,
         total_n_frames,
         mtx_u0,
@@ -387,11 +410,12 @@ def klip_mtx_svd(image_vecs_meansub, params : KlipParams):
         params.reuse,
         params.strategy,
         exclusion_values,
-        exclusion_deltas
+        exclusion_deltas,
+        probe_model_vecs_meansub=probe_model_vecs_meansub,
     )
     end = time.perf_counter()
     log.info(f"Finished KLIPing in {end - start}")
-    return output
+    return output, output_probe, initial_decomposition
 
 
 def make_good_pix_mask(
@@ -497,21 +521,17 @@ def trap_mtx(image_vecs, model_vecs, trap_params : TrapParams):
     else:
         temporal_basis = compute_temporal_basis(None, trap_params)
     if trap_params.return_basis and not was_gpu_array:
-        if get_array_module(temporal_basis.vectors) is core.cupy:
-            temporal_basis.vectors = temporal_basis.vectors.get()
+        if get_array_module(temporal_basis.mtx_v0) is core.cupy:
+            temporal_basis.mtx_v0 = temporal_basis.mtx_v0.get()
         return temporal_basis
-    timers['time_svd_sec'] = temporal_basis.time_sec
-    
-    pix_used = temporal_basis.pix_used
-    # TODO why is temporal_basis changed into the array of its vectors without dataclass?
     
     if trap_params.force_gpu_fit and not was_gpu_array:
         image_vecs_medsub_, trimmed_model_vecs_ = cp.asarray(image_vecs_medsub), cp.asarray(trimmed_model_vecs)
         del image_vecs_medsub, trimmed_model_vecs
         image_vecs_medsub, trimmed_model_vecs = image_vecs_medsub_, trimmed_model_vecs_
-        temporal_basis = cp.asarray(temporal_basis.vectors)
+        temporal_basis = cp.asarray(temporal_basis.mtx_v0)
     else:
-        temporal_basis = temporal_basis.vectors
+        temporal_basis = temporal_basis.mtx_v0
     model_coeff, inv_timers, maybe_resid_vecs = trap_phase_2(
         image_vecs_medsub, trimmed_model_vecs,
         temporal_basis, trap_params
@@ -569,16 +589,17 @@ def compute_klipt_basis(image_vecs_medsub : np.ndarray, probe_model_vecs : np.nd
     log.debug(f"Computed temporal basis in {timer} sec")
     return temporal_basis
 
-def klip_transpose(image_vecs_medsub: np.ndarray, temporal_basis: learning.PrecomputedDecomposition, klipt_params : KlipTParams):
+def klip_transpose(image_vecs_medsub: np.ndarray, probe_model_vecs_medsub : np.ndarray, temporal_basis: learning.PrecomputedDecomposition, klipt_params : KlipTParams):
     # compute projections into eigentimeseries and subtract that from real pixel timeseries
     timer = time.perf_counter()
     # image_vecs_medsub shape (npix, nframes)
     eigentimeseries = temporal_basis.mtx_v0[:,:klipt_params.k_modes]
     subspace_images = eigentimeseries.T @ image_vecs_medsub.T
     image_resid_vecs = (image_vecs_medsub.T - eigentimeseries @ subspace_images).T
+    probe_model_resid_vecs = (image_vecs_medsub.T - eigentimeseries @ (eigentimeseries.T @ probe_model_vecs_medsub.T)).T
     timer = timer - time.perf_counter()
     log.debug(f"Starlight subtracted in {timer} sec")
-    return image_resid_vecs
+    return image_resid_vecs, probe_model_resid_vecs, temporal_basis, 
 
 def trap_phase_2(image_vecs_medsub, model_vecs, temporal_basis, trap_params : TrapParams):
     xp = core.get_array_module(image_vecs_medsub)

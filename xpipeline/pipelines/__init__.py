@@ -237,15 +237,14 @@ def klip_multi(klip_inputs: List[KlipInput], klip_params: KlipParams):
     mtx_x, mtx_x_signal_only = klip_inputs_to_mtx_x(klip_inputs)
     
     # where the klipping happens
-    result, mean_vec = starlight_subtraction.klip_mtx(
+    subtracted_mtx, signal_mtx, decomposition, mean_vec = starlight_subtraction.klip_mtx(
         mtx_x, klip_params, mtx_x_signal_only
     )
     # ... blink and you'll miss it
 
     if klip_params.initial_decomposition_only:
-        return result
-    else:
-        subtracted_mtx, signal_mtx = result
+        return decomposition
+
     start_idx = 0
     cubes, signal_arrs, mean_images = [], [], []
     for input_data in klip_inputs:
