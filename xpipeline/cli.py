@@ -28,6 +28,7 @@ from .commands import (
     vapp_trap,
     summarize_grid,
     klipt_fm,
+    measure_starlight_subtraction,
 )
 
 log = logging.getLogger(__name__)
@@ -55,7 +56,8 @@ COMMANDS = {
     evaluate.Evaluate,
     vapp_trap.VappTrap,
     summarize_grid.SummarizeGrid,
-    klipt_fm.KlipTFm
+    klipt_fm.KlipTFm,
+    measure_starlight_subtraction.MeasureStarlightSubtraction
 }
 
 class Dispatcher(xconf.Dispatcher):

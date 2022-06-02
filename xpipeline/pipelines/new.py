@@ -10,6 +10,7 @@ from xconf.contrib import BaseRayGrid, FileConfig, join, PathConfig, DirectoryCo
 import sys
 import logging
 from typing import Optional, Union
+from ..commands.base import BaseCommand
 from .. import utils
 from ..tasks import starlight_subtraction, learning, improc, characterization
 from ..tasks.characterization import CompanionSpec, r_pa_to_x_y, snr_from_convolution, calculate_snr
@@ -70,7 +71,7 @@ class FitsTableColumnConfig(FitsConfig):
     ext : Union[int,str] = xconf.field(default="OBSTABLE", help="Extension from which to load")
 
     def load(self, cache=True) -> np.ndarray:
-        if cache and self._cache is not None:
+        if cache and getattr(self, '_cache', None) is not None:
             return self._cache
         from ..tasks import iofits
         with self.open() as fh:
@@ -259,6 +260,7 @@ class ExcludeRangeConfig:
     angle : Union[AngleRangeConfig,PixelRotationRangeConfig] = xconf.field(default=AngleRangeConfig(), help="Apply exclusion to derotation angles")
     nearest_n_frames : int = xconf.field(default=0, help="Number of additional temporally-adjacent frames on either side of the target frame to exclude from the sequence when computing the KLIP eigenimages")
 
+@xconf.config
 
 @xconf.config
 class Klip:
@@ -602,15 +604,37 @@ class StarlightSubtractionDataConfig:
         )
 
 @xconf.config
+class KModesValuesConfig:
+    values: list[int] = xconf.field(help="Which values to try for number of modes to subtract")
+
+    def as_values(self, max_rank: int):
+        values = [x for x in self.values if x < max_rank]
+        if not len(values):
+            raise ValueError(f"Given {max_rank=}, no valid values from {self.values}")
+        return values
+
+@xconf.config
+class KModesFractionConfig:
+    fractions: list[float] = xconf.field(default_factory=lambda: [0.1], help="Which values to try for number of modes to subtract")
+
+    def as_values(self, max_rank: int):
+        if any(x >= 1.0 for x in self.fractions):
+            raise ValueError(f"Invalid fractions in config: {self.fractions} (must be 0 < x < 1)")
+        values = [int(x * max_rank) for x in self.fractions]
+        return values
+
+KModesConfig = Union[KModesValuesConfig,KModesFractionConfig]
+
+@xconf.config
 class StarlightSubtract:
-    strategy : Union[KlipTranspose,Klip] = xconf.field(help="Strategy with which to estimate and subtract starlight")
+    strategy : Union[KlipTranspose,Klip,KlipSubspace] = xconf.field(help="Strategy with which to estimate and subtract starlight")
     combine : constants.CombineOperation = xconf.field(default=constants.CombineOperation.MEAN, help="How to combine image for stacking")
     return_residuals : bool = xconf.field(default=True, help="Whether residual images after starlight subtraction should be returned")
     return_inputs : bool = xconf.field(default=True, help="Whether original images before starlight subtraction should be returned")
     subtract_mean : bool = xconf.field(default=True, help="Take a mean along the time axis and subtract from inputs")
     # pre_stack_filter : Optional[PreStackFilter] = xconf.field(help="Process after removing starlight and before stacking")
     # return_pre_stack_filtered : bool = xconf.field(default=True, help="Whether filtered images before stacking should be returned")
-    k_modes_values : list[int] = xconf.field(default_factory=lambda: [12], help="Which values to try for number of modes to subtract")
+    k_modes : KModesConfig = xconf.field(default_factory=KModesFractionConfig, help="Which values to try for number of modes to subtract")
     return_decomposition : bool = xconf.field(default=True, help="Whether the computed decomposition should be returned")
 
     def execute(self, data : StarlightSubtractionData) -> StarlightSubtractResult:
@@ -619,17 +643,18 @@ class StarlightSubtract:
             if len(destination_exts[pinput.destination_ext]):
                 if pinput.sci_arr.shape != destination_exts[pinput.destination_ext][0].sci_arr.shape:
                     raise ValueError(f"Dimensions of current science array {pinput.sci_arr.shape=} mismatched with others. Use separate destination_ext settings for each input, or make them the same size.")
-                if self.subtract_mean:
-                    pinput.sci_arr = pinput.sci_arr - np.nanmean(pinput.sci_arr, axis=0)
+            if self.subtract_mean:
+                pinput.sci_arr = pinput.sci_arr - np.nanmean(pinput.sci_arr, axis=0)
             destination_exts[pinput.destination_ext].append(pinput)
 
         data_vecs, model_vecs = unwrap_inputs_to_matrices(data.inputs)
-        print(f"{model_vecs.shape=}")
-
+        max_rank = np.min(data_vecs.shape)
+        log.debug(f"After unwrapping inputs to matrices, got {data_vecs.shape=} implying {max_rank=}")
+        k_modes_values = self.k_modes.as_values(max_rank)
         decomp = data.initial_decomposition
 
         if decomp is None:
-            max_k_modes = max(self.k_modes_values)
+            max_k_modes = max(k_modes_values)
             log.debug(f"Computing basis with {max_k_modes=}")
             decomp = self.strategy.prepare(
                 data_vecs,
@@ -639,8 +664,8 @@ class StarlightSubtract:
             )
 
         results_for_modes = {}
-        for mode_idx, k_modes in enumerate(self.k_modes_values):
-            log.debug(f"Subtracting starlight for modes value k={k_modes} ({mode_idx+1}/{len(self.k_modes_values)})")
+        for mode_idx, k_modes in enumerate(k_modes_values):
+            log.debug(f"Subtracting starlight for modes value k={k_modes} ({mode_idx+1}/{len(k_modes_values)})")
             res = self.strategy.execute(
                 data_vecs,
                 k_modes,
@@ -648,7 +673,6 @@ class StarlightSubtract:
                 probe_model_vecs=model_vecs,
                 decomposition=decomp,
             )
-            print(res)
             data_vecs_resid, model_vecs_resid, _, _ = res
             pipeline_outputs = residuals_matrix_to_outputs(
                 data_vecs_resid,
@@ -699,22 +723,42 @@ class StarlightSubtractPipeline(StarlightSubtract, Pipeline):
 @dataclass
 class PostFilteringResult:
     image : np.ndarray
+    kernel_diameter_px : Union[float,int]
     kernel : Optional[np.ndarray] = None
 
 @xconf.config
 class  _BasePostFilter:
+    kernel_diameter_px : float = xconf.field(default=None, help="Filter kernel radius for spacing signal estimation apertures")
     def execute(
         self,
         destination_image: np.ndarray,
         pipeline_outputs_for_ext: list[PipelineOutput],
         measurement_location : CompanionSpec,
+        resolution_element_px : float,
         derotation_angles: Optional[np.ndarray] = None,
     ) -> PostFilteringResult:
         raise NotImplementedError("Subclasses must implement execute()")
 
 @xconf.config
+class NoPostFilter(_BasePostFilter):
+    def execute(
+        self,
+        destination_image: np.ndarray,
+        pipeline_outputs_for_ext: list[PipelineOutput],
+        measurement_location : CompanionSpec,
+        resolution_element_px : float,
+        derotation_angles: Optional[np.ndarray] = None,
+    ) -> PostFilteringResult:
+        return PostFilteringResult(
+            kernel=np.ones((1,1)),
+            image=destination_image,
+            kernel_diameter_px=resolution_element_px
+        )
+
+@xconf.config
 class TophatPostFilter(_BasePostFilter):
-    radius_px : float = xconf.field(default=4, help="Top-hat kernel radius")
+    kernel_radius_px : float = xconf.field(default=None, help="Filter kernel radius for spacing signal estimation apertures, default is use resolution_element_px value passed in")
+    tophat_filter : bool = xconf.field(default=True, help="Supply 'tophat_filter' to explicitly select TophatPostFilter")
     exclude_nearest_apertures : int = xconf.field(default=1, help="Exclude this many apertures on either side of the measurement location from the noise sample")
 
     def execute(
@@ -722,9 +766,11 @@ class TophatPostFilter(_BasePostFilter):
         destination_image: np.ndarray,
         pipeline_outputs_for_ext: list[PipelineOutput],
         measurement_location : CompanionSpec,
+        resolution_element_px : float,
         derotation_angles: Optional[np.ndarray] = None,
     ) -> PostFilteringResult:
-        kernel = Tophat2DKernel(self.radius_px)
+        radius_px = resolution_element_px / 2 if self.kernel_radius_px is None else self.kernel_radius_px
+        kernel = Tophat2DKernel(radius=radius_px)
         filtered_image = convolve_fft(
             destination_image,
             kernel
@@ -732,6 +778,7 @@ class TophatPostFilter(_BasePostFilter):
         return PostFilteringResult(
             kernel=kernel.array,
             image=filtered_image,
+            kernel_diameter_px=radius_px * 2,
         )
 
 def signal_from_filter(img, mf):
@@ -748,6 +795,59 @@ def signal_from_filter(img, mf):
     yctr, xctr = math.ceil((filtered_image.shape[0] - 1) / 2), math.ceil((filtered_image.shape[1] - 1) / 2)
     return filtered_image[int(yctr), int(xctr)]
 
+@xconf.config
+class MatchedPostFilter(_BasePostFilter):
+    kernel_diameter_resel : float = xconf.field(default=1.5, help="Diameter in resolution elements beyond which matched filter kernel is set to zero to avoid spurious detections")
+    combine : constants.CombineOperation = xconf.field(default=constants.CombineOperation.MEAN, help="How to combine model residuals for stacking")
+
+    def execute(
+        self,
+        destination_image: np.ndarray,
+        pipeline_outputs_for_ext: list[PipelineOutput],
+        measurement_location : CompanionSpec,
+        resolution_element_px : float,
+        derotation_angles: Optional[np.ndarray] = None,
+    ) -> PostFilteringResult:
+        derotated_cube = None
+        if derotation_angles is None:
+            raise NotImplementedError('need to handle no-derot case')
+        for idx, output in enumerate(pipeline_outputs_for_ext):
+            log.debug(f"Derotating model residuals from output {idx + 1} / {len(pipeline_outputs_for_ext)}")
+            derotated_output = improc.derotate_cube(output.model_arr, derotation_angles)
+            if derotated_cube is None:
+                derotated_cube = derotated_output
+            else:
+                derotated_cube = np.concatenate([derotated_cube, derotated_output])
+        kernel = improc.combine(derotated_cube, self.combine)
+        
+        # shift kernel to center
+        dx, dy = characterization.r_pa_to_x_y(measurement_location.r_px, measurement_location.pa_deg, 0, 0)
+        kernel = improc.shift2(kernel, -dx, -dy)
+
+        # trim kernel to only central region
+        radius_px = (self.kernel_diameter_resel * resolution_element_px) / 2
+        log.debug(f"Matched filter with {self.kernel_diameter_resel} lambda/D extent is {radius_px=} given {resolution_element_px=}")
+        rho, _ = improc.polar_coords(improc.arr_center(kernel), kernel.shape)
+        kernel[rho > radius_px] = 0
+
+        # normalize kernel and flip to form matched filter
+        kernel /= np.nansum(kernel**2)
+        kernel = np.flip(kernel, axis=(0, 1))
+
+        # apply
+        filtered_image = convolve_fft(
+            destination_image,
+            kernel,
+            normalize_kernel=False,
+            nan_treatment='fill',
+        )
+        filtered_image[np.isnan(destination_image)] = np.nan
+        return PostFilteringResult(
+            kernel=kernel,
+            image=filtered_image,
+            kernel_diameter_px=2 * radius_px,
+        )
+
 @dataclass
 class StarlightSubtractionMeasurement:
     signal : float
@@ -756,14 +856,15 @@ class StarlightSubtractionMeasurement:
 
 @dataclass
 class StarlightSubtractionMeasurementSet:
-    by_ext : dict[str, PostFilteringResult]
+    by_ext : dict[str, dict[str, StarlightSubtractionMeasurement]]
 
 @dataclass
 class StarlightSubtractionMeasurements:
     companion : CompanionSpec
-    by_modes: dict[int,StarlightSubtractionMeasurement]
+    by_modes: dict[int,StarlightSubtractionMeasurementSet]
     subtraction_result : Optional[StarlightSubtractResult]
-      
+
+PostFilter = Union[TophatPostFilter, MatchedPostFilter]
 
 @xconf.config
 class MeasureStarlightSubtraction:
@@ -771,7 +872,8 @@ class MeasureStarlightSubtraction:
     exclude_nearest_apertures: int = xconf.field(default=1, help="How many locations on either side of the probed companion location should be excluded from the SNR calculation")
     subtraction : StarlightSubtract = xconf.field(help="Configure starlight subtraction options")
     return_starlight_subtraction : bool = xconf.field(default=True, help="whether to return the starlight subtraction result")
-    post_filter : TophatPostFilter = xconf.field(help="Filter final derotated images")
+    tophat_post_filter : PostFilter = xconf.field(default=TophatPostFilter(), help="Filter final derotated images")
+    matched_post_filter : PostFilter = xconf.field(default=MatchedPostFilter(), help="Filter final derotated images")
     return_post_filtering_result : bool = xconf.field(default=True, help="whether to return the images and kernels from filtering")
 
     def __post_init__(self):
@@ -795,121 +897,55 @@ class MeasureStarlightSubtraction:
             meas = StarlightSubtractionMeasurementSet(by_ext={})
             for ext in ssresult.modes[k_modes].destination_images:
                 image = ssresult.modes[k_modes].destination_images[ext]
-                filter_result = self.post_filter.execute(
-                    image,
-                    outputs_for_ext[ext],
-                    companion,
-                    data.angles,
-                )
-                snr, signal = snr_from_convolution(
-                    filter_result.image,
-                    loc_rho=companion.r_px,
-                    loc_pa_deg=companion.pa_deg,
-                    aperture_diameter_px=self.resolution_element_px,
-                    exclude_nearest=self.exclude_nearest_apertures,
-                )
-                meas.by_ext[ext] = StarlightSubtractionMeasurement(
-                    signal=signal,
-                    snr=snr,
-                    post_filtering_result=filter_result if self.return_post_filtering_result else None,
-                )
-            result.by_modes[k_modes] = meas
-        return result
-        
-        
-        # dest_exts = tuple(ssresult.modes[self.subtraction.k_modes_values[0]].destination_images.keys())
-        r_px, pa_deg = data.companions[0].r_px, data.companions[0].pa_deg
-        
-        iwa_px = r_px - self.resolution_element_px / 2
-        companionspecs = list(characterization.generate_probes(
-            iwa_px=iwa_px,
-            owa_px=iwa_px + self.resolution_element_px,
-            n_radii=1,
-            spacing_px=self.resolution_element_px,
-            starting_pa_deg=pa_deg,
-            scales=[0.0]
-        ))
-        measurement_loc = companionspecs[0]
-        companionspecs = [measurement_loc,] + companionspecs[1 + self.exclude_nearest_apertures:-self.exclude_nearest_apertures]
-        
-        result = StarlightSubtractionMeasurements(data.companions[0], {}, ssresult if self.return_starlight_subtraction else None)
-        for k_modes in self.subtraction.k_modes_values:
-            result.by_modes[k_modes] = StarlightSubtractionMeasurement(by_ext={})
-
-        for dest_ext in outputs_for_ext:
-            log.debug(f"Measuring signal with circular aperture")
-            for k_modes in self.subtraction.k_modes_values:
-                img = ssresult.modes[k_modes].destination_images[dest_ext]
-                kernel = Tophat2DKernel(self.resolution_element_px / 2)
-                filtered_image = convolve_fft(
-                    img,
-                    kernel
-                )
-                simple_snr, simple_signal = snr_from_convolution(
-                    filtered_image,
-                    r_px,
-                    pa_deg,
-                    self.resolution_element_px,
-                    exclude_nearest=self.exclude_nearest_apertures
-                )
-                result.by_modes[k_modes].by_ext[dest_ext] = PostFilteringResult(
-                    signal=None, snr=None, ## todo make this less hairy somehow
-                    simple_signal=simple_signal,
-                    simple_snr=simple_snr,
-                )
-                log.debug(f"{k_modes=} {dest_ext=} {result.by_modes[k_modes].by_ext[dest_ext]}")
-            signals_for_modes = {}
-            noises_for_modes = {}
-            for k_modes in self.subtraction.k_modes_values:
-                noises_for_modes[k_modes] = []
-            for cidx, companionspec in enumerate(companionspecs):
-                model_data = StarlightSubtractionData(
-                    inputs=[],
-                    companions=[],
-                    angles=data.angles,
-                    initial_decomposition=ssresult.decomposition
-                )
-                probe_ext = f"probe_{cidx}"
-
-                for pinput_idx, pinput in enumerate(outputs_for_ext[dest_ext]):
-                    log.debug(f"Generating probe {cidx} for input {pinput_idx}")
-                    model_arr = generate_signal(
-                        pinput.sci_arr.shape,
-                        companionspec.r_px,
-                        companionspec.pa_deg,
-                        pinput.model_inputs.arr,
+                post_filters = {
+                    'tophat': self.tophat_post_filter,
+                    'matched': self.matched_post_filter,
+                    'none': NoPostFilter(),
+                }
+                filter_meas = {}
+                for name, post_filter in post_filters.items():
+                    filter_result = post_filter.execute(
+                        image,
+                        outputs_for_ext[ext],
+                        companion,
+                        self.resolution_element_px,
                         data.angles,
                     )
-                    model_data.inputs.append(PipelineInput(
-                        model_arr,
-                        pinput.estimation_mask,
-                        destination_ext=probe_ext,
-                        combination_mask=pinput.combination_mask,
-                        model_inputs=pinput.model_inputs,
-                        model_arr=pinput.model_arr
-                    ))
-                model_ss_result = self.subtraction.execute(model_data)
-                for k_modes in ssresult.modes:
-                    kernel_for_loc = model_ss_result.modes[k_modes].destination_images[probe_ext]
-                    val = signal_from_filter(img, kernel_for_loc)
-                    # import matplotlib.pyplot as plt
-                    # import doodads as dd
-                    # plt.figure()
-                    # plt.subplot(121)
-                    # dd.imshow(img)
-                    # plt.subplot(122)
-                    # dd.imshow(kernel_for_loc)
-                    if cidx == 0:
-                        log.debug(f"measured signal {val} using {probe_ext}")
-                        signals_for_modes[k_modes] = val
-                    else:
-                        log.debug(f"measured noise {val} using {probe_ext}")
-                        noises_for_modes[k_modes].append(val)
-            for k_modes in ssresult.modes:
-                snr = characterization.calc_snr_mawet(signals_for_modes[k_modes], noises_for_modes[k_modes])
-                result.by_modes[k_modes].by_ext[dest_ext].signal = signals_for_modes[k_modes]
-                result.by_modes[k_modes].by_ext[dest_ext].snr = snr
+                    snr, signal = snr_from_convolution(
+                        filter_result.image,
+                        loc_rho=companion.r_px,
+                        loc_pa_deg=companion.pa_deg,
+                        aperture_diameter_px=filter_result.kernel_diameter_px,
+                        exclude_nearest=self.exclude_nearest_apertures,
+                    )
+                    filter_meas[name] = StarlightSubtractionMeasurement(
+                        signal=signal,
+                        snr=snr,
+                        post_filtering_result=filter_result if self.return_post_filtering_result else None,
+                    )
+                meas.by_ext[ext] = filter_meas
+            result.by_modes[k_modes] = meas
         return result
+
+    def measurements_to_jsonable(self, res, k_modes_values):
+        output_dict = {}
+        output_dict['config'] = xconf.asdict(self)
+        output_dict['results'] = {
+            'k_modes_values': k_modes_values,
+        }
+
+        for k in res.by_modes:
+            for ext in res.by_modes[k].by_ext:
+                if ext not in output_dict['results']:
+                    output_dict['results'][ext] = []
+                filtered_measurements = {}
+                for filter_name in res.by_modes[k].by_ext[ext]:
+                    filtered_measurements[filter_name] = {
+                        'snr': res.by_modes[k].by_ext[ext][filter_name].snr,
+                        'signal': res.by_modes[k].by_ext[ext][filter_name].signal,
+                    }
+                output_dict['results'][ext].append(filtered_measurements)
+        return output_dict
 
 @xconf.config
 class MeasureStarlightSubtractionPipeline(MeasureStarlightSubtraction):
