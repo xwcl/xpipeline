@@ -181,8 +181,7 @@ def klip_mtx(image_vecs, params : KlipParams, probe_model_vecs: Optional[np.ndar
     # this will make each column contiguous
     image_vecs_meansub = np.asfortranarray(image_vecs_meansub)
     if probe_model_vecs is not None:
-        probe_model_vecs_meansub, _ = mean_subtract_vecs(probe_model_vecs)
-        probe_model_vecs_meansub = np.asfortranarray(probe_model_vecs)
+        probe_model_vecs_meansub = np.asfortranarray(probe_model_vecs - mean_vec[:, np.newaxis])
     else:
         probe_model_vecs_meansub = None
     if params.strategy in (constants.KlipStrategy.DOWNDATE_SVD, constants.KlipStrategy.SVD):
