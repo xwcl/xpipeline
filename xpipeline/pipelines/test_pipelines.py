@@ -10,6 +10,7 @@ from .new import (
     PreloadedArray,
     KlipTranspose,
     Klip,
+    KModesValuesConfig,
 )
 
 from ..tasks.characterization import calculate_snr
@@ -52,7 +53,7 @@ def test_klip_pipeline(naco_betapic_data, strategy_cls, snr_threshold):
     pl = StarlightSubtractPipeline(
         data=data_config,
         strategy=strategy_cls(),
-        k_modes_values=k_modes_values,
+        k_modes=KModesValuesConfig(values=k_modes_values),
     )
     result = pl.execute()
     finim = result.modes[k_modes_values[0]].destination_images["finim"]

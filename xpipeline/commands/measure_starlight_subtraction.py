@@ -112,16 +112,23 @@ class MeasureStarlightSubtraction(BaseCommand, MeasureStarlightSubtractionPipeli
                                 self.exclude_nearest_apertures,
                                 xcenter=xc, ycenter=yc
                             )):
-                                region_specs += f"circle({x},{y},{kernel_diameter_px / 2}) # color={'red' if idx == 0 else 'green'}\n"
+                                region_specs += f"circle({x},{y},{kernel_diameter_px / 2 if filt_name != 'none' else 0.5}) # color={'red' if idx == 0 else 'green'}\n"
                             region_file_name = f"regions_{ext}_{filt_name}.reg"
                             with self.destination.open_path(region_file_name, "wb") as fh:
                                 fh.write(region_specs.encode('utf8'))
-            for ext in images_by_ext:
-                postfilt_hdul = fits.HDUList([
-                    fits.PrimaryHDU(),
-                    fits.ImageHDU(np.array(k_modes_values, dtype=int), name="K_MODES_VALUES"),
-                ])
-                for filt_name in images_by_filt_by_ext:
+
+
+
+            hduls_by_ext = {}
+            for filt_name in images_by_filt_by_ext:
+                for ext in images_by_filt_by_ext[filt_name]:
+                    if ext not in hduls_by_ext:
+                        hduls_by_ext[ext] = postfilt_hdul = fits.HDUList([
+                            fits.PrimaryHDU(),
+                            fits.ImageHDU(np.array(k_modes_values, dtype=int), name="K_MODES_VALUES"),
+                        ])
+                    else:
+                        postfilt_hdul = hduls_by_ext[ext]
                     postfilt_hdul.append(fits.ImageHDU(
                         np.stack(images_by_filt_by_ext[filt_name][ext]),
                         name=f"{ext}_{filt_name}",
@@ -131,8 +138,9 @@ class MeasureStarlightSubtraction(BaseCommand, MeasureStarlightSubtractionPipeli
                         name=f"{ext}_{filt_name}_KERNEL",
                     ))
 
-            with self.destination.open_path('post_filtering.fits', 'wb') as fh:
-                postfilt_hdul.writeto(fh)
+            for ext in hduls_by_ext:
+                with self.destination.open_path(f'post_filtering_{ext}.fits', 'wb') as fh:
+                    hduls_by_ext[ext].writeto(fh)
 
         if self.return_starlight_subtraction:
             if self.subtraction.return_decomposition:

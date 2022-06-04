@@ -444,8 +444,12 @@ class KlipTranspose:
             k_modes=k_modes,
             **self.construct_klipt_params_dict()
         )
+        if probe_model_vecs is not None:
+            probe_model_vecs_medsub = probe_model_vecs - med_vec
+        else:
+            probe_model_vecs_medsub = None
         image_vecs_resid, model_vecs_resid, decomposition = starlight_subtraction.klip_transpose(
-            image_vecs_medsub, probe_model_vecs, decomposition,
+            image_vecs_medsub, probe_model_vecs_medsub, decomposition,
             klipt_params=params_kt
         )
         return image_vecs_resid, model_vecs_resid, decomposition, med_vec
@@ -775,6 +779,7 @@ class TophatPostFilter(_BasePostFilter):
             destination_image,
             kernel
         )
+        filtered_image[np.isnan(destination_image)] = np.nan
         return PostFilteringResult(
             kernel=kernel.array,
             image=filtered_image,
@@ -934,7 +939,7 @@ class MeasureStarlightSubtraction:
             'k_modes_values': k_modes_values,
         }
 
-        for k in res.by_modes:
+        for k in k_modes_values:
             for ext in res.by_modes[k].by_ext:
                 if ext not in output_dict['results']:
                     output_dict['results'][ext] = []
