@@ -635,7 +635,6 @@ class StarlightSubtract:
     combine : constants.CombineOperation = xconf.field(default=constants.CombineOperation.MEAN, help="How to combine image for stacking")
     return_residuals : bool = xconf.field(default=True, help="Whether residual images after starlight subtraction should be returned")
     return_inputs : bool = xconf.field(default=True, help="Whether original images before starlight subtraction should be returned")
-    subtract_mean : bool = xconf.field(default=True, help="Take a mean along the time axis and subtract from inputs")
     # pre_stack_filter : Optional[PreStackFilter] = xconf.field(help="Process after removing starlight and before stacking")
     # return_pre_stack_filtered : bool = xconf.field(default=True, help="Whether filtered images before stacking should be returned")
     k_modes : KModesConfig = xconf.field(default_factory=KModesFractionConfig, help="Which values to try for number of modes to subtract")
@@ -647,8 +646,6 @@ class StarlightSubtract:
             if len(destination_exts[pinput.destination_ext]):
                 if pinput.sci_arr.shape != destination_exts[pinput.destination_ext][0].sci_arr.shape:
                     raise ValueError(f"Dimensions of current science array {pinput.sci_arr.shape=} mismatched with others. Use separate destination_ext settings for each input, or make them the same size.")
-            if self.subtract_mean:
-                pinput.sci_arr = pinput.sci_arr - np.nanmean(pinput.sci_arr, axis=0)
             destination_exts[pinput.destination_ext].append(pinput)
 
         data_vecs, model_vecs = unwrap_inputs_to_matrices(data.inputs)
