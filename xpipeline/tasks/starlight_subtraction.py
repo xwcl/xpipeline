@@ -523,7 +523,7 @@ def trap_mtx(image_vecs, model_vecs, trap_params : TrapParams):
         if get_array_module(temporal_basis.mtx_v0) is core.cupy:
             temporal_basis.mtx_v0 = temporal_basis.mtx_v0.get()
         return temporal_basis
-    
+
     if trap_params.force_gpu_fit and not was_gpu_array:
         image_vecs_medsub_, trimmed_model_vecs_ = cp.asarray(image_vecs_medsub), cp.asarray(trimmed_model_vecs)
         del image_vecs_medsub, trimmed_model_vecs
@@ -553,6 +553,7 @@ def compute_temporal_basis(ref_vecs, params: Union[TrapParams,KlipTParams]):
         ref_vecs_std = xp.std(ref_vecs, axis=1)
         scaled_ref_vecs = ref_vecs / ref_vecs_std[:,np.newaxis]
     else:
+        ref_vecs_std = None
         scaled_ref_vecs = ref_vecs
     # if params.force_gpu_decomposition:
     #     scaled_ref_vecs = cp.asarray(scaled_ref_vecs)
@@ -592,13 +593,21 @@ def klip_transpose(image_vecs_medsub: np.ndarray, probe_model_vecs_medsub : np.n
     # compute projections into eigentimeseries and subtract that from real pixel timeseries
     timer = time.perf_counter()
     # image_vecs_medsub shape (npix, nframes)
+    if klipt_params.scale_ref_std:
+        target_pixseries_std = np.std(image_vecs_medsub, axis=1)
+        image_vecs_medsub = image_vecs_medsub / target_pixseries_std[:, np.newaxis]
+        probe_model_vecs_medsub = probe_model_vecs_medsub / target_pixseries_std[:, np.newaxis]
     eigentimeseries = temporal_basis.mtx_v0[:,:klipt_params.k_modes]
     subspace_images = eigentimeseries.T @ image_vecs_medsub.T
-    image_resid_vecs = (image_vecs_medsub.T - eigentimeseries @ subspace_images).T
-    probe_model_resid_vecs = (image_vecs_medsub.T - eigentimeseries @ (eigentimeseries.T @ probe_model_vecs_medsub.T)).T
-    timer = timer - time.perf_counter()
+    reconstructed_images = (eigentimeseries @ subspace_images).T
+    image_resid_vecs = (image_vecs_medsub - reconstructed_images)
+    probe_model_resid_vecs = (probe_model_vecs_medsub.T - eigentimeseries @ (eigentimeseries.T @ probe_model_vecs_medsub.T)).T
+    if klipt_params.scale_ref_std:
+        image_resid_vecs *= target_pixseries_std[:, np.newaxis]
+        probe_model_resid_vecs *= target_pixseries_std[:, np.newaxis]
+    timer = time.perf_counter() - timer
     log.debug(f"Starlight subtracted in {timer} sec")
-    return image_resid_vecs, probe_model_resid_vecs, temporal_basis, 
+    return image_resid_vecs, probe_model_resid_vecs, temporal_basis,
 
 def trap_phase_2(image_vecs_medsub, model_vecs, temporal_basis, trap_params : TrapParams):
     xp = core.get_array_module(image_vecs_medsub)
