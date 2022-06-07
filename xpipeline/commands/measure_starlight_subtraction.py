@@ -143,7 +143,7 @@ class MeasureStarlightSubtraction(BaseCommand, MeasureStarlightSubtractionPipeli
                     hduls_by_ext[ext].writeto(fh)
 
         if self.return_starlight_subtraction:
-            if self.subtraction.return_decomposition:
+            if self.save_decomposition:
                 decomp = res.subtraction_result.decomposition
                 decomp_hdul = fits.HDUList([fits.PrimaryHDU(),])
                 decomp_hdul.append(fits.ImageHDU(decomp.mtx_u0, name='MTX_U0'))
@@ -151,7 +151,7 @@ class MeasureStarlightSubtraction(BaseCommand, MeasureStarlightSubtractionPipeli
                 decomp_hdul.append(fits.ImageHDU(decomp.mtx_v0, name='MTX_V0'))
                 with self.destination.open_path('decomposition.fits', 'wb') as fh:
                     decomp_hdul.writeto(fh)
-            if self.subtraction.return_residuals:
+            if self.save_residuals:
                 sci_arrays_by_output = [[] for i in range(n_inputs)]
                 model_arrays_by_output = [[] for i in range(n_inputs)]
                 for k_modes in k_modes_values:
@@ -162,20 +162,21 @@ class MeasureStarlightSubtraction(BaseCommand, MeasureStarlightSubtractionPipeli
                         model_arrays_by_output[i].append(
                             res.subtraction_result.modes[k_modes].pipeline_outputs[i].model_arr
                         )
-                resid_hdul = fits.HDUList([
-                    fits.PrimaryHDU(),
-                    fits.ImageHDU(np.array(k_modes_values, dtype=int), name="K_MODES_VALUES")
-                ])
-                for i in range(n_inputs):
-                    ext = f"RESID_{i:02}"
-                    model_ext = f"MODEL_RESID_{i:02}"
-                    sci_array_stack = np.stack(sci_arrays_by_output[i])
-                    model_array_stack = np.stack(model_arrays_by_output[i])
-                    resid_hdul.append(fits.ImageHDU(sci_array_stack, name=ext))
-                    resid_hdul.append(fits.ImageHDU(model_array_stack, name=model_ext))
-                with self.destination.open_path('residuals.fits', 'wb') as fh:
-                    resid_hdul.writeto(fh)
-            if self.subtraction.return_inputs:
+                if self.save_residuals:
+                    resid_hdul = fits.HDUList([
+                        fits.PrimaryHDU(),
+                        fits.ImageHDU(np.array(k_modes_values, dtype=int), name="K_MODES_VALUES")
+                    ])
+                    for i in range(n_inputs):
+                        ext = f"RESID_{i:02}"
+                        model_ext = f"MODEL_RESID_{i:02}"
+                        sci_array_stack = np.stack(sci_arrays_by_output[i])
+                        model_array_stack = np.stack(model_arrays_by_output[i])
+                        resid_hdul.append(fits.ImageHDU(sci_array_stack, name=ext))
+                        resid_hdul.append(fits.ImageHDU(model_array_stack, name=model_ext))
+                    with self.destination.open_path('residuals.fits', 'wb') as fh:
+                        resid_hdul.writeto(fh)
+            if self.save_inputs:
                 inputs_hdul = fits.HDUList([
                     fits.PrimaryHDU(),
                 ])

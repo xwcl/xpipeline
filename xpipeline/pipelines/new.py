@@ -632,7 +632,8 @@ KModesConfig = Union[KModesValuesConfig,KModesFractionConfig]
 @xconf.config
 class StarlightSubtract:
     strategy : Union[KlipTranspose,Klip,KlipSubspace] = xconf.field(help="Strategy with which to estimate and subtract starlight")
-    combine : constants.CombineOperation = xconf.field(default=constants.CombineOperation.MEAN, help="How to combine image for stacking")
+    combine : constants.CombineOperation = xconf.field(default=constants.CombineOperation.MEDIAN, help="How to combine image for stacking")
+    minimum_coverage_frac: float = xconf.field(default=0.2, help="Number of overlapping source frames covering a derotated frame pixel for it to be kept in the final image as a fraction of the total number of frames")
     return_residuals : bool = xconf.field(default=True, help="Whether residual images after starlight subtraction should be returned")
     return_inputs : bool = xconf.field(default=True, help="Whether original images before starlight subtraction should be returned")
     # pre_stack_filter : Optional[PreStackFilter] = xconf.field(help="Process after removing starlight and before stacking")
@@ -650,6 +651,7 @@ class StarlightSubtract:
 
         data_vecs, model_vecs = unwrap_inputs_to_matrices(data.inputs)
         max_rank = np.min(data_vecs.shape)
+        n_obs = data_vecs.shape[1]
         log.debug(f"After unwrapping inputs to matrices, got {data_vecs.shape=} implying {max_rank=}")
         k_modes_values = self.k_modes.as_values(max_rank)
         decomp = data.initial_decomposition
@@ -702,6 +704,11 @@ class StarlightSubtract:
                         all_outputs_cube = np.concatenate([all_outputs_cube, derot_cube])
                 # combine the concatenated cube into a single plane
                 destination_images[ext] = improc.combine(all_outputs_cube, self.combine)
+                # apply minimum coverage mask
+                nonfinite_elements_cube = ~np.isfinite(all_outputs_cube)
+                coverage_count = np.sum(nonfinite_elements_cube, axis=0)
+                coverage_mask = coverage_count > (n_obs * self.minimum_coverage_frac)
+                destination_images[ext][~coverage_mask] = np.nan
 
             results_for_modes[k_modes] = StarlightSubtractModesResult(
                 destination_images=destination_images,
@@ -774,9 +781,11 @@ class TophatPostFilter(_BasePostFilter):
         kernel = Tophat2DKernel(radius=radius_px)
         filtered_image = convolve_fft(
             destination_image,
-            kernel
+            kernel,
+            nan_treatment='fill',
+            fill_value=0.0,
+            preserve_nan=True,
         )
-        filtered_image[np.isnan(destination_image)] = np.nan
         return PostFilteringResult(
             kernel=kernel.array,
             image=filtered_image,
@@ -842,8 +851,9 @@ class MatchedPostFilter(_BasePostFilter):
             kernel,
             normalize_kernel=False,
             nan_treatment='fill',
+            fill_value=0.0,
+            preserve_nan=True,
         )
-        filtered_image[np.isnan(destination_image)] = np.nan
         return PostFilteringResult(
             kernel=kernel,
             image=filtered_image,
