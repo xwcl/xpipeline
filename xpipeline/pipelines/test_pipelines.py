@@ -21,7 +21,7 @@ from ..tasks.test_common import naco_betapic_data
 import numpy as np
 
 STRATEGIES_SNRS = [
-    (KlipTranspose, 31.24), (Klip, 15.63)
+    (KlipTranspose, 28), (Klip, 14)
 ]
 
 @pytest.mark.parametrize(

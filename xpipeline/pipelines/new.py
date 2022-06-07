@@ -705,8 +705,8 @@ class StarlightSubtract:
                 # combine the concatenated cube into a single plane
                 destination_images[ext] = improc.combine(all_outputs_cube, self.combine)
                 # apply minimum coverage mask
-                nonfinite_elements_cube = ~np.isfinite(all_outputs_cube)
-                coverage_count = np.sum(nonfinite_elements_cube, axis=0)
+                finite_elements_cube = np.isfinite(all_outputs_cube)
+                coverage_count = np.sum(finite_elements_cube, axis=0)
                 coverage_mask = coverage_count > (n_obs * self.minimum_coverage_frac)
                 destination_images[ext][~coverage_mask] = np.nan
 
