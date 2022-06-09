@@ -61,13 +61,14 @@ COMMANDS = {
 }
 
 class Dispatcher(xconf.Dispatcher):
+    first_party_loggers = ['xpipeline', 'xconf']
     def configure_logging(self, level):
         # remove existing handlers
         root_logger = logging.getLogger()
         for h in root_logger.handlers:
             root_logger.removeHandler(h)
         # apply verbosity
-        for logger_name in ['xpipeline', 'xconf']:
+        for logger_name in self.first_party_loggers:
             pkglog = logging.getLogger(logger_name)
             pkglog.setLevel(level)
             # add colors (if a tty)
