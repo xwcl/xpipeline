@@ -80,11 +80,11 @@ def test_ft_shift2():
 def test_shift2():
     orig = f_test(128)
     outshape = (3 * 128, 3 * 128)
-    result = improc.shift2(orig, 0, 0, interpolation_fill_value=0.0, output_shape=outshape)
+    result = improc.shift2(orig, 0, 0, interpolation_fill_value=0.0, missing_fill_value=0.0, output_shape=outshape)
     assert result.shape == outshape
     assert np.allclose(orig, result[128 : 2 * 128, 128 : 2 * 128])
 
-    result2 = improc.shift2(orig, -128, -128, interpolation_fill_value=0.0, output_shape=outshape)
+    result2 = improc.shift2(orig, -128, -128, interpolation_fill_value=0.0, missing_fill_value=0.0, output_shape=outshape)
     assert np.allclose(orig, result2[:128, :128])
 
 
@@ -115,14 +115,15 @@ def test_combine_paired_cubes(xp):
     assert np.all(ref == out_cube)
 
 def test_derotate_cube():
-    data = np.zeros((3, 3, 3))
-    data[0, 1, 0] = 1
-    data[1, 2, 1] = 1
-    data[2, 1, 2] = 1
+    data = np.zeros((3, 5, 5))
+    data[0, 2, 1] = 1
+    data[1, 1, 2] = 1
+    data[2, 2, 3] = 1
     data = np.asarray(data)
-    angles = np.asarray([-90, 0, 90])
+    angles = np.asarray([90, 0, -90])
+
     out_cube = improc.derotate_cube(data, angles, interpolation_fill_value=0, missing_fill_value=0)
-    assert np.all(out_cube[:, 2, 1] > 0.99)
+    assert np.all(out_cube[:, 1, 2] > 0.99)
 
 
 def test_aligned_cutout_oversized_template():
