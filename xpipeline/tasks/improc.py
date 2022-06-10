@@ -1031,7 +1031,7 @@ def matrix_transform_image(source_image, transform_mtx, dest_image, interpolatio
     missing_fill_value : float
         When a transformed image location maps to an out-of-bounds
         location in the source image, or to a location where the
-        interpolation domain is all NaN values, this value
+        interpolation domain is >1/2 NaN values, this value
         is used for the destination pixel
     '''
     cutout = np.zeros((4, 4))
@@ -1052,7 +1052,7 @@ def matrix_transform_image(source_image, transform_mtx, dest_image, interpolatio
                     if not was_fill:
                         n_good_pix += 1
                     cutout[i, j] = val
-            if n_good_pix > 0:
+            if n_good_pix > 8:  # 1/2 of the interpolation kernel entries
                 dest_image[dest_y, dest_x] = cpu_bicubic(x_frac, y_frac, cutout)
             else:
                 dest_image[dest_y, dest_x] = missing_fill_value
