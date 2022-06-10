@@ -98,7 +98,7 @@ def generate_signal(
     for i in range(n_obs):
         dx = r_px * np.cos(theta[i])
         dy = r_px * np.sin(theta[i])
-        outcube[i] += scale * template_scale_factors[i] * improc.shift2(template, dx, dy, output_shape=frame_shape)
+        outcube[i] += scale * template_scale_factors[i] * improc.shift2(template, dx, dy, output_shape=frame_shape, interpolation_fill_value=0.0, missing_fill_value=0.0)
     return outcube
 
 def generate_signals(

@@ -80,11 +80,11 @@ def test_ft_shift2():
 def test_shift2():
     orig = f_test(128)
     outshape = (3 * 128, 3 * 128)
-    result = improc.shift2(orig, 0, 0, output_shape=outshape)
+    result = improc.shift2(orig, 0, 0, interpolation_fill_value=0.0, output_shape=outshape)
     assert result.shape == outshape
     assert np.allclose(orig, result[128 : 2 * 128, 128 : 2 * 128])
 
-    result2 = improc.shift2(orig, -128, -128, output_shape=outshape)
+    result2 = improc.shift2(orig, -128, -128, interpolation_fill_value=0.0, output_shape=outshape)
     assert np.allclose(orig, result2[:128, :128])
 
 
@@ -121,7 +121,7 @@ def test_derotate_cube():
     data[2, 1, 2] = 1
     data = np.asarray(data)
     angles = np.asarray([-90, 0, 90])
-    out_cube = improc.derotate_cube(data, angles, fill_value=0)
+    out_cube = improc.derotate_cube(data, angles, interpolation_fill_value=0, missing_fill_value=0)
     assert np.all(out_cube[:, 2, 1] > 0.99)
 
 
@@ -164,7 +164,7 @@ def test_rotate():
     assert np.allclose(result1[~nanmask], result2[~nanmask]), "CPU rotate with supplied dest array produced different answer from newly allocated"
     # 90deg agrees
     # nb sense of angle reversed between this code and np/cp.rot90
-    result3 = improc.rotate(image, -90, fill_value=0.0)  # TODO flip arrays first and only rotate the remaining <90deg
+    result3 = improc.rotate(image, -90, interpolation_fill_value=0, missing_fill_value=0)  # TODO flip arrays first and only rotate the remaining <90deg
     assert np.allclose(result3, np.rot90(image)), "CPU interpolated image disagrees with simple 90deg rotation"
 
 def test_make_rotation_about_center():
@@ -187,7 +187,7 @@ def test_matrix_transform_cube():
         improc.make_rotation_about_center((npix, npix), -180),
     ])
     outcube = np.zeros_like(cube)
-    improc.matrix_transform_cube(cube, transforms, outcube, 0)
+    improc.matrix_transform_cube(cube, transforms, outcube, 0, 0)
     assert np.allclose(cube[0], outcube[0])
 
 

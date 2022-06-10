@@ -629,7 +629,6 @@ def aligned_cutout(
         shifts[1] - spec.search_box.origin.x,
         shifts[0] - spec.search_box.origin.y,
         output_shape=spec.template.shape,
-        fill_value=np.nan,
         anchor_to_center=False  # we're interpolating and cropping at the same time
     )
     assert subpix_subarr.shape == spec.template.shape
@@ -973,14 +972,14 @@ def cpu_bicubic(dx, dy, region):
 
 @numba.jit(inline='always', nopython=True, cache=True)
 def get_or_fill(arr, y, x, fill_value):
-    """Returns arr[y, x] unless that would
-    be out of bounds, in which case returns `fill_value`"""
+    """Returns (arr[y, x], False) unless that would be out of bounds,
+    or not-a-number, in which case returns (`fill_value`, True)"""
     ny, nx = arr.shape
     if y < ny and y >= 0 and x < nx and x >= 0:
         val = arr[y,x]
-        return val if not np.isnan(val) else fill_value
-    else:
-        return fill_value
+        if not np.isnan(val):
+            return val, False
+    return fill_value, True
 
 @numba.jit(nopython=True, cache=True)
 def _interpolate_nonfinite(source_image, dest_image):
@@ -996,8 +995,8 @@ def _interpolate_nonfinite(source_image, dest_image):
             for i in range(4):
                 for j in range(4):
                     src_y, src_x = y_int + (i - 1), x_int + (j - 1)
-                    src_pixval = get_or_fill(source_image, src_y, src_x, np.nan)
-                    if math.isfinite(src_pixval):
+                    src_pixval, was_fill = get_or_fill(source_image, src_y, src_x, np.nan)
+                    if not was_fill:
                         accumulator += src_pixval
                         n_good_pix += 1
                     cutout[i, j] = src_pixval
@@ -1018,7 +1017,23 @@ def interpolate_nonfinite(source_image, dest_image=None):
     return _interpolate_nonfinite(source_image, dest_image)
 
 @numba.jit(nopython=True, cache=True)
-def matrix_transform_image(source_image, transform_mtx, dest_image, fill_value):
+def matrix_transform_image(source_image, transform_mtx, dest_image, interpolation_fill_value, missing_fill_value):
+    '''
+    Parameters
+    ----------
+    source_image : np.ndarray
+    transform_mtx : np.ndarray
+    dest_image : np.ndarray
+    interpolation_fill_value : float
+        When a source image location overlaps a border or NaN value,
+        the final interpolated value is calculated using this value
+        in place of the undefined pixels
+    missing_fill_value : float
+        When a transformed image location maps to an out-of-bounds
+        location in the source image, or to a location where the
+        interpolation domain is all NaN values, this value
+        is used for the destination pixel
+    '''
     cutout = np.zeros((4, 4))
     for dest_y in range(dest_image.shape[0]):
         for dest_x in range(dest_image.shape[1]):
@@ -1029,25 +1044,32 @@ def matrix_transform_image(source_image, transform_mtx, dest_image, fill_value):
             y_int = int(math.floor(y))
             y_frac = y - y_int
 
+            n_good_pix = 0
             for i in range(4):
                 for j in range(4):
                     src_y, src_x = y_int + (i - 1), x_int + (j - 1)
-                    cutout[i, j] = get_or_fill(source_image, src_y, src_x, fill_value)
-            dest_image[dest_y, dest_x] = cpu_bicubic(x_frac, y_frac, cutout)
+                    val, was_fill = get_or_fill(source_image, src_y, src_x, interpolation_fill_value)
+                    if not was_fill:
+                        n_good_pix += 1
+                    cutout[i, j] = val
+            if n_good_pix > 0:
+                dest_image[dest_y, dest_x] = cpu_bicubic(x_frac, y_frac, cutout)
+            else:
+                dest_image[dest_y, dest_x] = missing_fill_value
     return dest_image
 
 @numba.njit(parallel=True, cache=True)
-def matrix_transform_cube(data_cube, transform_mtxes, dest_cube, fill_value):
+def matrix_transform_cube(data_cube, transform_mtxes, dest_cube, interpolation_fill_value, missing_fill_value):
     for i in numba.prange(data_cube.shape[0]):
-        matrix_transform_image(data_cube[i], transform_mtxes[i], dest_cube[i], fill_value)
+        matrix_transform_image(data_cube[i], transform_mtxes[i], dest_cube[i], interpolation_fill_value, missing_fill_value)
     return dest_cube
 
-def rotate(source_image, angle_deg, dest_image=None, fill_value=np.nan):
+def rotate(source_image, angle_deg, dest_image=None, interpolation_fill_value=np.nan, missing_fill_value=np.nan):
     source_image = np.asarray(source_image)
     if dest_image is None:
         dest_image = np.zeros_like(source_image)
     transform_mtx = make_rotation_about_center(source_image.shape, angle_deg)
-    matrix_transform_image(source_image, transform_mtx, dest_image, fill_value)
+    matrix_transform_image(source_image, transform_mtx, dest_image, interpolation_fill_value, missing_fill_value)
     return dest_image
 
 def trim_radial_profile(image):
@@ -1226,7 +1248,7 @@ def combine_ranges(obs_sequences, obs_table, range_spec, operation: constants.Co
 
 
 @numba.njit(cache=True)
-def shift2(image, dx, dy, output_shape=None, fill_value=0.0, anchor_to_center=True):
+def shift2(image, dx, dy, output_shape=None, interpolation_fill_value=np.nan, missing_fill_value=np.nan, anchor_to_center=True):
     """Shift image by dx, dy with bicubic interpolation
     Direction convention: feature at (0, 0) moves to (dx, dy)
     If ``output_shape`` is larger than ``image.shape``, image will be drawn into the center
@@ -1244,19 +1266,19 @@ def shift2(image, dx, dy, output_shape=None, fill_value=0.0, anchor_to_center=Tr
         base_dx = base_dy = 0
     xform = translation_matrix(-(dx + base_dx), -(dy + base_dy))
     output = np.zeros_like(image) if output_shape is None else np.zeros(output_shape, dtype=image.dtype)
-    matrix_transform_image(image, xform, output, fill_value)
+    matrix_transform_image(image, xform, output, interpolation_fill_value, missing_fill_value)
     return output
 
 @numba.njit(
     parallel=True
 )
-def _derotate_cube(cube, derotation_angles, output, fill_value):
+def _derotate_cube(cube, derotation_angles, output, interpolation_fill_value, missing_fill_value):
     for idx in numba.prange(cube.shape[0]):
         transform_mtx = make_rotation_about_center(cube[idx].shape, derotation_angles[idx])
-        matrix_transform_image(cube[idx], transform_mtx, output[idx], fill_value=fill_value)
+        matrix_transform_image(cube[idx], transform_mtx, output[idx], interpolation_fill_value, missing_fill_value)
     return output
 
-def derotate_cube(cube, derotation_angles, fill_value=np.nan):
+def derotate_cube(cube, derotation_angles, interpolation_fill_value=0, missing_fill_value=np.nan):
     """Rotate each plane of `cube` by the corresponding entry
     in `derotation_angles`, with positive angle interpreted as
     deg to rotate E of N when N +Y and E +X (which is CCW
@@ -1282,5 +1304,5 @@ def derotate_cube(cube, derotation_angles, fill_value=np.nan):
         cube = cube.astype(np.float32)
 
     output = np.zeros_like(cube)
-    _derotate_cube(cube, derotation_angles, output, fill_value)
+    _derotate_cube(cube, derotation_angles, output, interpolation_fill_value, missing_fill_value)
     return output
