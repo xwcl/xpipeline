@@ -59,7 +59,11 @@ def test_klip_mtx(strategy, decomposer, naco_betapic_data):
     threshold = 2200  # fake, just to test masking
     good_pix_mask = np.average(data["cube"], axis=0) < threshold
     cube = data["cube"]
+    r_px, pa_deg = 18.4, -42.8
+    norm_psf = data["psf"] / np.sum(data["psf"])
+    model_cube = characterization.generate_signal(cube.shape, r_px, pa_deg, norm_psf, data["angles"], np.sum(cube[0]), scale=1e-4)
     image_vecs = improc.unwrap_cube(cube, good_pix_mask)
+    model_vecs = improc.unwrap_cube(model_cube, good_pix_mask)
 
     params = starlight_subtraction.KlipParams(
         k_klip=n_modes,
@@ -69,13 +73,12 @@ def test_klip_mtx(strategy, decomposer, naco_betapic_data):
         initial_decomposer=None,
         strategy=strategy,
     )
-    starlight_subtracted, _, decomposition, mean_vec = starlight_subtraction.klip_mtx(image_vecs, params)
+    starlight_subtracted, _, decomposition, mean_vec = starlight_subtraction.klip_mtx(image_vecs, params, model_vecs)
 
     outcube = improc.wrap_matrix(starlight_subtracted, good_pix_mask)
     final_cube = improc.derotate_cube(outcube, data["angles"])
     final_image = np.nansum(final_cube, axis=0)
 
-    r_px, pa_deg = 18.4, -42.8
     fwhm_naco = 4
 
     locations, results = characterization.reduce_apertures(

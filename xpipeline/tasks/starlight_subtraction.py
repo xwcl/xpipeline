@@ -288,19 +288,18 @@ def exclusions_to_range(n_images, current_idx, exclusion_values, exclusion_delta
 
 
 
-# @njit(
-#     parallel=True
-# )
+@njit(
+    parallel=True
+)
 def klip_chunk_svd(
     image_vecs_meansub, n_images, mtx_u0, diag_s0, mtx_v0, k_klip, reuse, strategy,
     exclusion_values, exclusion_deltas, verbose=False, probe_model_vecs_meansub: Optional[np.ndarray] = None
 ):
     n_frames = image_vecs_meansub.shape[1]
     output = np.zeros_like(image_vecs_meansub)
+    output_probe = np.zeros((1, 1))  # bogus allocation required to make Numba inference happy in parallel mode
     if probe_model_vecs_meansub is not None:
-        output_probe = np.zeros_like(image_vecs_meansub)
-    else:
-        output_probe = None
+        output_probe = np.zeros_like(probe_model_vecs_meansub)
     print('klip_chunk_svd running with', numba.get_num_threads(), 'threads on', n_frames, 'frames')
     for i in numba.prange(n_frames):
         if not reuse:
