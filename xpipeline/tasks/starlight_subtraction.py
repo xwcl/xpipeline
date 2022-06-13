@@ -285,23 +285,18 @@ def exclusions_to_range(n_images, current_idx, exclusion_values, exclusion_delta
         raise ValueError("Non-contiguous ranges to exclude detected, but we don't handle that")
     return min_excluded_idx, max_excluded_idx
 
-
-
-
-@njit(
-    parallel=True
-)
+@njit
 def klip_chunk_svd(
     image_vecs_meansub, n_images, mtx_u0, diag_s0, mtx_v0, k_klip, reuse, strategy,
     exclusion_values, exclusion_deltas, verbose=False, probe_model_vecs_meansub: Optional[np.ndarray] = None
 ):
     n_frames = image_vecs_meansub.shape[1]
     output = np.zeros_like(image_vecs_meansub)
-    output_probe = np.zeros((1, 1))  # bogus allocation required to make Numba inference happy in parallel mode
+    output_probe = np.zeros((1, 1), dtype=probe_model_vecs_meansub.dtype)  # bogus allocation required to make Numba inference happy in parallel mode
     if probe_model_vecs_meansub is not None:
         output_probe = np.zeros_like(probe_model_vecs_meansub)
     print('klip_chunk_svd running with', numba.get_num_threads(), 'threads on', n_frames, 'frames')
-    for i in numba.prange(n_frames):
+    for i in range(n_frames):
         if not reuse:
             min_excluded_idx, max_excluded_idx = exclusions_to_range(
                 n_images=n_images,
@@ -365,19 +360,16 @@ def klip_mtx_svd(image_vecs_meansub, params : KlipParams, probe_model_vecs_means
         initial_k = k_klip
     if image_vecs_meansub.shape[0] < initial_k or image_vecs_meansub.shape[1] < initial_k:
         raise ValueError(f"Number of modes requested exceeds dimensions of input")
-
+    if probe_model_vecs_meansub is not None:
+        probe_model_vecs_meansub = probe_model_vecs_meansub.astype(image_vecs_meansub.dtype)
     if (
         params.strategy is constants.KlipStrategy.DOWNDATE_SVD or
         (params.strategy is constants.KlipStrategy.SVD and params.reuse)
     ):
         initial_decomposition = params.initial_decomposition
         if initial_decomposition is None:
-            # All hands on deck for initial decomposition
-            core.set_num_mkl_threads(core.MKL_MAX_THREADS)
             log.info(f'Computing initial decomposition')
             mtx_u0, diag_s0, mtx_v0 = learning.generic_svd(image_vecs_meansub, initial_k)
-            # Maximize number of independent subproblems
-            core.set_num_mkl_threads(1)
             log.info(f"Done computing initial decomposition")
         else:
             mtx_u0 = np.ascontiguousarray(initial_decomposition.mtx_u0[:, :initial_k])
