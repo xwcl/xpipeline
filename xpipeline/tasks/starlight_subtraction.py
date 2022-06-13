@@ -292,7 +292,8 @@ def klip_chunk_svd(
 ):
     n_frames = image_vecs_meansub.shape[1]
     output = np.zeros_like(image_vecs_meansub)
-    output_probe = np.zeros((1, 1), dtype=probe_model_vecs_meansub.dtype)  # bogus allocation required to make Numba inference happy in parallel mode
+    dtype = probe_model_vecs_meansub.dtype if probe_model_vecs_meansub is not None else image_vecs_meansub.dtype
+    output_probe = np.zeros((1, 1), dtype=dtype)  # bogus allocation required to make Numba inference happy in parallel mode
     if probe_model_vecs_meansub is not None:
         output_probe = np.zeros_like(probe_model_vecs_meansub)
     print('klip_chunk_svd running with', numba.get_num_threads(), 'threads on', n_frames, 'frames')
