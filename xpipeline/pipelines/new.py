@@ -128,7 +128,7 @@ class ModelSignalInputConfig:
     def load(self) -> ModelSignalInput:
         return ModelSignalInput(
             arr=self.model.load(),
-            scale_factors=self.scale_factors.load()
+            scale_factors=self.scale_factors.load() if self.scale_factors is not None else None
         )
 
 @dataclass
@@ -578,8 +578,9 @@ class StarlightSubtractionDataConfig:
             if pinputconfig.model_inputs is None:
                 raise ValueError(f"Pipeline input has no model information")
             pinput = pinputconfig.load()
-            pinput.sci_arr = pinput.sci_arr[::self.decimate_frames_by]
-            pinput.sci_arr = pinput.sci_arr / pinput.model_inputs.scale_factors[self.decimate_frames_offset::self.decimate_frames_by, np.newaxis, np.newaxis]
+            pinput.sci_arr = pinput.sci_arr[::self.decimate_frames_by].copy()
+            if pinput.model_inputs.scale_factors is not None:
+                pinput.sci_arr /= pinput.model_inputs.scale_factors[self.decimate_frames_offset::self.decimate_frames_by, np.newaxis, np.newaxis]
             ts = time.time()
             pinput.model_arr = generate_signal(
                 pinput.sci_arr.shape,
@@ -592,7 +593,7 @@ class StarlightSubtractionDataConfig:
             dt = time.time() - ts
             model_gen_sec += dt
             if companion.scale != 0:
-                pinput.sci_arr = pinput.sci_arr + companion.scale * pinput.model_arr
+                pinput.sci_arr += companion.scale * pinput.model_arr
             pipeline_inputs.append(pinput)
         log.debug("Spent %f seconds in model generation", model_gen_sec)
 
