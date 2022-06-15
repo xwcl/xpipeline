@@ -567,7 +567,6 @@ def compute_temporal_basis(ref_vecs, params: Union[TrapParams,KlipTParams]):
     time_sec = time.perf_counter() - time_sec
     log.debug(f"SVD complete in {time_sec} sec")
     temporal_basis = mtx_v  # shape = (nframes, ncomponents)
-    print("(nframes, ncomponents) ", temporal_basis.shape)
     return learning.PrecomputedDecomposition(mtx_u0=mtx_u, diag_s0=diag_s, mtx_v0=temporal_basis)
 
 def compute_klipt_basis(image_vecs_medsub : np.ndarray, probe_model_vecs : np.ndarray, klipt_params: KlipTParams) -> learning.PrecomputedDecomposition:
