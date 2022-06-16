@@ -20,6 +20,19 @@ class GridColumnsConfig:
     injected_scale : str = xconf.field(default="injected_scale", help="(companion)/(host) contrast of injection")
     hyperparameters : list[str] = xconf.field(default_factory=lambda: ['k_modes'], help="List of columns holding hyperparameters varied in grid")
 
+def convert_obj_cols_to_str(arr):
+    from numpy.lib.recfunctions import drop_fields, append_fields
+    names = []
+    cols = []
+    for name, dtype in arr.dtype.fields.items():
+        if dtype[0] == np.dtype('O'):
+            names.append(name)
+            cols.append(arr[name].astype(str))
+    arr = drop_fields(arr, names)
+    arr = append_fields(arr, names, cols)
+    return arr
+
+
 @xconf.config
 class SummarizeGrid(InputCommand):
     ext : str = xconf.field(default="grid", help="FITS binary table extension with calibration grid")
@@ -55,12 +68,13 @@ class SummarizeGrid(InputCommand):
         )
         limits_df['delta_mag_contrast_limit_5sigma'] = characterization.contrast_to_deltamag(limits_df['contrast_limit_5sigma'].to_numpy())
         for df in [limits_df, detections_df]:
-            df['r_as'] = (limits_df['r_px'].to_numpy() * u.pix * self.arcsec_per_pixel).value
+            df['r_as'] = (df['r_px'].to_numpy() * u.pix * self.arcsec_per_pixel).value
             df['r_lambda_over_d'] = characterization.arcsec_to_lambda_over_d(
                 df['r_as'].to_numpy() * u.arcsec,
                 self.wavelength_um * u.um,
                 d=self.primary_diameter_m * u.m
             )
+
         log.info(f"Sampled {len(limits_df)} locations for contrast limits and detection")
 
         lim_xs, lim_ys = characterization.r_pa_to_x_y(limits_df[self.columns.r_px], limits_df[self.columns.pa_deg], xc, yc)
@@ -70,7 +84,7 @@ class SummarizeGrid(InputCommand):
 
         hdus = [iofits.DaskHDU(None, kind="primary")]
         hdus.append(iofits.DaskHDU(contrast_lim_map, name="limits_5sigma_contrast_map"))
-        hdus.append(iofits.DaskHDU(limits_df.to_records(index=False), kind="bintable", name="limits"))
+        hdus.append(iofits.DaskHDU(convert_obj_cols_to_str(limits_df.to_records(index=False)), kind="bintable", name="limits"))
         hdus.append(iofits.DaskHDU(detection_map, name="detection_snr_map"))
-        hdus.append(iofits.DaskHDU(detections_df.to_records(index=False), kind="bintable", name="detection"))
+        hdus.append(iofits.DaskHDU(convert_obj_cols_to_str(detections_df.to_records(index=False)), kind="bintable", name="detection"))
         iofits.write_fits(iofits.DaskHDUList(hdus), output_filepath)
