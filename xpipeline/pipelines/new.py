@@ -885,8 +885,8 @@ class MeasureStarlightSubtraction:
     exclude_nearest_apertures: int = xconf.field(default=1, help="How many locations on either side of the probed companion location should be excluded from the SNR calculation")
     subtraction : StarlightSubtract = xconf.field(help="Configure starlight subtraction options")
     return_starlight_subtraction : bool = xconf.field(default=True, help="whether to return the starlight subtraction result")
-    tophat_post_filter : PostFilter = xconf.field(default=TophatPostFilter(), help="Filter final derotated images")
-    matched_post_filter : PostFilter = xconf.field(default=MatchedPostFilter(), help="Filter final derotated images")
+    tophat_post_filter : TophatPostFilter = xconf.field(default=TophatPostFilter(), help="Filter final derotated images with a circular aperture")
+    matched_post_filter : Optional[MatchedPostFilter] = xconf.field(default=MatchedPostFilter(), help="Filter final derotated images with a matched filter based on the model PSF")
     return_post_filtering_result : bool = xconf.field(default=True, help="whether to return the images and kernels from filtering")
 
     def __post_init__(self):
@@ -917,6 +917,8 @@ class MeasureStarlightSubtraction:
                 }
                 filter_meas = {}
                 for name, post_filter in post_filters.items():
+                    if post_filter is None:
+                        continue
                     filter_result = post_filter.execute(
                         image,
                         outputs_for_ext[ext],
