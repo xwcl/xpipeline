@@ -182,8 +182,8 @@ class FitsTableColumnConfig(FitsConfig):
 def init_worker():
     import matplotlib
     matplotlib.use("Agg")
-    from xpipeline.cli import Dispatcher
-    Dispatcher.configure_logging(None, 'INFO')
+    from xpipeline import cli
+    cli._configure_logging('INFO')
     log.info(f"Worker logging initalized")
 
 @xconf.config

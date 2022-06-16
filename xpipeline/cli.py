@@ -29,6 +29,7 @@ from .commands import (
     summarize_grid,
     klipt_fm,
     measure_starlight_subtraction,
+    measure_starlight_subtraction_grid,
 )
 
 log = logging.getLogger(__name__)
@@ -57,23 +58,27 @@ COMMANDS = {
     vapp_trap.VappTrap,
     summarize_grid.SummarizeGrid,
     klipt_fm.KlipTFm,
-    measure_starlight_subtraction.MeasureStarlightSubtraction
+    measure_starlight_subtraction.MeasureStarlightSubtraction,
+    measure_starlight_subtraction_grid.MeasureStarlightSubtractionGrid,
 }
 
 class Dispatcher(xconf.Dispatcher):
     first_party_loggers = ['xpipeline', 'xconf']
     def configure_logging(self, level):
-        # remove existing handlers
-        root_logger = logging.getLogger()
-        for h in root_logger.handlers:
-            root_logger.removeHandler(h)
-        # apply verbosity
-        for logger_name in self.first_party_loggers:
-            pkglog = logging.getLogger(logger_name)
-            pkglog.setLevel(level)
-            # add colors (if a tty)
-            coloredlogs.install(level=level, logger=pkglog)
+        _configure_logging(level)
 
+# Split out for use in xpipeline.commands.base.init_worker
+def _configure_logging(level):
+    # remove existing handlers
+    root_logger = logging.getLogger()
+    for h in root_logger.handlers:
+        root_logger.removeHandler(h)
+    # apply verbosity
+    for logger_name in Dispatcher.first_party_loggers:
+        pkglog = logging.getLogger(logger_name)
+        pkglog.setLevel(level)
+        # add colors (if a tty)
+        coloredlogs.install(level=level, logger=pkglog)
 
 def main():
     d = Dispatcher(COMMANDS)
