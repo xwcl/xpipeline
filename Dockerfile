@@ -59,7 +59,7 @@ RUN pip install stashcp
 RUN pip install 'ray[default]'
 RUN pip install git+https://github.com/fmfn/BayesianOptimization.git@35535c6312f365ead729de3d889d7b1fae1a8e0b
 RUN pip install git+https://github.com/xwcl/irods_fsspec.git#egg=irods_fsspec
-RUN pip install git+https://github.com/xwcl/xconf.git#egg=xconf
+RUN pip install git+https://github.com/xwcl/xconf.git@f83feaf4aea9d1c145efbbaf3c4b966959d12b7b#egg=xconf
 RUN mkdir -p /opt/xpipeline
 ADD . /opt/xpipeline/
 RUN pip install -e /opt/xpipeline
