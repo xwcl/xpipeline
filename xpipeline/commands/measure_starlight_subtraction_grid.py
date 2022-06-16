@@ -1,9 +1,11 @@
+import time
 import numpy as np
 import xconf
 import logging
 from xconf.contrib import BaseRayGrid, FileConfig, join, PathConfig, DirectoryConfig
 import ray
 from ray._raylet import ObjectRef
+from ..commands.base import AnyRayConfig, LocalRayConfig
 from ..pipelines.new import (
     MeasureStarlightSubtraction, StarlightSubtractionData, KModesConfig,
     KModesFractionConfig, KModesValuesConfig, StarlightSubtractionDataConfig,
@@ -16,18 +18,55 @@ log = logging.getLogger(__name__)
 def _measure_subtraction_task(
     chunk: np.ndarray,
     measure_subtraction: MeasureStarlightSubtraction,
-    data: StarlightSubtractionData
+    data_config: StarlightSubtractionDataConfig,
 ):
-    if np.issubdtype(chunk['k_modes'].dtype, float):
-        k_modes_spec = KModesFractionConfig(fractions=np.unique(chunk['k_modes']))
+    # apply configuration for chunk points
+    k_modes_requested = list(sorted(np.unique(chunk['k_modes_requested'])))
+    if np.issubdtype(chunk['k_modes_requested'].dtype, float):
+        k_modes_spec = KModesFractionConfig(fractions=k_modes_requested)
     else:
-        k_modes_spec = KModesValuesConfig(values=np.unique(chunk['k_modes']))
+        k_modes_spec = KModesValuesConfig(values=k_modes_requested)
     measure_subtraction.subtraction.k_modes = k_modes_spec
+    data_config.companion.r_px = chunk[0]['r_px']
+    data_config.companion.pa_deg = chunk[0]['pa_deg']
+    data_config.companion.scale = chunk[0]['injected_scale']
+    resel_px = measure_subtraction.resolution_element_px
+    annulus_resel = chunk[0]['annulus_resel']
+    if annulus_resel > 0:
+        for idx in range(len(data_config.inputs)):
+            data_config.inputs[idx].radial_mask.min_r_px = data_config.companion.r_px - (annulus_resel * resel_px) / 2
+            data_config.inputs[idx].radial_mask.max_r_px = data_config.companion.r_px + (annulus_resel * resel_px) / 2
+    log.debug(f'''Configured:
+{measure_subtraction.subtraction.k_modes=}
+{data_config.companion.r_px=}
+{data_config.companion.pa_deg=}
+{data_config.companion.scale=}
+{data_config.inputs[0].radial_mask.min_r_px=}, {data_config.inputs[0].radial_mask.max_r_px=}
+''')
+    # measure starlight subtraction
+    start = time.perf_counter()
+    log.debug(f"Starting measure subtraction task at {start=}")
+    data = data_config.load()
     meas = measure_subtraction.execute(data)
-    result = measure_subtraction.measurements_to_jsonable(meas)
+    elapsed = time.perf_counter() - start
+    log.debug(f"Completed measure subtraction task in {elapsed} sec from {start=}")
+
     # update chunk entries with measurements
-
-
+    k_modes_chosen = list(sorted(meas.by_modes.keys()))
+    chunk = chunk.copy()
+    chunk['time_total_sec'] = elapsed / len(chunk)   # at the end, column should add up to total execution time
+    for idx in range(len(chunk)):
+        k_modes_for_row = chunk[idx]['k_modes_requested']
+        for k_modes_idx in range(len(k_modes_requested)):
+            if k_modes_for_row == k_modes_requested[k_modes_idx]:
+                k_modes_chosen_for_row = k_modes_chosen[k_modes_idx]
+                break
+        chunk[idx]['k_modes_chosen'] = k_modes_chosen_for_row
+        ext = chunk[idx]['ext'].decode('utf8')
+        filter_name = chunk[idx]['filter_name'].decode('utf8')
+        chunk[idx]['signal'] = meas.by_modes[k_modes_chosen_for_row].by_ext[ext][filter_name].signal
+        chunk[idx]['snr'] = meas.by_modes[k_modes_chosen_for_row].by_ext[ext][filter_name].snr
+    return chunk
 
 
 @xconf.config
@@ -44,23 +83,27 @@ class SamplingConfig:
         self.scales = [float(s) for s in self.scales]
         if 0.0 not in self.scales:
             self.scales.insert(0, 0.0)
+            log.info("Inserted a 0.0 scale entry in SamplingConfig")
 
 
 @xconf.config
 class MeasureStarlightSubtractionGrid(BaseRayGrid):
+    ray : AnyRayConfig = xconf.field(
+        default=LocalRayConfig(),
+        help="Ray distributed framework configuration"
+    )
     measure_subtraction : MeasureStarlightSubtraction = xconf.field(help="")
     data : StarlightSubtractionDataConfig = xconf.field(help="Starlight subtraction data")
     sampling : SamplingConfig = xconf.field(help="")
     included_annuli_resel : list[float] = xconf.field(
         default_factory=lambda: [0, 2, 4],
-        help="examine the effect of a more-restrictive annular mask of X lambda/D about the location of interest, 0 = no additional mask"
+        help="examine the effect of a more-restrictive annular mask of X lambda/D about the location of interest "
+             "(X / 2 inwards and X / 2 outwards), 0 = no additional mask"
     )
 
     def compare_grid_to_checkpoint(self, checkpoint_tbl: np.ndarray, grid_tbl: np.ndarray) -> bool:
         parameters = ['index', 'r_px', 'pa_deg', 'x', 'y', 'injected_scale']
         for param in parameters:
-            # print(param, 'chk', np.unique(checkpoint_tbl[param]))
-            # print(param, 'grid_tbl', np.unique(grid_tbl[param]))
             if not np.allclose(checkpoint_tbl[param], grid_tbl[param]):
                 return False
         return True
@@ -70,7 +113,12 @@ class MeasureStarlightSubtractionGrid(BaseRayGrid):
         for pinput in self.data.inputs:
             destination_exts.add(pinput.destination_ext)
         max_len_destination_ext = max(len(f) for f in destination_exts)
-        filter_names = ['none', 'tophat', 'matched']
+        filter_names = [
+            'none',
+            'tophat',
+            'matched',
+        ]
+        annuli_resel = self.included_annuli_resel
         max_len_filter_name = max(len(f) for f in filter_names)
         cols_dtype = [
             ('index', int),
@@ -79,7 +127,9 @@ class MeasureStarlightSubtractionGrid(BaseRayGrid):
             ('pa_deg', float),
             ('x', float),
             ('y', float),
+            ('annulus_resel', float),
             ('injected_scale', float),
+            ('k_modes_chosen', int),
             ('snr', float),
             ('signal', float),
             ('ext', f'S{max_len_destination_ext}'),
@@ -87,11 +137,11 @@ class MeasureStarlightSubtractionGrid(BaseRayGrid):
         ]
         if hasattr(self.measure_subtraction.subtraction.k_modes, 'fractions'):
             k_modes_choices = self.measure_subtraction.subtraction.k_modes.fractions
-            cols_dtype.append(('k_modes', float))
+            cols_dtype.append(('k_modes_requested', float))
         else:
             k_modes_choices = self.measure_subtraction.subtraction.k_modes.values
-            cols_dtype.append(('k_modes', int))
-        
+            cols_dtype.append(('k_modes_requested', int))
+
         probes = list(characterization.generate_probes(
             self.sampling.iwa_px,
             self.sampling.owa_px,
@@ -99,31 +149,26 @@ class MeasureStarlightSubtractionGrid(BaseRayGrid):
             self.sampling.spacing_px,
             self.sampling.scales
         ))
-        n_comp_rows = len(k_modes_choices) * len(destination_exts) * len(filter_names) * len(probes)
-        log.debug(f"Evaluating {len(probes)} positions/contrast levels at {len(self.k_modes_vals)} k values")
+        n_comp_rows = len(annuli_resel) * len(k_modes_choices) * len(destination_exts) * len(filter_names) * len(probes)
+        log.debug(f"Evaluating {len(probes)} positions/contrast levels at {len(k_modes_choices)} k values: {k_modes_choices}")
         comp_grid = np.zeros(n_comp_rows, dtype=cols_dtype)
         flattened_idx = 0
         for comp in probes:
-            for dest_ext in destination_exts:
-                for filter_name in filter_names:
-                    # for every number of modes:
-                    for k_modes in k_modes_choices:
-                        comp_grid[flattened_idx]['index'] = flattened_idx
-                        comp_grid[flattened_idx]['r_px'] = comp.r_px
-                        comp_grid[flattened_idx]['pa_deg'] = comp.pa_deg
-                        comp_grid[flattened_idx]['injected_scale'] = comp.scale
-                        comp_grid[flattened_idx]['k_modes'] = k_modes
-                        comp_grid[flattened_idx]['filter_name'] = filter_name
-                        flattened_idx += 1
+            for k_modes in k_modes_choices:
+                for annulus_resel in annuli_resel:
+                    for dest_ext in destination_exts:
+                        for filter_name in filter_names:
+                            comp_grid[flattened_idx]['index'] = flattened_idx
+                            comp_grid[flattened_idx]['r_px'] = comp.r_px
+                            comp_grid[flattened_idx]['pa_deg'] = comp.pa_deg
+                            comp_grid[flattened_idx]['annulus_resel'] = annulus_resel
+                            comp_grid[flattened_idx]['injected_scale'] = comp.scale
+                            comp_grid[flattened_idx]['k_modes_requested'] = k_modes
+                            comp_grid[flattened_idx]['ext'] = dest_ext
+                            comp_grid[flattened_idx]['filter_name'] = filter_name
+                            flattened_idx += 1
         return comp_grid
 
-        # idx
-        # r
-        # pa
-        # per kmodes per filter signal
-        # per kmodes per filter snr
-        # per kmodes kmodes
-        raise NotImplementedError("Subclasses must implement generate_grid()")
 
     def launch_grid(self, pending_tbl: np.ndarray) -> list[ObjectRef]:
         """Launch Ray tasks for each grid point and collect object
@@ -131,12 +176,22 @@ class MeasureStarlightSubtractionGrid(BaseRayGrid):
         grid row it's called with, updating 'time_total_sec' to
         indicate it's been processed.
         """
-        
+
         measure_subtraction_task = ray.remote(_measure_subtraction_task)
         pending_refs = []
-        for row in pending_tbl:
-            ref : ObjectRef = measure_subtraction_task.remote(
+        externally_varying_params = ['r_px', 'pa_deg', 'annulus_resel', 'injected_scale']
+        unique_params = np.unique(pending_tbl[externally_varying_params])
 
+        for combination in unique_params:
+            chunk_mask = np.ones_like(pending_tbl, dtype=bool)
+            for field_name in externally_varying_params:
+                chunk_mask &= pending_tbl[field_name] == combination[field_name]
+            assert np.count_nonzero(chunk_mask) > 0
+            chunk = pending_tbl[chunk_mask]
+            ref : ObjectRef = measure_subtraction_task.remote(
+                chunk,
+                self.measure_subtraction,
+                self.data,
             )
             pending_refs.append(ref)
         return pending_refs
