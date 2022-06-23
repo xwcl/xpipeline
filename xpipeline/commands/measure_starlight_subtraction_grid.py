@@ -228,7 +228,7 @@ class MeasureStarlightSubtractionGrid(BaseRayGrid):
                 decimate_to_ram_mb[int(decimate_level)] = ram_requirement_bytes
         else:
             for idx in range(len(self.ram_mb_for_decimation_values)):
-                decimate_to_ram_mb[self.decimate_frames_by_values[idx]] = self.ram_mb_for_decimation_values[idx]
+                decimate_to_ram_mb[self.decimate_frames_by_values[idx]] = self.ram_mb_for_decimation_values[idx] * 1024 * 1024
         log.debug(f"RAM usage by decimation level: {decimate_to_ram_mb}")
 
         for combination in unique_params:
