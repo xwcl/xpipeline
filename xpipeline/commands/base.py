@@ -3,6 +3,9 @@ import logging
 import numpy
 import os
 import sys
+import time
+import ray
+import numpy as np
 import os.path
 import xconf
 from xconf.contrib import LocalRayConfig as _LocalRayConfig
@@ -12,6 +15,46 @@ from .. import core, utils, types
 log = logging.getLogger(__name__)
 
 DEFAULT_EXTENSIONS = ("fit", "fits")
+BYTES_PER_MB = 1024 * 1024
+
+def _measure_ram_for_step(func, *args, measure_gpu_ram=False, **kwargs):
+    from memory_profiler import memory_usage
+    gpu_prof = utils.CupyRamHook() if measure_gpu_ram else utils.DummyRamHook()
+    time_sec = time.perf_counter()
+    log.debug(f"{func=} inner timer start @ {time_sec}\n{ray.get_runtime_context().get()=}")
+    with gpu_prof:
+        mem_mb_series = memory_usage((func, args, kwargs))
+    gpu_ram_usage_mb = gpu_prof.used_bytes / BYTES_PER_MB
+    final_ram_mb = memory_usage(-1, max_usage=True)
+    ram_usage_mb = np.max(mem_mb_series) - final_ram_mb
+    end_time_sec = time.perf_counter()
+    time_sec = end_time_sec - time_sec
+    log.debug(f"{func=} inner timer end @ {end_time_sec}, duration {time_sec}. {ram_usage_mb=} {gpu_ram_usage_mb=}")
+    return ram_usage_mb, gpu_ram_usage_mb, time_sec
+measure_ram_for_step = ray.remote(_measure_ram_for_step)
+
+
+def measure_ram(func, options, *args, ram_pad_factor=1.1, measure_gpu_ram=False, **kwargs):
+    log.info(f"Submitting measure_ram_for_step for {func} with {options=}")
+    measure_ref = measure_ram_for_step.options(**options).remote(
+        func,
+        *args,
+        measure_gpu_ram=measure_gpu_ram,
+        **kwargs
+    )
+    outside_time_sec = time.time()
+    log.debug(f"{func} {outside_time_sec=} at start, ref is {measure_ref}")
+    ram_usage_mb, gpu_ram_usage_mb, inside_time_sec = ray.get(measure_ref)
+    end_time_sec = time.time()
+    log.debug(f"{func} end time {end_time_sec}")
+    outside_time_sec = time.time() - outside_time_sec
+    log.info(f"Measured {func} RAM use of {ram_usage_mb:1.3f} MB, GPU RAM use of {gpu_ram_usage_mb:1.3f}, runtime of {inside_time_sec:1.2f} sec inside and {outside_time_sec:1.2f} sec outside")
+    # surprise! "ValueError: Resource quantities >1 must be whole numbers." from ray
+    ram_requirement_mb = int(np.ceil(ram_pad_factor * ram_usage_mb))
+    gpu_ram_requirement_mb = int(np.ceil(ram_pad_factor * gpu_ram_usage_mb))
+    log.info(f"Setting {func} RAM requirements {ram_requirement_mb:1.3f} MB RAM and {gpu_ram_requirement_mb:1.3f} MB GPU RAM (pad factor: {ram_pad_factor:1.2f})")
+    return ram_requirement_mb, gpu_ram_requirement_mb
+
 
 def _determine_temporary_directory():
     if "OSG_WN_TMP" in os.environ:

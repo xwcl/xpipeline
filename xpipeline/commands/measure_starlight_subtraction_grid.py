@@ -2,10 +2,11 @@ import time
 import numpy as np
 import xconf
 import logging
+from typing import Optional
 from xconf.contrib import BaseRayGrid, FileConfig, join, PathConfig, DirectoryConfig
 import ray
 from ray._raylet import ObjectRef
-from ..commands.base import AnyRayConfig, LocalRayConfig
+from ..commands.base import AnyRayConfig, LocalRayConfig, measure_ram
 from ..pipelines.new import (
     MeasureStarlightSubtraction, StarlightSubtractionData, KModesConfig,
     KModesFractionConfig, KModesValuesConfig, StarlightSubtractionDataConfig,
@@ -30,6 +31,7 @@ def _measure_subtraction_task(
     data_config.companion.r_px = chunk[0]['r_px']
     data_config.companion.pa_deg = chunk[0]['pa_deg']
     data_config.companion.scale = chunk[0]['injected_scale']
+    data_config.decimate_frames_by = chunk[0]['decimate_frames_by']
     resel_px = measure_subtraction.resolution_element_px
     annulus_resel = chunk[0]['annulus_resel']
     if annulus_resel > 0:
@@ -94,12 +96,14 @@ class MeasureStarlightSubtractionGrid(BaseRayGrid):
     )
     measure_subtraction : MeasureStarlightSubtraction = xconf.field(help="")
     data : StarlightSubtractionDataConfig = xconf.field(help="Starlight subtraction data")
+    decimate_frames_by_values : list[float] = xconf.field(default_factory=lambda x: [1], help="Evaluate a grid at multiple decimation levels (taking every Nth frame)")
     sampling : SamplingConfig = xconf.field(help="")
     included_annuli_resel : list[float] = xconf.field(
         default_factory=lambda: [0, 2, 4],
         help="examine the effect of a more-restrictive annular mask of X lambda/D about the location of interest "
              "(X / 2 inwards and X / 2 outwards), 0 = no additional mask"
     )
+    ram_mb_per_task : Optional[float] = xconf.field(help="Amount of RAM in MB required to evaluate the most expensive grid point (for distributing tasks)")
 
     def compare_grid_to_checkpoint(self, checkpoint_tbl: np.ndarray, grid_tbl: np.ndarray) -> bool:
         parameters = ['index', 'r_px', 'pa_deg', 'x', 'y', 'injected_scale']
@@ -127,8 +131,9 @@ class MeasureStarlightSubtractionGrid(BaseRayGrid):
             ('pa_deg', float),
             ('x', float),
             ('y', float),
-            ('annulus_resel', float),
             ('injected_scale', float),
+            ('decimate_frames_by', int),
+            ('annulus_resel', float),
             ('k_modes_chosen', int),
             ('snr', float),
             ('signal', float),
@@ -149,24 +154,34 @@ class MeasureStarlightSubtractionGrid(BaseRayGrid):
             self.sampling.spacing_px,
             self.sampling.scales
         ))
-        n_comp_rows = len(annuli_resel) * len(k_modes_choices) * len(destination_exts) * len(filter_names) * len(probes)
+
+        n_comp_rows = (
+            len(self.decimate_frames_by_values)
+            * len(annuli_resel) 
+            * len(k_modes_choices) 
+            * len(destination_exts) 
+            * len(filter_names) 
+            * len(probes)
+        )
         log.debug(f"Evaluating {len(probes)} positions/contrast levels at {len(k_modes_choices)} k values: {k_modes_choices}")
         comp_grid = np.zeros(n_comp_rows, dtype=cols_dtype)
         flattened_idx = 0
-        for comp in probes:
-            for k_modes in k_modes_choices:
-                for annulus_resel in annuli_resel:
-                    for dest_ext in destination_exts:
-                        for filter_name in filter_names:
-                            comp_grid[flattened_idx]['index'] = flattened_idx
-                            comp_grid[flattened_idx]['r_px'] = comp.r_px
-                            comp_grid[flattened_idx]['pa_deg'] = comp.pa_deg
-                            comp_grid[flattened_idx]['annulus_resel'] = annulus_resel
-                            comp_grid[flattened_idx]['injected_scale'] = comp.scale
-                            comp_grid[flattened_idx]['k_modes_requested'] = k_modes
-                            comp_grid[flattened_idx]['ext'] = dest_ext
-                            comp_grid[flattened_idx]['filter_name'] = filter_name
-                            flattened_idx += 1
+        for decimate_value in self.decimate_frames_by_values:
+            for comp in probes:
+                for k_modes in k_modes_choices:
+                    for annulus_resel in annuli_resel:
+                        for dest_ext in destination_exts:
+                            for filter_name in filter_names:
+                                comp_grid[flattened_idx]['index'] = flattened_idx
+                                comp_grid[flattened_idx]['r_px'] = comp.r_px
+                                comp_grid[flattened_idx]['pa_deg'] = comp.pa_deg
+                                comp_grid[flattened_idx]['injected_scale'] = comp.scale
+                                comp_grid[flattened_idx]['decimate_frames_by'] = decimate_value
+                                comp_grid[flattened_idx]['annulus_resel'] = annulus_resel
+                                comp_grid[flattened_idx]['k_modes_requested'] = k_modes
+                                comp_grid[flattened_idx]['ext'] = dest_ext
+                                comp_grid[flattened_idx]['filter_name'] = filter_name
+                                flattened_idx += 1
         return comp_grid
 
 
@@ -179,8 +194,31 @@ class MeasureStarlightSubtractionGrid(BaseRayGrid):
 
         measure_subtraction_task = ray.remote(_measure_subtraction_task)
         pending_refs = []
-        externally_varying_params = ['r_px', 'pa_deg', 'annulus_resel', 'injected_scale']
+        externally_varying_params = ['r_px', 'pa_deg', 'annulus_resel', 'injected_scale', 'decimate_frames_by']
         unique_params = np.unique(pending_tbl[externally_varying_params])
+
+        if self.ram_mb_per_task is None:
+            expensive_grid_points = pending_tbl[
+                (pending_tbl['injected_scale'] != 0)
+                & (pending_tbl['decimate_frames_by'] == np.min(pending_tbl['decimate_frames_by']))
+            ]
+            no_annulus_mask = expensive_grid_points['annulus_resel'] == 0
+            if np.count_nonzero(no_annulus_mask):
+                expensive_grid_points = expensive_grid_points[no_annulus_mask]
+            else:
+                expensive_grid_points = expensive_grid_points[expensive_grid_points['annulus_resel'] == np.max(expensive_grid_points['annulus_resel'])]
+            assert len(expensive_grid_points) > 0
+            expensive_grid_point = expensive_grid_points[:1]
+            ram_requirement_mb, gpu_ram_requirement_mb = measure_ram(
+                _measure_subtraction_task,
+                {},
+                expensive_grid_point,
+                self.measure_subtraction,
+                self.data
+            )
+            ram_requirement_bytes = ram_requirement_mb * 1024 * 1024
+        else:
+            ram_requirement_bytes = self.ram_mb_per_task * 1024 * 1024
 
         for combination in unique_params:
             chunk_mask = np.ones_like(pending_tbl, dtype=bool)
@@ -188,7 +226,9 @@ class MeasureStarlightSubtractionGrid(BaseRayGrid):
                 chunk_mask &= pending_tbl[field_name] == combination[field_name]
             assert np.count_nonzero(chunk_mask) > 0
             chunk = pending_tbl[chunk_mask]
-            ref : ObjectRef = measure_subtraction_task.remote(
+            ref : ObjectRef = measure_subtraction_task.options(
+                memory=ram_requirement_bytes
+            ).remote(
                 chunk,
                 self.measure_subtraction,
                 self.data,
