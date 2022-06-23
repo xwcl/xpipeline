@@ -567,7 +567,7 @@ class StarlightSubtractionDataConfig:
     initial_decomposition : Optional[PrecomputedDecompositionConfig] = xconf.field(default=None, help="Initial decomposition of the data to reuse")
     decimate_frames_by : int = xconf.field(default=1, help="Keep every Nth frame")
     decimate_frames_offset : int = xconf.field(default=0, help="Slice to begin decimation at this frame")
-    companion : CompanionConfig = xconf.field(help="Companion amplitude and location to inject (scale 0 for no injection) and probe")
+    companion : CompanionConfig = xconf.field(default=CompanionConfig(r_px=30, pa_deg=0, scale=0), help="Companion amplitude and location to inject (scale 0 for no injection) and probe")
 
     def load(self) -> StarlightSubtractionData:
         angles = self.angles.load()[self.decimate_frames_offset::self.decimate_frames_by]
