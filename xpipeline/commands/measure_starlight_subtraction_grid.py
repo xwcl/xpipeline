@@ -103,7 +103,6 @@ class MeasureStarlightSubtractionGrid(BaseRayGrid):
         help="examine the effect of a more-restrictive annular mask of X lambda/D about the location of interest "
              "(X / 2 inwards and X / 2 outwards), 0 = no additional mask"
     )
-    ram_mb_per_task : Optional[float] = xconf.field(help="Amount of RAM in MB required to evaluate the most expensive grid point (for distributing tasks)")
 
     def compare_grid_to_checkpoint(self, checkpoint_tbl: np.ndarray, grid_tbl: np.ndarray) -> bool:
         parameters = ['index', 'r_px', 'pa_deg', 'x', 'y', 'injected_scale']
@@ -197,7 +196,9 @@ class MeasureStarlightSubtractionGrid(BaseRayGrid):
         externally_varying_params = ['r_px', 'pa_deg', 'annulus_resel', 'injected_scale', 'decimate_frames_by']
         unique_params = np.unique(pending_tbl[externally_varying_params])
 
-        if self.ram_mb_per_task is None:
+
+        decimate_to_ram_mb = {}
+        for decimate_level in np.unique(pending_tbl['decimate_frames_by']):
             expensive_grid_points = pending_tbl[
                 (pending_tbl['injected_scale'] != 0)
                 & (pending_tbl['decimate_frames_by'] == np.min(pending_tbl['decimate_frames_by']))
@@ -209,6 +210,8 @@ class MeasureStarlightSubtractionGrid(BaseRayGrid):
                 expensive_grid_points = expensive_grid_points[expensive_grid_points['annulus_resel'] == np.max(expensive_grid_points['annulus_resel'])]
             assert len(expensive_grid_points) > 0
             expensive_grid_point = expensive_grid_points[:1]
+
+            log.debug(f"Measure RAM requirement for {decimate_level=}...")
             ram_requirement_mb, gpu_ram_requirement_mb = measure_ram(
                 _measure_subtraction_task,
                 {},
@@ -217,8 +220,9 @@ class MeasureStarlightSubtractionGrid(BaseRayGrid):
                 self.data
             )
             ram_requirement_bytes = ram_requirement_mb * 1024 * 1024
-        else:
-            ram_requirement_bytes = self.ram_mb_per_task * 1024 * 1024
+            decimate_to_ram_mb[int(decimate_level)] = ram_requirement_bytes
+
+        log.debug(f"RAM usage by decimation level: {decimate_to_ram_mb}")
 
         for combination in unique_params:
             chunk_mask = np.ones_like(pending_tbl, dtype=bool)
@@ -226,6 +230,8 @@ class MeasureStarlightSubtractionGrid(BaseRayGrid):
                 chunk_mask &= pending_tbl[field_name] == combination[field_name]
             assert np.count_nonzero(chunk_mask) > 0
             chunk = pending_tbl[chunk_mask]
+            decimate_level = int(chunk[0]['decimate_frames_by'])
+            ram_requirement_bytes = decimate_to_ram_mb[decimate_level]
             ref : ObjectRef = measure_subtraction_task.options(
                 memory=ram_requirement_bytes
             ).remote(
