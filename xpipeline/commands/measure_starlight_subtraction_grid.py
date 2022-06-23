@@ -97,6 +97,7 @@ class MeasureStarlightSubtractionGrid(BaseRayGrid):
     measure_subtraction : MeasureStarlightSubtraction = xconf.field(help="")
     data : StarlightSubtractionDataConfig = xconf.field(help="Starlight subtraction data")
     decimate_frames_by_values : list[float] = xconf.field(default_factory=lambda x: [1], help="Evaluate a grid at multiple decimation levels (taking every Nth frame)")
+    ram_mb_for_decimation_values : Optional[list[float]] = xconf.field(default=None, help="Amount of RAM needed at each decimation level, omit to measure")
     sampling : SamplingConfig = xconf.field(help="")
     included_annuli_resel : list[float] = xconf.field(
         default_factory=lambda: [0, 2, 4],
@@ -106,9 +107,12 @@ class MeasureStarlightSubtractionGrid(BaseRayGrid):
 
     def compare_grid_to_checkpoint(self, checkpoint_tbl: np.ndarray, grid_tbl: np.ndarray) -> bool:
         parameters = ['index', 'r_px', 'pa_deg', 'x', 'y', 'injected_scale']
-        for param in parameters:
-            if not np.allclose(checkpoint_tbl[param], grid_tbl[param]):
-                return False
+        try:
+            for param in parameters:
+                if not np.allclose(checkpoint_tbl[param], grid_tbl[param]):
+                    return False
+        except Exception:
+            return False
         return True
 
     def generate_grid(self) -> np.ndarray:
@@ -198,30 +202,33 @@ class MeasureStarlightSubtractionGrid(BaseRayGrid):
 
 
         decimate_to_ram_mb = {}
-        for decimate_level in np.unique(pending_tbl['decimate_frames_by']):
-            expensive_grid_points = pending_tbl[
-                (pending_tbl['injected_scale'] != 0)
-                & (pending_tbl['decimate_frames_by'] == np.min(pending_tbl['decimate_frames_by']))
-            ]
-            no_annulus_mask = expensive_grid_points['annulus_resel'] == 0
-            if np.count_nonzero(no_annulus_mask):
-                expensive_grid_points = expensive_grid_points[no_annulus_mask]
-            else:
-                expensive_grid_points = expensive_grid_points[expensive_grid_points['annulus_resel'] == np.max(expensive_grid_points['annulus_resel'])]
-            assert len(expensive_grid_points) > 0
-            expensive_grid_point = expensive_grid_points[:1]
+        if self.ram_mb_for_decimation_values is None:
+            for decimate_level in np.unique(pending_tbl['decimate_frames_by']):
+                expensive_grid_points = pending_tbl[
+                    (pending_tbl['injected_scale'] != 0)
+                    & (pending_tbl['decimate_frames_by'] == decimate_level)
+                ]
+                no_annulus_mask = expensive_grid_points['annulus_resel'] == 0
+                if np.count_nonzero(no_annulus_mask):
+                    expensive_grid_points = expensive_grid_points[no_annulus_mask]
+                else:
+                    expensive_grid_points = expensive_grid_points[expensive_grid_points['annulus_resel'] == np.max(expensive_grid_points['annulus_resel'])]
+                assert len(expensive_grid_points) > 0
+                expensive_grid_point = expensive_grid_points[:1]
 
-            log.debug(f"Measure RAM requirement for {decimate_level=}...")
-            ram_requirement_mb, gpu_ram_requirement_mb = measure_ram(
-                _measure_subtraction_task,
-                {},
-                expensive_grid_point,
-                self.measure_subtraction,
-                self.data
-            )
-            ram_requirement_bytes = ram_requirement_mb * 1024 * 1024
-            decimate_to_ram_mb[int(decimate_level)] = ram_requirement_bytes
-
+                log.debug(f"Measure RAM requirement for {decimate_level=}...")
+                ram_requirement_mb, gpu_ram_requirement_mb = measure_ram(
+                    _measure_subtraction_task,
+                    {},
+                    expensive_grid_point,
+                    self.measure_subtraction,
+                    self.data
+                )
+                ram_requirement_bytes = ram_requirement_mb * 1024 * 1024
+                decimate_to_ram_mb[int(decimate_level)] = ram_requirement_bytes
+        else:
+            for idx in range(len(self.ram_mb_for_decimation_values)):
+                decimate_to_ram_mb[self.decimate_frames_by_values[idx]] = self.ram_mb_for_decimation_values[idx]
         log.debug(f"RAM usage by decimation level: {decimate_to_ram_mb}")
 
         for combination in unique_params:
