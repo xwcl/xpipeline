@@ -29,6 +29,7 @@ class SummarizeGrid(InputCommand):
     wavelength_um : float = xconf.field(help="Wavelength in microns")
     primary_diameter_m : float = xconf.field(default=magellan.PRIMARY_MIRROR_DIAMETER.to(u.m).value)
     coverage_mask : FitsConfig = xconf.field(help="Mask image with 1s where pixels have observation coverage and 0 elsewhere")
+    min_snr_for_injection: float = xconf.field(default=10, help="Minimum SNR to recover in order to trust the 5sigma contrast value")
 
     def main(self):
         import pandas as pd
@@ -53,6 +54,7 @@ class SummarizeGrid(InputCommand):
             snr_colname=self.columns.snr,
             injected_scale_colname=self.columns.injected_scale,
             hyperparameter_colnames=self.columns.hyperparameters,
+            min_snr_for_injection=self.min_snr_for_injection,
         )
         limits_df['delta_mag_contrast_limit_5sigma'] = characterization.contrast_to_deltamag(limits_df['contrast_limit_5sigma'].to_numpy())
         for df in [limits_df, detections_df]:
