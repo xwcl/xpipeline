@@ -201,7 +201,7 @@ class MeasureStarlightSubtractionGrid(BaseRayGrid):
         unique_params = np.unique(pending_tbl[externally_varying_params])
 
 
-        decimate_to_ram_mb = {}
+        decimate_level_to_ram_bytes = {}
         if self.ram_mb_for_decimation_values is None:
             for decimate_level in np.unique(pending_tbl['decimate_frames_by']):
                 expensive_grid_points = pending_tbl[
@@ -225,11 +225,11 @@ class MeasureStarlightSubtractionGrid(BaseRayGrid):
                     self.data
                 )
                 ram_requirement_bytes = ram_requirement_mb * 1024 * 1024
-                decimate_to_ram_mb[int(decimate_level)] = ram_requirement_bytes
+                decimate_level_to_ram_bytes[int(decimate_level)] = ram_requirement_bytes
         else:
             for idx in range(len(self.ram_mb_for_decimation_values)):
-                decimate_to_ram_mb[self.decimate_frames_by_values[idx]] = self.ram_mb_for_decimation_values[idx] * 1024 * 1024
-        log.debug(f"RAM usage by decimation level: {decimate_to_ram_mb}")
+                decimate_level_to_ram_bytes[self.decimate_frames_by_values[idx]] = self.ram_mb_for_decimation_values[idx] * 1024 * 1024
+        log.debug(f"RAM usage by decimation level: {decimate_level_to_ram_bytes}")
 
         for combination in unique_params:
             chunk_mask = np.ones_like(pending_tbl, dtype=bool)
@@ -238,7 +238,7 @@ class MeasureStarlightSubtractionGrid(BaseRayGrid):
             assert np.count_nonzero(chunk_mask) > 0
             chunk = pending_tbl[chunk_mask]
             decimate_level = int(chunk[0]['decimate_frames_by'])
-            ram_requirement_bytes = decimate_to_ram_mb[decimate_level]
+            ram_requirement_bytes = decimate_level_to_ram_bytes[decimate_level]
             ref : ObjectRef = measure_subtraction_task.options(
                 memory=ram_requirement_bytes
             ).remote(
