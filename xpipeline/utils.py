@@ -192,3 +192,17 @@ gmagma.set_bad('gray')
 from pkg_resources import packaging
 def version_greater_or_equal(version_a, version_b):
     return packaging.version.parse(version_a) >= packaging.version.parse(version_b)
+
+
+def convert_obj_cols_to_str(arr):
+    from numpy.lib.recfunctions import drop_fields, append_fields
+    names = []
+    cols = []
+    for name, dtype in arr.dtype.fields.items():
+        if dtype[0] == np.dtype('O'):
+            names.append(name)
+            cols.append(arr[name].astype(str))
+    if len(names):
+        arr = drop_fields(arr, names)
+        arr = append_fields(arr, names, cols)
+    return arr

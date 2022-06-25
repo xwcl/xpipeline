@@ -20,18 +20,6 @@ class GridColumnsConfig:
     injected_scale : str = xconf.field(default="injected_scale", help="(companion)/(host) contrast of injection")
     hyperparameters : list[str] = xconf.field(default_factory=lambda: ['k_modes'], help="List of columns holding hyperparameters varied in grid")
 
-def convert_obj_cols_to_str(arr):
-    from numpy.lib.recfunctions import drop_fields, append_fields
-    names = []
-    cols = []
-    for name, dtype in arr.dtype.fields.items():
-        if dtype[0] == np.dtype('O'):
-            names.append(name)
-            cols.append(arr[name].astype(str))
-    arr = drop_fields(arr, names)
-    arr = append_fields(arr, names, cols)
-    return arr
-
 
 @xconf.config
 class SummarizeGrid(InputCommand):
@@ -84,7 +72,7 @@ class SummarizeGrid(InputCommand):
 
         hdus = [iofits.DaskHDU(None, kind="primary")]
         hdus.append(iofits.DaskHDU(contrast_lim_map, name="limits_5sigma_contrast_map"))
-        hdus.append(iofits.DaskHDU(convert_obj_cols_to_str(limits_df.to_records(index=False)), kind="bintable", name="limits"))
+        hdus.append(iofits.DaskHDU(utils.convert_obj_cols_to_str(limits_df.to_records(index=False)), kind="bintable", name="limits"))
         hdus.append(iofits.DaskHDU(detection_map, name="detection_snr_map"))
-        hdus.append(iofits.DaskHDU(convert_obj_cols_to_str(detections_df.to_records(index=False)), kind="bintable", name="detection"))
+        hdus.append(iofits.DaskHDU(utils.convert_obj_cols_to_str(detections_df.to_records(index=False)), kind="bintable", name="detection"))
         iofits.write_fits(iofits.DaskHDUList(hdus), output_filepath)
