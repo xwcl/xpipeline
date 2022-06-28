@@ -216,6 +216,10 @@ def test_r_pa_conversions():
     assert np.isclose(x, 10 + xc)
     assert np.isclose(y, yc)
 
+    x, y = characterization.r_pa_to_x_y(10, 0, derotation_angle_deg=-90)
+    assert np.isclose(x, -10)
+    assert np.isclose(y, 0)
+
 def test_calc_snr_image_nan():
     npix = 128
     peak = (32, 32)

@@ -267,10 +267,21 @@ def simple_aperture_locations(r_px, pa_deg, resolution_element_px, exclude_neare
         locs = locs[1:]
     return locs
 
-def r_pa_to_x_y(r_px, pa_deg, xcenter, ycenter):
+def r_pa_to_x_y(r, pa_deg, xcenter=0, ycenter=0, derotation_angle_deg=0):
+    '''Convert (radius, PA (in deg)) to (x, y) cartesian coordinates.
+    Derotation angle is subtracted from PA such that when these (x, y) coordinates
+    are rotated CCW (when +Y is up and +X is right) by `derotation_angle_deg`
+    this point lands at the (x, y) you'd get for the same arguments and a
+    `derotation_angle_deg` == 0.0.
+
+    In other words, if you have derotation angles that place north-up-east-left
+    and images in the un-derotated / pupil-stabilized frame, this argument
+    produces the pixel coordinates in the un-derotated frame given the appropriate
+    derotation angle for that frame.
+    '''
     return (
-       r_px * np.cos(np.deg2rad(90 + pa_deg)) + xcenter,
-       r_px * np.sin(np.deg2rad(90 + pa_deg)) + ycenter
+       r * np.cos(np.deg2rad(90 + pa_deg - derotation_angle_deg)) + xcenter,
+       r * np.sin(np.deg2rad(90 + pa_deg - derotation_angle_deg)) + ycenter
     )
 
 def x_y_to_r_pa(x, y, xcenter, ycenter):
