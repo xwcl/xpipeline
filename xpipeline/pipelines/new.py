@@ -151,7 +151,11 @@ class StarlightSubtractionData:
         cols = 0
         rows = 0
         for pi in self.inputs:
-            cols += pi.sci_arr.shape[0]
+            if cols == 0:
+                cols = pi.sci_arr.shape[0]
+            else:
+                if pi.sci_arr.shape[0] != cols:
+                    raise ValueError("Inconsistent number of observations per input")
             rows += np.count_nonzero(pi.estimation_mask)
         return min(rows, cols)
 
