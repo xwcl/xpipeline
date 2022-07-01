@@ -32,7 +32,7 @@ def _measure_subtraction_task(
     data_config.companion.pa_deg = chunk[0]['pa_deg']
     data_config.companion.scale = chunk[0]['injected_scale']
     data_config.decimate_frames_by = chunk[0]['decimate_frames_by']
-    resel_px = measure_subtraction.resolution_element_px
+    resel_px = measure_subtraction.subtraction.resolution_element_px
     annulus_resel = chunk[0]['annulus_resel']
     if annulus_resel > 0:
         for idx in range(len(data_config.inputs)):

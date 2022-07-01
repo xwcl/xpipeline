@@ -569,10 +569,10 @@ def compute_temporal_basis(ref_vecs, params: Union[TrapParams,KlipTParams]):
     temporal_basis = mtx_v  # shape = (nframes, ncomponents)
     return learning.PrecomputedDecomposition(mtx_u0=mtx_u, diag_s0=diag_s, mtx_v0=temporal_basis)
 
-def compute_klipt_basis(image_vecs_medsub : np.ndarray, probe_model_vecs : np.ndarray, klipt_params: KlipTParams) -> learning.PrecomputedDecomposition:
+def compute_klipt_basis(image_vecs_medsub : np.ndarray, probe_model_vecs : np.ndarray, klipt_params: KlipTParams, excluded_ref_vecs: np.ndarray) -> learning.PrecomputedDecomposition:
     trimmed_model_vecs = trim_model_vecs(probe_model_vecs, klipt_params.model_trim_threshold)
     ref_vecs_mask, pix_used = make_pix_without_planet_signal_mask(trimmed_model_vecs, klipt_params.model_pix_threshold)
-    ref_vecs = image_vecs_medsub[ref_vecs_mask]
+    ref_vecs = image_vecs_medsub[ref_vecs_mask & ~excluded_ref_vecs]
     log.debug(f"Using {pix_used} pixel time series for KLIP^T basis with {klipt_params.k_modes} modes")
     timer = time.perf_counter()
     temporal_basis = compute_temporal_basis(ref_vecs, klipt_params)

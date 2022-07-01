@@ -128,3 +128,72 @@ def test_measure_starlight_subtraction_pipeline(naco_betapic_data, strategy_cls,
         exclude_nearest=1,
     )
     assert recalc_snr > snr_threshold
+
+def test_klipt_annular_exclusion(naco_betapic_data):
+    threshold = 2200  # fake, just to test masking
+    cube = naco_betapic_data["cube"]
+    good_pix_mask = np.average(cube, axis=0) < threshold
+    psf = naco_betapic_data["psf"] / np.max(naco_betapic_data["psf"])
+    scale_factors = np.max(cube, axis=(1, 2))
+    angles = naco_betapic_data["angles"]
+    input_config = PipelineInputConfig(
+        sci_arr=PreloadedArray(cube),
+        estimation_mask=PreloadedArray(good_pix_mask),
+        combination_mask=PreloadedArray(good_pix_mask),
+        radial_mask=RadialMaskConfig(min_r_px=0, max_r_px=40),
+        model_inputs=ModelSignalInputConfig(
+            model=PreloadedArray(psf),
+            scale_factors=PreloadedArray(scale_factors),
+        )
+    )
+    r_px, pa_deg = 18.4, -42.8
+    data_config = StarlightSubtractionDataConfig(
+        inputs=[input_config],
+        angles=PreloadedArray(angles),
+        companion=CompanionConfig(
+            r_px=r_px,
+            pa_deg=pa_deg,
+            scale=0.0,
+        ),
+    )
+    aperture_diameter_px = 4
+    k_modes_values = [5]
+
+    subtraction = StarlightSubtract(
+        strategy=KlipTranspose(
+            # excluded_annulus_width_px=2 * aperture_diameter_px
+        ),
+        k_modes=KModesValuesConfig(values=k_modes_values),
+        resolution_element_px=aperture_diameter_px,
+    )
+    pl = MeasureStarlightSubtractionPipeline(
+        data=data_config,
+        subtraction=subtraction,
+    )
+    result: StarlightSubtractionMeasurements = pl.execute()
+    snr = result.by_modes[k_modes_values[0]].by_ext["finim"]["tophat"].snr
+    finim = result.by_modes[k_modes_values[0]].by_ext["finim"]["none"].post_filtering_result.image
+    recalc_snr = calculate_snr(
+        finim,
+        r_px,
+        pa_deg,
+        aperture_diameter_px,
+        exclude_nearest=1,
+    )
+    print(f"KLIP^T {snr=} {recalc_snr=}")
+    assert snr > 27, "True detection SNR too low"
+    for i in range(5):
+        subtraction.strategy.excluded_annulus_width_px = 8
+        data_config.companion.pa_deg += 30
+        result: StarlightSubtractionMeasurements = pl.execute()
+        snr = result.by_modes[k_modes_values[0]].by_ext["finim"]["tophat"].snr
+        finim = result.by_modes[k_modes_values[0]].by_ext["finim"]["none"].post_filtering_result.image
+        recalc_snr = calculate_snr(
+            finim,
+            data_config.companion.r_px,
+            data_config.companion.pa_deg,
+            aperture_diameter_px,
+            exclude_nearest=1,
+        )
+        print(f"KLIP^T non-detection: {snr=} {recalc_snr=}")
+        assert np.abs(snr) < 1, "Spurious detection SNR too high"

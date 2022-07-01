@@ -147,6 +147,14 @@ class StarlightSubtractionData:
     initial_decomposition : learning.PrecomputedDecomposition
     companions : list[CompanionSpec]
 
+    def max_rank(self):
+        cols = 0
+        rows = 0
+        for pi in self.inputs:
+            cols += pi.sci_arr.shape[0]
+            rows += np.count_nonzero(pi.estimation_mask)
+        return min(rows, cols)
+
 @dataclass
 class PipelineOutput:
     sci_arr: np.ndarray
@@ -261,8 +269,6 @@ class ExcludeRangeConfig:
     nearest_n_frames : int = xconf.field(default=0, help="Number of additional temporally-adjacent frames on either side of the target frame to exclude from the sequence when computing the KLIP eigenimages")
 
 @xconf.config
-
-@xconf.config
 class Klip:
     klip : bool = xconf.field(default=True, help="Include this option to explicitly select the Klip strategy")
     return_basis : bool = xconf.field(default=False, help="Bail out early and return the basis set")
@@ -299,11 +305,12 @@ class Klip:
 
     def prepare(
         self,
-        image_vecs: np.ndarray,
+        data : StarlightSubtractionData,
+        # image_vecs: np.ndarray,
         k_modes : int,
         *,
         angles : Optional[np.ndarray] = None,
-        probe_model_vecs: Optional[np.ndarray] = None,
+        # probe_model_vecs: Optional[np.ndarray] = None,
         decomposition: Optional[learning.PrecomputedDecomposition] = None,
     ):
         assert decomposition is None
@@ -314,17 +321,19 @@ class Klip:
             initial_decomposition_only=True,
             reuse=self.reuse,
         )
+        image_vecs, probe_model_vecs = unwrap_inputs_to_matrices(data.inputs)
         _, _, decomposition, _ = starlight_subtraction.klip_mtx(image_vecs, params=params)
         return decomposition
 
 
     def execute(
         self, 
-        image_vecs: np.ndarray,
+        data : StarlightSubtractionData,
+        # image_vecs: np.ndarray,
         k_modes : int,
         *,
         angles : Optional[np.ndarray] = None,
-        probe_model_vecs: Optional[np.ndarray] = None,
+        # probe_model_vecs: Optional[np.ndarray] = None,
         decomposition: Optional[learning.PrecomputedDecomposition] = None,
     ):
         params = starlight_subtraction.KlipParams(
@@ -334,6 +343,7 @@ class Klip:
             initial_decomposition=decomposition,
             reuse=self.reuse,
         )
+        image_vecs, probe_model_vecs = unwrap_inputs_to_matrices(data.inputs)
         return starlight_subtraction.klip_mtx(image_vecs, params=params, probe_model_vecs=probe_model_vecs)
 
 @xconf.config
@@ -361,26 +371,30 @@ class KlipSubspace:
 
     def prepare(
         self, 
-        image_vecs: np.ndarray,
+        data : StarlightSubtractionData,
+        # image_vecs: np.ndarray,
         k_modes : int,
         *,
         angles : Optional[np.ndarray] = None,
-        probe_model_vecs: Optional[np.ndarray] = None,
+        # probe_model_vecs: Optional[np.ndarray] = None,
         decomposition: Optional[learning.PrecomputedDecomposition] = None,
     ) -> learning.PrecomputedDecomposition:
+        image_vecs, probe_model_vecs = unwrap_inputs_to_matrices(data.inputs)
         image_vecs_medsub = image_vecs - np.median(image_vecs, axis=0)
         mtx_u, diag_s, mtx_v = learning.generic_svd(image_vecs_medsub, k_modes)
         return learning.PrecomputedDecomposition(mtx_u, diag_s, mtx_v)
 
     def execute(
         self,
-        image_vecs: np.ndarray,
+        data : StarlightSubtractionData,
+        # image_vecs: np.ndarray,
         k_modes : int,
         *,
         angles : Optional[np.ndarray] = None,
-        probe_model_vecs: Optional[np.ndarray] = None,
+        # probe_model_vecs: Optional[np.ndarray] = None,
         decomposition: Optional[learning.PrecomputedDecomposition] = None,
     ):
+        image_vecs, probe_model_vecs = unwrap_inputs_to_matrices(data.inputs)
         image_vecs_medsub = image_vecs - np.median(image_vecs, axis=0)
         mtx_u = decomposition.mtx_u0[:,:k_modes]
         diag_s = decomposition.diag_s0[:k_modes]
@@ -401,6 +415,7 @@ class KlipTranspose:
     min_dim_for_iterative : int = xconf.field(default=1000, help="Dense solver is as fast or faster below some matrix dimension so fall back to it")
     # make it possible to pass in basis
     return_basis : bool = xconf.field(default=False, help="Bail out early and return the temporal basis set")
+    excluded_annulus_width_px : Optional[float] = xconf.field(default=None, help="Width of a mask annulus excluding pixels from the reference timeseries")
 
     def construct_klipt_params_dict(self):
         return {
@@ -415,29 +430,43 @@ class KlipTranspose:
 
     def prepare(
         self, 
-        image_vecs: np.ndarray,
+        data : StarlightSubtractionData,
+        # image_vecs: np.ndarray,
         k_modes : int,
         *,
         angles : Optional[np.ndarray] = None,
-        probe_model_vecs: Optional[np.ndarray] = None,
+        # probe_model_vecs: Optional[np.ndarray] = None,
         decomposition: Optional[learning.PrecomputedDecomposition] = None,
     ) -> learning.PrecomputedDecomposition:
         klipt_params = starlight_subtraction.KlipTParams(
             k_modes=k_modes,
             **self.construct_klipt_params_dict()
         )
+        image_vecs, probe_model_vecs = unwrap_inputs_to_matrices(data.inputs)
         image_vecs_medsub = image_vecs - np.median(image_vecs, axis=0)
-        return starlight_subtraction.compute_klipt_basis(image_vecs_medsub, probe_model_vecs, klipt_params)
+        mask_vec_chunks = []
+        for pi in data.inputs:
+            mask = np.zeros(pi.estimation_mask.shape, dtype=bool)
+            if self.excluded_annulus_width_px is not None:
+                rho, _ = improc.polar_coords(improc.arr_center(pi.estimation_mask), pi.estimation_mask.shape)
+                for companion in data.companions:
+                    mask |= np.abs(rho - companion.r_px) < self.excluded_annulus_width_px
+            mask_vec_chunks.append(improc.unwrap_image(mask, pi.estimation_mask))
+        excluded_ref_vecs = np.concatenate(mask_vec_chunks)
+        assert excluded_ref_vecs.shape[0] == image_vecs.shape[0]
+        return starlight_subtraction.compute_klipt_basis(image_vecs_medsub, probe_model_vecs, klipt_params, excluded_ref_vecs)
 
     def execute(
         self,
-        image_vecs: np.ndarray,
+        data : StarlightSubtractionData,
+        # image_vecs: np.ndarray,
         k_modes : int,
         *,
         angles : Optional[np.ndarray] = None,
-        probe_model_vecs: Optional[np.ndarray] = None,
+        # probe_model_vecs: Optional[np.ndarray] = None,
         decomposition: Optional[learning.PrecomputedDecomposition] = None,
     ):
+        image_vecs, probe_model_vecs = unwrap_inputs_to_matrices(data.inputs)
         med_vec = np.median(image_vecs, axis=0)
         image_vecs_medsub = image_vecs - med_vec
         params_kt = starlight_subtraction.KlipTParams(
@@ -631,13 +660,135 @@ class KModesFractionConfig:
 KModesConfig = Union[KModesValuesConfig,KModesFractionConfig]
 
 @xconf.config
-class StarlightSubtract:
-    strategy : Union[KlipTranspose,Klip,KlipSubspace] = xconf.field(help="Strategy with which to estimate and subtract starlight")
+class PreStackFilter:
+    def execute(
+        self,
+        pipeline_outputs: list[PipelineOutput],
+        measurement_location: CompanionSpec,
+        resolution_element_px : float,
+        derotation_angles: Optional[np.ndarray]=None,
+    ) -> list[PipelineOutput]:
+        out = []
+        for po in pipeline_outputs:
+            out.append(PipelineOutput(po.sci_arr, po.destination_ext, model_arr=po.model_arr))
+        return out
+
+
+@xconf.config
+class NoOpPreStackFilter(PreStackFilter):
+    no_op : bool = xconf.field(help="Do not pre-filter before stacking")
+
+@xconf.config
+class TophatPreStackFilter:
+    tophat : bool = xconf.field(default=True, help="")
+    def execute(
+        self,
+        pipeline_outputs: list[PipelineOutput],
+        measurement_location: CompanionSpec,
+        resolution_element_px : float,
+        derotation_angles: Optional[np.ndarray]=None,
+    ) -> list[PipelineOutput]:
+        out = []
+        for po in pipeline_outputs:
+            sci_arr_filtered = np.zeros_like(po.sci_arr)
+            for i in range(po.sci_arr.shape[0]):
+                radius_px = resolution_element_px
+                kernel = Tophat2DKernel(radius=radius_px)
+                sci_arr_filtered[i] = convolve_fft(
+                    po.sci_arr[i],
+                    kernel,
+                    nan_treatment='fill',
+                    fill_value=0.0,
+                    preserve_nan=True,
+                )
+            out.append(PipelineOutput(sci_arr_filtered, po.destination_ext, model_arr=po.model_arr))
+        return out
+
+@xconf.config
+class MatchedPreStackFilter(PreStackFilter):
+    kernel_diameter_resel : float = xconf.field(default=1.5, help="Diameter in resolution elements beyond which matched filter kernel is set to zero to avoid spurious detections")
+    matched : bool = xconf.field(default=True, help="")
+    def execute(
+        self,
+        pipeline_outputs: list[PipelineOutput],
+        measurement_location: CompanionSpec,
+        resolution_element_px : float,
+        derotation_angles: Optional[np.ndarray]=None,
+    ) -> list[PipelineOutput]:
+        pipeline_outputs[0].model_arr
+        out = []
+        for po in pipeline_outputs:
+            rho, _ = improc.polar_coords(improc.arr_center(po.sci_arr.shape[1:]), po.sci_arr.shape[1:])
+            sci_arr_filtered = np.zeros_like(po.sci_arr)
+            for i in range(po.sci_arr.shape[0]):
+                angle = derotation_angles[i] if derotation_angles is not None else 0
+                # shift kernel to center
+                dx, dy = characterization.r_pa_to_x_y(measurement_location.r_px, measurement_location.pa_deg, derotation_angle_deg=angle)
+                kernel = improc.shift2(po.model_arr[i], -dx, -dy)
+
+                # trim kernel to only central region
+                radius_px = (self.kernel_diameter_resel * resolution_element_px) / 2
+                kernel[rho > radius_px] = 0
+
+                # normalize kernel and flip to form matched filter
+                kernel /= np.nansum(kernel**2)
+                kernel = np.flip(kernel, axis=(0, 1))
+                sci_arr_filtered[i] = convolve_fft(
+                    po.sci_arr[i],
+                    kernel,
+                    normalize_kernel=False,
+                    nan_treatment='fill',
+                    fill_value=0.0,
+                    preserve_nan=True,
+                )
+            out.append(PipelineOutput(sci_arr_filtered, po.destination_ext, model_arr=po.model_arr))
+        return out
+
+@xconf.config
+class ImageStack:
     combine : constants.CombineOperation = xconf.field(default=constants.CombineOperation.MEDIAN, help="How to combine image for stacking")
     minimum_coverage_frac: float = xconf.field(default=0.2, help="Number of overlapping source frames covering a derotated frame pixel for it to be kept in the final image as a fraction of the total number of frames")
     return_residuals : bool = xconf.field(default=True, help="Whether residual images after starlight subtraction should be returned")
+
+    def execute(self, pipeline_outputs: list[PipelineOutput], angles: Optional[np.ndarray]):
+        # group outputs by their destination extension
+        outputs_by_ext = defaultdict(list)
+        for po in pipeline_outputs:
+            outputs_by_ext[po.destination_ext].append(po)
+        destination_images = {}
+        for ext in outputs_by_ext:
+            log.debug(f"Stacking {len(outputs_by_ext[ext])} outputs for {ext=}")
+            # construct a single outputs cube with all contributing inputs
+            all_outputs_cube = None
+            mask_good = ~(np.nanmin(po.sci_arr, axis=(1,2)) == np.nanmax(po.sci_arr, axis=(1,2)))
+            for po in outputs_by_ext[ext]:
+                assert isinstance(po, PipelineOutput)
+                derot_cube = improc.derotate_cube(po.sci_arr[mask_good], angles[mask_good])
+                if all_outputs_cube is None:
+                    all_outputs_cube = derot_cube
+                else:
+                    all_outputs_cube = np.concatenate([all_outputs_cube, derot_cube])
+            # combine the concatenated cube into a single plane
+            finim = improc.combine(all_outputs_cube, self.combine)
+            # apply minimum coverage mask
+            finite_elements_cube = np.isfinite(all_outputs_cube)
+            coverage_count = np.sum(finite_elements_cube, axis=0)
+            coverage_mask = coverage_count > (finite_elements_cube.shape[0] * self.minimum_coverage_frac)
+            finim[~coverage_mask] = np.nan
+            destination_images[ext] = finim
+
+        return StarlightSubtractModesResult(
+            destination_images=destination_images,
+            pipeline_outputs=pipeline_outputs if self.return_residuals else None,
+        )
+
+@xconf.config
+class StarlightSubtract:
+    strategy : Union[KlipTranspose,Klip,KlipSubspace] = xconf.field(help="Strategy with which to estimate and subtract starlight")
+    resolution_element_px : float = xconf.field(help="One resolution element (lambda / D) in pixels")
     return_inputs : bool = xconf.field(default=True, help="Whether original images before starlight subtraction should be returned")
-    # pre_stack_filter : Optional[PreStackFilter] = xconf.field(help="Process after removing starlight and before stacking")
+    image_stack: ImageStack = xconf.field(default=ImageStack(), help="How to combine images after starlight subtraction and filtering")
+    pre_stack_filter : Union[MatchedPreStackFilter,TophatPreStackFilter,NoOpPreStackFilter] = xconf.field(default=None, help="Process after removing starlight and before stacking")
     # return_pre_stack_filtered : bool = xconf.field(default=True, help="Whether filtered images before stacking should be returned")
     k_modes : KModesConfig = xconf.field(default_factory=KModesFractionConfig, help="Which values to try for number of modes to subtract")
     return_decomposition : bool = xconf.field(default=True, help="Whether the computed decomposition should be returned")
@@ -649,32 +800,27 @@ class StarlightSubtract:
                 if pinput.sci_arr.shape != destination_exts[pinput.destination_ext][0].sci_arr.shape:
                     raise ValueError(f"Dimensions of current science array {pinput.sci_arr.shape=} mismatched with others. Use separate destination_ext settings for each input, or make them the same size.")
             destination_exts[pinput.destination_ext].append(pinput)
-
-        data_vecs, model_vecs = unwrap_inputs_to_matrices(data.inputs)
-        max_rank = np.min(data_vecs.shape)
-        n_obs = data_vecs.shape[1]
-        log.debug(f"After unwrapping inputs to matrices, got {data_vecs.shape=} implying {max_rank=}")
+        max_rank = data.max_rank()
         k_modes_values = self.k_modes.as_values(max_rank)
+        log.debug(f"Estimation masks and data cubes imply max rank {max_rank}, implying {k_modes_values=} from {self.k_modes}")
         decomp = data.initial_decomposition
 
         if decomp is None:
             max_k_modes = max(k_modes_values)
             log.debug(f"Computing basis with {max_k_modes=}")
             decomp = self.strategy.prepare(
-                data_vecs,
+                data,
                 max_k_modes,
                 angles=data.angles,
-                probe_model_vecs=model_vecs,
             )
 
         results_for_modes = {}
         for mode_idx, k_modes in enumerate(k_modes_values):
             log.debug(f"Subtracting starlight for modes value k={k_modes} ({mode_idx+1}/{len(k_modes_values)})")
             res = self.strategy.execute(
-                data_vecs,
+                data,
                 k_modes,
                 angles=data.angles,
-                probe_model_vecs=model_vecs,
                 decomposition=decomp,
             )
             data_vecs_resid, model_vecs_resid, _, _ = res
@@ -685,36 +831,16 @@ class StarlightSubtract:
                 signal_mtx=model_vecs_resid,
             )
             # filter individual frames before stacking
-            # filtered_outputs = self.pre_stack_filter.execute(pipeline_outputs)
-
-            # group outputs by their destination extension
-            outputs_by_ext = defaultdict(list)
-            for po in pipeline_outputs:
-                outputs_by_ext[po.destination_ext].append(po)
-            
-            destination_images = {}
-            for ext in outputs_by_ext:
-                # construct a single outputs cube with all contributing inputs
-                all_outputs_cube = None
-                for po in outputs_by_ext[ext]:
-                    assert isinstance(po, PipelineOutput)
-                    derot_cube = improc.derotate_cube(po.sci_arr, data.angles)
-                    if all_outputs_cube is None:
-                        all_outputs_cube = derot_cube
-                    else:
-                        all_outputs_cube = np.concatenate([all_outputs_cube, derot_cube])
-                # combine the concatenated cube into a single plane
-                destination_images[ext] = improc.combine(all_outputs_cube, self.combine)
-                # apply minimum coverage mask
-                finite_elements_cube = np.isfinite(all_outputs_cube)
-                coverage_count = np.sum(finite_elements_cube, axis=0)
-                coverage_mask = coverage_count > (n_obs * self.minimum_coverage_frac)
-                destination_images[ext][~coverage_mask] = np.nan
-
-            results_for_modes[k_modes] = StarlightSubtractModesResult(
-                destination_images=destination_images,
-                pipeline_outputs=pipeline_outputs if self.return_residuals else None,
-            )
+            if self.pre_stack_filter is not None:
+                filtered_outputs = self.pre_stack_filter.execute(
+                    pipeline_outputs,
+                    data.companions[0],
+                    self.resolution_element_px,
+                    data.angles
+                )
+            else:
+                filtered_outputs = pipeline_outputs
+            results_for_modes[k_modes] = self.image_stack.execute(filtered_outputs, data.angles)
 
         return StarlightSubtractResult(
             modes=results_for_modes,
@@ -881,7 +1007,7 @@ PostFilter = Union[TophatPostFilter, MatchedPostFilter]
 
 @xconf.config
 class MeasureStarlightSubtraction:
-    resolution_element_px : float = xconf.field(help="Diameter of the resolution element in pixels")
+    # resolution_element_px : float = xconf.field(help="Diameter of the resolution element in pixels")
     exclude_nearest_apertures: int = xconf.field(default=1, help="How many locations on either side of the probed companion location should be excluded from the SNR calculation")
     subtraction : StarlightSubtract = xconf.field(help="Configure starlight subtraction options")
     return_starlight_subtraction : bool = xconf.field(default=True, help="whether to return the starlight subtraction result")
@@ -890,7 +1016,7 @@ class MeasureStarlightSubtraction:
     return_post_filtering_result : bool = xconf.field(default=True, help="whether to return the images and kernels from filtering")
 
     def __post_init__(self):
-        self.subtraction.return_residuals = True
+        self.subtraction.return_residuals = self.matched_post_filter is not None
         self.subtraction.return_decomposition = True
 
     def execute(
@@ -912,9 +1038,10 @@ class MeasureStarlightSubtraction:
                 image = ssresult.modes[k_modes].destination_images[ext]
                 post_filters = {
                     'tophat': self.tophat_post_filter,
-                    'matched': self.matched_post_filter,
                     'none': NoPostFilter(),
                 }
+                if self.matched_post_filter is not None:
+                    post_filters['matched'] = self.matched_post_filter
                 filter_meas = {}
                 for name, post_filter in post_filters.items():
                     if post_filter is None:
@@ -923,7 +1050,7 @@ class MeasureStarlightSubtraction:
                         image,
                         outputs_for_ext[ext],
                         companion,
-                        self.resolution_element_px,
+                        self.subtraction.resolution_element_px,
                         data.angles,
                     )
                     snr, signal = snr_from_convolution(
@@ -932,7 +1059,9 @@ class MeasureStarlightSubtraction:
                         loc_pa_deg=companion.pa_deg,
                         aperture_diameter_px=filter_result.kernel_diameter_px,
                         exclude_nearest=self.exclude_nearest_apertures,
+                        good_pixel_mask=np.isfinite(filter_result.image),
                     )
+
                     filter_meas[name] = StarlightSubtractionMeasurement(
                         signal=signal,
                         snr=snr,

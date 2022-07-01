@@ -355,8 +355,9 @@ def _calc_snr_mawet(signal, noises):
     noise_total = 0
     num_noises = 0
     for noise in noises:
-        noise_total += noise
-        num_noises += 1
+        if np.isfinite(noise):
+            noise_total += noise
+            num_noises += 1
     noise_avg = noise_total / num_noises
     numerator = signal - noise_avg
     stddev_inner_accum = 0
@@ -425,7 +426,9 @@ def calculate_snr(image, r_px, pa_deg, resolution_element_px, exclude_nearest, g
     return calc_snr_mawet(results[0], results[1:])
 
 @njit(cache=True)
-def snr_from_convolution(convolved_image, loc_rho, loc_pa_deg, aperture_diameter_px, exclude_nearest):
+def snr_from_convolution(convolved_image, loc_rho, loc_pa_deg, aperture_diameter_px, exclude_nearest, good_pixel_mask=None):
+    if good_pixel_mask is None:
+        good_pixel_mask = np.ones(convolved_image.shape) == 1
     height, width = convolved_image.shape
     yc, xc = (height - 1) / 2, (width - 1) / 2
     locs = _simple_aperture_locations(
@@ -433,7 +436,11 @@ def snr_from_convolution(convolved_image, loc_rho, loc_pa_deg, aperture_diameter
     )
     n_apertures = locs.shape[0]
     signal_x, signal_y = locs[0]
-    signal = convolved_image[round(signal_y), round(signal_x)]
+    signal_y_pixel, signal_x_pixel = round(signal_y), round(signal_x)
+    if good_pixel_mask[signal_y_pixel, signal_x_pixel]:
+        signal = convolved_image[signal_y_pixel, signal_x_pixel]
+    else:
+        return np.nan, np.nan
     n_noises = n_apertures - 1 - 2 * exclude_nearest
     if n_noises < 2:
         # note this is checked for in the wrapper
@@ -444,7 +451,11 @@ def snr_from_convolution(convolved_image, loc_rho, loc_pa_deg, aperture_diameter
     for i in range(n_noises):
         nidx = first_noise_offset + i
         noise_x, noise_y = locs[nidx]
-        noises[i] = convolved_image[round(noise_y),round(noise_x)]
+        noise_y_pixel, noise_x_pixel = round(noise_y),round(noise_x)
+        if good_pixel_mask[noise_y_pixel, noise_x_pixel]:
+            noises[i] = convolved_image[noise_y_pixel, noise_x_pixel]
+        else:
+            noises[i] = np.nan
     return _calc_snr_mawet(signal, noises), signal
 
 

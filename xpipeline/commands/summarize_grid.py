@@ -29,7 +29,7 @@ class SummarizeGrid(InputCommand):
     wavelength_um : float = xconf.field(help="Wavelength in microns")
     primary_diameter_m : float = xconf.field(default=magellan.PRIMARY_MIRROR_DIAMETER.to(u.m).value)
     coverage_mask : FitsConfig = xconf.field(help="Mask image with 1s where pixels have observation coverage and 0 elsewhere")
-    min_snr_for_injection: float = xconf.field(default=10, help="Minimum SNR to recover in order to trust the 5sigma contrast value")
+    min_snr_for_injection: float = xconf.field(default=5, help="Minimum SNR to recover in order to trust the 5sigma contrast value")
 
     def main(self):
         import pandas as pd
