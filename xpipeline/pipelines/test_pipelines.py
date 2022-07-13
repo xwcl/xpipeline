@@ -14,6 +14,7 @@ from .new import (
     KlipTranspose,
     Klip,
     KModesValuesConfig,
+    PostFilteringResults,
 )
 
 from ..tasks.characterization import calculate_snr
@@ -61,11 +62,12 @@ def test_klip_pipeline(naco_betapic_data, strategy_cls, snr_threshold):
         data=data_config,
         strategy=strategy_cls(),
         k_modes=KModesValuesConfig(values=k_modes_values),
+        resolution_element_px=aperture_diameter_px,
     )
     result = pl.execute()
-    finim = result.modes[k_modes_values[0]].destination_images["finim"]
+    pfresult : PostFilteringResults = result.modes[k_modes_values[0]].destination_images["finim"]
     snr = calculate_snr(
-        finim,
+        pfresult.unfiltered_image,
         r_px,
         pa_deg,
         aperture_diameter_px,
@@ -111,15 +113,16 @@ def test_measure_starlight_subtraction_pipeline(naco_betapic_data, strategy_cls,
     subtraction = StarlightSubtract(
         strategy=strategy_cls(),
         k_modes=KModesValuesConfig(values=k_modes_values),
+        resolution_element_px=aperture_diameter_px,
     )
     pl = MeasureStarlightSubtractionPipeline(
         data=data_config,
         subtraction=subtraction,
-        resolution_element_px=aperture_diameter_px,
     )
     result: StarlightSubtractionMeasurements = pl.execute()
-    snr = result.by_modes[k_modes_values[0]].by_ext["finim"]["tophat"].snr
-    finim = result.by_modes[k_modes_values[0]].by_ext["finim"]["none"].post_filtering_result.image
+
+    snr = result.by_modes[k_modes_values[0]].by_ext["finim"].tophat.snr
+    finim = result.by_modes[k_modes_values[0]].by_ext["finim"].unfiltered_image
     recalc_snr = calculate_snr(
         finim,
         r_px,
@@ -171,8 +174,8 @@ def test_klipt_annular_exclusion(naco_betapic_data):
         subtraction=subtraction,
     )
     result: StarlightSubtractionMeasurements = pl.execute()
-    snr = result.by_modes[k_modes_values[0]].by_ext["finim"]["tophat"].snr
-    finim = result.by_modes[k_modes_values[0]].by_ext["finim"]["none"].post_filtering_result.image
+    snr = result.by_modes[k_modes_values[0]].by_ext["finim"].tophat.snr
+    finim = result.by_modes[k_modes_values[0]].by_ext["finim"].unfiltered_image
     recalc_snr = calculate_snr(
         finim,
         r_px,
@@ -186,8 +189,8 @@ def test_klipt_annular_exclusion(naco_betapic_data):
         subtraction.strategy.excluded_annulus_width_px = 8
         data_config.companion.pa_deg += 30
         result: StarlightSubtractionMeasurements = pl.execute()
-        snr = result.by_modes[k_modes_values[0]].by_ext["finim"]["tophat"].snr
-        finim = result.by_modes[k_modes_values[0]].by_ext["finim"]["none"].post_filtering_result.image
+        snr = result.by_modes[k_modes_values[0]].by_ext["finim"].tophat.snr
+        finim = result.by_modes[k_modes_values[0]].by_ext["finim"].unfiltered_image
         recalc_snr = calculate_snr(
             finim,
             data_config.companion.r_px,
