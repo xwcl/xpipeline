@@ -10,6 +10,7 @@ from ..commands.base import AnyRayConfig, LocalRayConfig, measure_ram
 from ..pipelines.new import (
     MeasureStarlightSubtraction, StarlightSubtractionData, KModesConfig,
     KModesFractionConfig, KModesValuesConfig, StarlightSubtractionDataConfig,
+    StarlightSubtractionMeasurement, StarlightSubtractionFilterMeasurements,
 )
 from ..constants import KlipStrategy
 from ..tasks import characterization
@@ -66,8 +67,10 @@ def _measure_subtraction_task(
         chunk[idx]['k_modes_chosen'] = k_modes_chosen_for_row
         ext = chunk[idx]['ext'].decode('utf8')
         filter_name = chunk[idx]['filter_name'].decode('utf8')
-        chunk[idx]['signal'] = meas.by_modes[k_modes_chosen_for_row].by_ext[ext][filter_name].signal
-        chunk[idx]['snr'] = meas.by_modes[k_modes_chosen_for_row].by_ext[ext][filter_name].snr
+        measurements : StarlightSubtractionFilterMeasurements = meas.by_modes[k_modes_chosen_for_row].by_ext[ext]
+        filter_measurement : StarlightSubtractionMeasurement = getattr(measurements, filter_name)
+        chunk[idx]['signal'] = filter_measurement.signal
+        chunk[idx]['snr'] = filter_measurement.snr
     return chunk
 
 
@@ -121,7 +124,6 @@ class MeasureStarlightSubtractionGrid(BaseRayGrid):
             destination_exts.add(pinput.destination_ext)
         max_len_destination_ext = max(len(f) for f in destination_exts)
         filter_names = [
-            'none',
             'tophat',
             'matched',
         ]
@@ -160,10 +162,10 @@ class MeasureStarlightSubtractionGrid(BaseRayGrid):
 
         n_comp_rows = (
             len(self.decimate_frames_by_values)
-            * len(annuli_resel) 
-            * len(k_modes_choices) 
-            * len(destination_exts) 
-            * len(filter_names) 
+            * len(annuli_resel)
+            * len(k_modes_choices)
+            * len(destination_exts)
+            * len(filter_names)
             * len(probes)
         )
         log.debug(f"Evaluating {len(probes)} positions/contrast levels at {len(k_modes_choices)} k values: {k_modes_choices}")
