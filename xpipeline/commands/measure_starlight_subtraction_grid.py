@@ -217,12 +217,15 @@ class MeasureStarlightSubtractionGrid(BaseRayGrid):
                     expensive_grid_points = expensive_grid_points[expensive_grid_points['annulus_resel'] == np.max(expensive_grid_points['annulus_resel'])]
                 assert len(expensive_grid_points) > 0
                 expensive_grid_point = expensive_grid_points[:1]
+                pending_modes_values = np.unique(pending_tbl['k_modes_requested'])
+                expensive_grid_chunk = np.repeat(expensive_grid_point, len(pending_modes_values))
+                expensive_grid_chunk['k_modes_requested'] = pending_modes_values
 
                 log.debug(f"Measure RAM requirement for {decimate_level=}...")
                 ram_requirement_mb, gpu_ram_requirement_mb = measure_ram(
                     _measure_subtraction_task,
                     {},
-                    expensive_grid_point,
+                    expensive_grid_chunk,
                     self.measure_subtraction,
                     self.data
                 )
