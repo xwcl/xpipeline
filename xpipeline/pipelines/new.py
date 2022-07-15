@@ -20,6 +20,8 @@ import logging
 
 log = logging.getLogger(__name__)
 
+POST_FILTER_NAMES = ('tophat', 'matched')
+
 
 @xconf.config
 class PixelRotationRangeConfig:
@@ -580,6 +582,7 @@ class PostFilteringResults:
     tophat : PostFilteringResult
     unfiltered_image : np.ndarray
     matched : PostFilteringResult
+    coverage_count: np.ndarray
 
 @dataclass
 class StarlightSubtractModesResult:
@@ -703,11 +706,10 @@ class TophatPreStackFilter:
         derotation_angles: Optional[np.ndarray]=None,
     ) -> list[PipelineOutput]:
         out = []
+        kernel = Tophat2DKernel(radius=resolution_element_px)
         for po in pipeline_outputs:
             sci_arr_filtered = np.zeros_like(po.sci_arr)
             for i in range(po.sci_arr.shape[0]):
-                radius_px = resolution_element_px
-                kernel = Tophat2DKernel(radius=radius_px)
                 sci_arr_filtered[i] = convolve_fft(
                     po.sci_arr[i],
                     kernel,
@@ -729,7 +731,6 @@ class MatchedPreStackFilter(PreStackFilter):
         resolution_element_px : float,
         derotation_angles: Optional[np.ndarray]=None,
     ) -> list[PipelineOutput]:
-        pipeline_outputs[0].model_arr
         out = []
         for po in pipeline_outputs:
             rho, _ = improc.polar_coords(improc.arr_center(po.sci_arr.shape[1:]), po.sci_arr.shape[1:])
@@ -758,12 +759,17 @@ class MatchedPreStackFilter(PreStackFilter):
             out.append(PipelineOutput(sci_arr_filtered, po.destination_ext, model_arr=po.model_arr))
         return out
 
+@dataclass
+class ImageStackingResult:
+    image : np.ndarray
+    coverage : np.ndarray
+
 @xconf.config
 class ImageStack:
     combine : constants.CombineOperation = xconf.field(default=constants.CombineOperation.MEDIAN, help="How to combine image for stacking")
     minimum_coverage_frac: float = xconf.field(default=0.2, help="Number of overlapping source frames covering a derotated frame pixel for it to be kept in the final image as a fraction of the total number of frames")
 
-    def execute(self, pipeline_outputs: list[PipelineOutput], angles: Optional[np.ndarray]) -> tuple[dict, dict]:
+    def execute(self, pipeline_outputs: list[PipelineOutput], angles: Optional[np.ndarray]) -> tuple[dict[str, ImageStackingResult], dict[str, list[PipelineOutput]]]:
         # group outputs by their destination extension
         outputs_by_ext = defaultdict(list)
         for po in pipeline_outputs:
@@ -773,8 +779,12 @@ class ImageStack:
             log.debug(f"Stacking {len(outputs_by_ext[ext])} outputs for {ext=}")
             # construct a single outputs cube with all contributing inputs
             all_outputs_cube = None
-            mask_good = ~(np.nanmin(po.sci_arr, axis=(1,2)) == np.nanmax(po.sci_arr, axis=(1,2)))
             for po in outputs_by_ext[ext]:
+                mask_good = ~(np.nanmin(po.sci_arr, axis=(1,2)) == np.nanmax(po.sci_arr, axis=(1,2)))
+                good_frames = np.count_nonzero(mask_good)
+                log.debug(f"This pipeline output for {ext} has {good_frames=}")
+                if good_frames == 0:
+                    continue
                 assert isinstance(po, PipelineOutput)
                 derot_cube = improc.derotate_cube(po.sci_arr[mask_good], angles[mask_good])
                 if all_outputs_cube is None:
@@ -782,13 +792,16 @@ class ImageStack:
                 else:
                     all_outputs_cube = np.concatenate([all_outputs_cube, derot_cube])
             # combine the concatenated cube into a single plane
+            if all_outputs_cube is None:
+                log.info(f"Processing destination extension {ext}: After excluding frames without usable pixels, no output remains to stack")
+                all_outputs_cube = np.nan * np.ones((1,) + po.sci_arr.shape[1:])
             finim = improc.combine(all_outputs_cube, self.combine)
             # apply minimum coverage mask
             finite_elements_cube = np.isfinite(all_outputs_cube)
             coverage_count = np.sum(finite_elements_cube, axis=0)
             coverage_mask = coverage_count > (finite_elements_cube.shape[0] * self.minimum_coverage_frac)
             finim[~coverage_mask] = np.nan
-            destination_images[ext] = finim
+            destination_images[ext] = ImageStackingResult(image=finim, coverage=coverage_count)
         return destination_images, outputs_by_ext
 
 
@@ -839,6 +852,13 @@ class MatchedPostFilter(_BasePostFilter):
         log.debug(f"Matched filter with {self.kernel_diameter_resel} lambda/D extent is {radius_px=} given {resolution_element_px=}")
         rho, _ = improc.polar_coords(improc.arr_center(kernel), kernel.shape)
         kernel[rho > radius_px] = 0
+
+        if np.any(~np.isfinite(kernel)):
+            return PostFilteringResult(
+                kernel=kernel,
+                image=np.nan * destination_image,
+                kernel_diameter_px=2 * radius_px,
+            )
 
         # normalize kernel and flip to form matched filter
         kernel /= np.nansum(kernel**2)
@@ -912,17 +932,18 @@ class StarlightSubtractionMeasurement:
 class StarlightSubtractionFilterMeasurements:
     tophat : StarlightSubtractionMeasurement
     matched : StarlightSubtractionMeasurement
+    coverage_count : np.ndarray
     unfiltered_image : np.ndarray
 
 @xconf.config
 class PostFilter:
     tophat : TophatPostFilter = xconf.field(default=TophatPostFilter(), help="Filter final derotated images with a circular aperture")
     matched : MatchedPostFilter = xconf.field(default=MatchedPostFilter(), help="Filter final derotated images with a matched filter based on the model PSF")
-    return_result : bool = xconf.field(default=True, help="whether to return the images and kernels from filtering")
 
     def execute(
         self,
         destination_image: np.ndarray,
+        coverage_count: np.ndarray,
         pipeline_outputs_for_ext: list[PipelineOutput],
         measurement_location : CompanionSpec,
         resolution_element_px : float,
@@ -934,20 +955,21 @@ class PostFilter:
             tophat=tophat_res,
             matched=matched_res,
             unfiltered_image=destination_image,
+            coverage_count=coverage_count,
         )
 
 @xconf.config
 class StarlightSubtract:
     strategy : Union[KlipTranspose,Klip,KlipSubspace] = xconf.field(help="Strategy with which to estimate and subtract starlight")
     resolution_element_px : float = xconf.field(help="One resolution element (lambda / D) in pixels")
-    return_inputs : bool = xconf.field(default=True, help="Whether original images before starlight subtraction should be returned")
     image_stack: ImageStack = xconf.field(default=ImageStack(), help="How to combine images after starlight subtraction and filtering")
     pre_stack_filter : Union[MatchedPreStackFilter,TophatPreStackFilter,NoOpPreStackFilter] = xconf.field(default=None, help="Process after removing starlight and before stacking")
-    return_pre_stack_filtered : bool = xconf.field(default=True, help="Whether filtered images before stacking should be returned")
     k_modes : KModesConfig = xconf.field(default_factory=KModesFractionConfig, help="Which values to try for number of modes to subtract")
-    return_decomposition : bool = xconf.field(default=True, help="Whether the computed decomposition should be returned")
-    return_residuals : bool = xconf.field(default=True, help="Whether residual images after starlight subtraction should be returned")
     post_filter : PostFilter = xconf.field(default=PostFilter())
+    return_inputs : bool = xconf.field(default=False, help="Whether original images before starlight subtraction should be returned")
+    return_pre_stack_filtered : bool = xconf.field(default=False, help="Whether filtered images before stacking should be returned")
+    return_decomposition : bool = xconf.field(default=False, help="Whether the computed decomposition should be returned")
+    return_residuals : bool = xconf.field(default=False, help="Whether residual images after starlight subtraction should be returned")
 
     def execute(self, data : StarlightSubtractionData) -> StarlightSubtractResult:
         destination_exts = defaultdict(list)
@@ -996,12 +1018,13 @@ class StarlightSubtract:
                 )
             else:
                 filtered_outputs = pipeline_outputs
-            destination_images, outputs_by_ext = self.image_stack.execute(filtered_outputs, data.angles)
+            destination_stacking_results, outputs_by_ext = self.image_stack.execute(filtered_outputs, data.angles)
             # results_for_modes[k_modes] = res
             post_filtered_image_results = {}
-            for dest_ext in destination_images:
-                pfres = self.post_filter.execute(
-                    destination_images[dest_ext],
+            for dest_ext in destination_stacking_results:
+                pfres : PostFilteringResults = self.post_filter.execute(
+                    destination_stacking_results[dest_ext].image,
+                    destination_stacking_results[dest_ext].coverage,
                     outputs_by_ext[dest_ext],
                     data.companions[0],
                     self.resolution_element_px,
@@ -1041,15 +1064,13 @@ class StarlightSubtractionMeasurements:
     by_modes: dict[int,StarlightSubtractionMeasurementSet]
     subtraction_result : Optional[StarlightSubtractResult]
 
-PostFilter = Union[TophatPostFilter, MatchedPostFilter]
-
 @xconf.config
 class MeasureStarlightSubtraction:
     # resolution_element_px : float = xconf.field(help="Diameter of the resolution element in pixels")
     exclude_nearest_apertures: int = xconf.field(default=1, help="How many locations on either side of the probed companion location should be excluded from the SNR calculation")
     subtraction : StarlightSubtract = xconf.field(help="Configure starlight subtraction options")
-    return_starlight_subtraction : bool = xconf.field(default=True, help="whether to return the starlight subtraction result")
-    return_post_filtering_result : bool = xconf.field(default=True, help="whether to return the post-filtered image")
+    return_starlight_subtraction : bool = xconf.field(default=False, help="whether to return the starlight subtraction result")
+    return_post_filtering_result : bool = xconf.field(default=False, help="whether to return the post-filtered image")
 
     def execute(
         self, data : StarlightSubtractionData
@@ -1062,14 +1083,13 @@ class MeasureStarlightSubtraction:
             subtraction_result=ssresult if self.return_starlight_subtraction else None,
         )
         for k_modes in ssresult.modes:
-            outputs_for_ext = defaultdict(list)
-            for poutput in ssresult.modes[k_modes].pipeline_outputs:
-                outputs_for_ext[poutput.destination_ext].append(poutput)
             meas = StarlightSubtractionMeasurementSet(by_ext={})
             for ext in ssresult.modes[k_modes].destination_images:
                 pfresults : PostFilteringResults = ssresult.modes[k_modes].destination_images[ext]
+                coverage_mask = (pfresults.coverage_count / np.nanmax(pfresults.coverage_count)) > self.subtraction.image_stack.minimum_coverage_frac
+                log.debug(f"Measuring SNR from {np.count_nonzero(coverage_mask)} pixels with coverage > {self.subtraction.image_stack.minimum_coverage_frac}")
                 measurements = {}
-                for filter_name in ('tophat', 'matched'):
+                for filter_name in POST_FILTER_NAMES:
                     filter_result : PostFilteringResult = getattr(pfresults, filter_name)
                     snr, signal = snr_from_convolution(
                         filter_result.image,
@@ -1077,7 +1097,7 @@ class MeasureStarlightSubtraction:
                         loc_pa_deg=companion.pa_deg,
                         aperture_diameter_px=filter_result.kernel_diameter_px,
                         exclude_nearest=self.exclude_nearest_apertures,
-                        good_pixel_mask=np.isfinite(filter_result.image),
+                        good_pixel_mask=coverage_mask,
                     )
 
                     measurements[filter_name] = StarlightSubtractionMeasurement(
@@ -1087,13 +1107,14 @@ class MeasureStarlightSubtraction:
                     )
                 measurements = StarlightSubtractionFilterMeasurements(
                     unfiltered_image=pfresults.unfiltered_image,
+                    coverage_count=pfresults.coverage_count,
                     **measurements
                 )
                 meas.by_ext[ext] = measurements
             result.by_modes[k_modes] = meas
         return result
 
-    def measurements_to_jsonable(self, res, k_modes_values):
+    def measurements_to_jsonable(self, res : StarlightSubtractionMeasurements, k_modes_values):
         output_dict = {}
         output_dict['config'] = xconf.asdict(self)
         output_dict['results'] = {
@@ -1105,10 +1126,11 @@ class MeasureStarlightSubtraction:
                 if ext not in output_dict['results']:
                     output_dict['results'][ext] = []
                 filtered_measurements = {}
-                for filter_name in res.by_modes[k].by_ext[ext]:
+                for filter_name in POST_FILTER_NAMES:
+                    filter_res = getattr(res.by_modes[k].by_ext[ext], filter_name)
                     filtered_measurements[filter_name] = {
-                        'snr': res.by_modes[k].by_ext[ext][filter_name].snr,
-                        'signal': res.by_modes[k].by_ext[ext][filter_name].signal,
+                        'snr': filter_res.snr,
+                        'signal': filter_res.signal,
                     }
                 output_dict['results'][ext].append(filtered_measurements)
         return output_dict

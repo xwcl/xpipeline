@@ -360,10 +360,12 @@ def _calc_snr_mawet(signal, noises):
             num_noises += 1
     noise_avg = noise_total / num_noises
     numerator = signal - noise_avg
+    # second pass thru to compute stddev now we have the noise avg
     stddev_inner_accum = 0
-    for i in range(num_noises):
-        meansub = (noises[i] - noise_avg)
-        stddev_inner_accum += meansub * meansub
+    for noise in noises:
+        if np.isfinite(noise):
+            meansub = (noise - noise_avg)
+            stddev_inner_accum += meansub * meansub
     if stddev_inner_accum == 0:
         return np.nan
     noise_stddev = math.sqrt(stddev_inner_accum / num_noises)
@@ -437,10 +439,11 @@ def snr_from_convolution(convolved_image, loc_rho, loc_pa_deg, aperture_diameter
     n_apertures = locs.shape[0]
     signal_x, signal_y = locs[0]
     signal_y_pixel, signal_x_pixel = round(signal_y), round(signal_x)
-    if good_pixel_mask[signal_y_pixel, signal_x_pixel]:
+    if good_pixel_mask[signal_y_pixel, signal_x_pixel] and np.isfinite(convolved_image[signal_y_pixel, signal_x_pixel]):
         signal = convolved_image[signal_y_pixel, signal_x_pixel]
     else:
         return np.nan, np.nan
+
     n_noises = n_apertures - 1 - 2 * exclude_nearest
     if n_noises < 2:
         # note this is checked for in the wrapper
@@ -456,7 +459,8 @@ def snr_from_convolution(convolved_image, loc_rho, loc_pa_deg, aperture_diameter
             noises[i] = convolved_image[noise_y_pixel, noise_x_pixel]
         else:
             noises[i] = np.nan
-    return _calc_snr_mawet(signal, noises), signal
+    snr = _calc_snr_mawet(signal, noises)
+    return snr, signal
 
 
 

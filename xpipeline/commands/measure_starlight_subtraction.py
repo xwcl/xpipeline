@@ -3,7 +3,10 @@ import xconf
 import orjson
 import numpy as np
 from xconf.contrib import BaseRayGrid, FileConfig, join, PathConfig, DirectoryConfig
-from ..pipelines.new import MeasureStarlightSubtractionPipeline, StarlightSubtractionMeasurements
+from ..pipelines.new import (
+    MeasureStarlightSubtractionPipeline, StarlightSubtractionMeasurements, POST_FILTER_NAMES,
+    StarlightSubtractionMeasurement
+)
 from .base import BaseCommand
 from pprint import pprint, pformat
 import dataclasses
@@ -19,7 +22,9 @@ class MeasureStarlightSubtraction(BaseCommand, MeasureStarlightSubtractionPipeli
     save_residuals : bool = xconf.field(default=False, help="Whether to save starlight subtraction residuals as a FITS file")
     save_inputs : bool = xconf.field(default=False, help="Whether to save input data (post-injection) and model as a FITS file")
     save_unfiltered_images : bool = xconf.field(default=False, help="Whether to save stacked but unfiltered images")
+    save_pre_stack_filtered_images : bool = xconf.field(default=False, help="Whether to save image sequences that have been filtered before being stacked")
     save_post_filtering_images : bool = xconf.field(default=False, help="Whether to save stacked and post-filtering images")
+    save_coverage_map : bool = xconf.field(default=False, help="Whether to save a coverage map counting the frames contributing to each pixel")
     save_ds9_regions : bool = xconf.field(default=False, help="Whether to write a ds9 region file for the signal estimation pixels")
 
     def main(self):
@@ -38,13 +43,19 @@ class MeasureStarlightSubtraction(BaseCommand, MeasureStarlightSubtractionPipeli
             self.return_post_filtering_result = True
         if self.save_ds9_regions:
             self.return_post_filtering_result = True
-            
+        if self.save_pre_stack_filtered_images:
+            if self.subtraction.pre_stack_filter is None:
+                raise RuntimeError("Must specify pre stack filter if saving images")
+            self.subtraction.return_pre_stack_filtered = True
+
         output_filenames = {
             'decomposition.fits': self.save_decomposition,
             'residuals.fits': self.save_residuals,
             'inputs.fits': self.save_inputs,
             'unfiltered.fits': self.save_unfiltered_images,
             'post_filtering.fits': self.save_post_filtering_images,
+            'pre_filtering.fits': self.save_pre_stack_filtered_images,
+            'coverage.fits': self.save_coverage_map,
         }
         self.destination.ensure_exists()
         for fn, condition in output_filenames.items():
@@ -66,10 +77,10 @@ class MeasureStarlightSubtraction(BaseCommand, MeasureStarlightSubtractionPipeli
         if self.save_unfiltered_images:
             images_by_ext = {}
             for k_modes in k_modes_values:
-                for ext, unfiltered_image in res.subtraction_result.modes[k_modes].destination_images.items():
+                for ext, postfilteringresults in res.subtraction_result.modes[k_modes].destination_images.items():
                     if ext not in images_by_ext:
                         images_by_ext[ext] = []
-                    images_by_ext[ext].append(unfiltered_image)
+                    images_by_ext[ext].append(postfilteringresults.unfiltered_image)
             for ext in images_by_ext:
                 unfilt_hdul = fits.HDUList([
                     fits.PrimaryHDU(),
@@ -82,12 +93,44 @@ class MeasureStarlightSubtraction(BaseCommand, MeasureStarlightSubtractionPipeli
             with self.destination.open_path('unfiltered.fits', 'wb') as fh:
                 unfilt_hdul.writeto(fh)
 
+        if self.save_pre_stack_filtered_images:
+            sci_arrays_by_output = [[] for i in range(n_inputs)]
+            for k_modes in k_modes_values:
+                for i in range(n_inputs):
+                    sci_arrays_by_output[i].append(
+                        res.subtraction_result.modes[k_modes].pre_stack_filtered[i].sci_arr
+                    )
+            prefilter_hdul = fits.HDUList([
+                fits.PrimaryHDU(),
+                fits.ImageHDU(np.array(k_modes_values, dtype=int), name="K_MODES_VALUES")
+            ])
+            for i in range(n_inputs):
+                ext = f"PRE_STACK_FILTERED_{i:02}"
+                sci_array_stack = np.stack(sci_arrays_by_output[i])
+                prefilter_hdul.append(fits.ImageHDU(sci_array_stack, name=ext))
+            with self.destination.open_path('pre_stack_filtered.fits', 'wb') as fh:
+                prefilter_hdul.writeto(fh)
+
+        if self.save_coverage_map:
+            coverage_hdul = fits.HDUList([
+                fits.PrimaryHDU(),
+            ])
+            # coverage will be the same for all modes values, so pick
+            # the first one
+            for ext in res.by_modes[k_modes_values[0]].by_ext:
+                res_for_ext = res.by_modes[k_modes_values[0]].by_ext[ext]
+                coverage_count = res_for_ext.coverage_count
+                coverage_hdul.append(fits.ImageHDU(coverage_count, name=f"COVERAGE_{ext}"))
+            with self.destination.open_path(f"coverage.fits", "wb") as fh:
+                coverage_hdul.writeto(fh)
+
         if self.save_post_filtering_images or self.save_ds9_regions:
             images_by_filt_by_ext = {}
             kernels_by_filt_by_ext = {}
             for k_modes in k_modes_values:
                 for ext, ss_result_by_filter in res.by_modes[k_modes].by_ext.items():
-                    for filt_name, ss_result in ss_result_by_filter.items():
+                    for filt_name in POST_FILTER_NAMES:
+                        ss_result : StarlightSubtractionMeasurement = getattr(ss_result_by_filter, filt_name)
                         region_file_name = None
                         if filt_name not in images_by_filt_by_ext:
                             images_by_filt_by_ext[filt_name] = {}
@@ -117,18 +160,12 @@ class MeasureStarlightSubtraction(BaseCommand, MeasureStarlightSubtractionPipeli
                             with self.destination.open_path(region_file_name, "wb") as fh:
                                 fh.write(region_specs.encode('utf8'))
 
-
-
-            hduls_by_ext = {}
+            postfilt_hdul = fits.HDUList([
+                fits.PrimaryHDU(),
+                fits.ImageHDU(np.array(k_modes_values, dtype=int), name="K_MODES_VALUES"),
+            ])
             for filt_name in images_by_filt_by_ext:
                 for ext in images_by_filt_by_ext[filt_name]:
-                    if ext not in hduls_by_ext:
-                        hduls_by_ext[ext] = postfilt_hdul = fits.HDUList([
-                            fits.PrimaryHDU(),
-                            fits.ImageHDU(np.array(k_modes_values, dtype=int), name="K_MODES_VALUES"),
-                        ])
-                    else:
-                        postfilt_hdul = hduls_by_ext[ext]
                     postfilt_hdul.append(fits.ImageHDU(
                         np.stack(images_by_filt_by_ext[filt_name][ext]),
                         name=f"{ext}_{filt_name}",
@@ -138,9 +175,8 @@ class MeasureStarlightSubtraction(BaseCommand, MeasureStarlightSubtractionPipeli
                         name=f"{ext}_{filt_name}_KERNEL",
                     ))
 
-            for ext in hduls_by_ext:
-                with self.destination.open_path(f'post_filtering_{ext}.fits', 'wb') as fh:
-                    hduls_by_ext[ext].writeto(fh)
+            with self.destination.open_path(f'post_filtering.fits', 'wb') as fh:
+                postfilt_hdul.writeto(fh)
 
         if self.return_starlight_subtraction:
             if self.save_decomposition:
