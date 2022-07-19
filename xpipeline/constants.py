@@ -28,3 +28,20 @@ class CompareOperation(Enum):
     LE = 'le'
     LT = 'lt'
     NE = 'ne'
+
+    @property
+    def ascii_operator(self):
+        if self.value == 'gt':
+            return '>'
+        elif self.value == 'ge':
+            return '>='
+        elif self.value == 'eq':
+            return '=='
+        elif self.value == 'le':
+            return '<='
+        elif self.value == 'lt':
+            return '<'
+        elif self.value == 'ne':
+            return '!='
+        else:
+            return RuntimeError(f"Unknown comparator {self.value}")

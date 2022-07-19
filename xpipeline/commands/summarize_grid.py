@@ -20,6 +20,14 @@ class GridColumnsConfig:
     injected_scale : str = xconf.field(default="injected_scale", help="(companion)/(host) contrast of injection")
     hyperparameters : list[str] = xconf.field(default_factory=lambda: ['k_modes'], help="List of columns holding hyperparameters varied in grid")
 
+FilterValue = Union[float, str]
+
+@xconf.config
+class FilterPredicate:
+    operator : constants.CompareOperation = xconf.field(help="Any of gt/ge/eq/le/lt/ne")
+    value : FilterValue = xconf.field(help="Value on which to filter")
+
+FilterSpec = Union[FilterPredicate, float, str]
 
 @xconf.config
 class SummarizeGrid(InputCommand):
@@ -30,6 +38,8 @@ class SummarizeGrid(InputCommand):
     primary_diameter_m : float = xconf.field(default=magellan.PRIMARY_MIRROR_DIAMETER.to(u.m).value)
     coverage_mask : FitsConfig = xconf.field(help="Mask image with 1s where pixels have observation coverage and 0 elsewhere")
     min_snr_for_injection: float = xconf.field(default=5, help="Minimum SNR to recover in order to trust the 5sigma contrast value")
+    normalize_snrs: bool = xconf.field(default=False, help="Rescales the SNR values at a given radius by dividing by the stddev of all SNRs for that radius")
+    filters : dict[str, FilterSpec] = xconf.field(default_factory=dict, help="Filter on column == value before grouping and summarizing")
 
     def main(self):
         import pandas as pd
@@ -43,9 +53,46 @@ class SummarizeGrid(InputCommand):
         grid_hdul = iofits.load_fits_from_path(self.input)
         grid_tbl = grid_hdul[self.ext].data
         log.info(f"Loaded {len(grid_tbl)} points for evaluation")
-        grid_df = pd.DataFrame(grid_tbl)
 
-        import pandas as pd
+
+        if self.normalize_snrs:
+            log.debug("Applying SNR rescaling by azimuthal stddev of non-injected SNR measurements")
+            grid_tbl = characterization.normalize_snr_for_grid(
+                grid_tbl,
+                r_px_colname=self.columns.r_px,
+                pa_deg_colname=self.columns.pa_deg,
+                snr_colname=self.columns.snr,
+                injected_scale_colname=self.columns.injected_scale,
+                hyperparameter_colnames=self.columns.hyperparameters,
+            )
+
+        grid_df = pd.DataFrame(grid_tbl)
+        mask = np.ones(len(grid_df), dtype=bool)
+        for column_key in self.filters:
+            this_filter = self.filters[column_key]
+            this_column = grid_df[column_key]
+            if isinstance(this_filter, FilterPredicate):
+                op = this_filter.operator
+                val = this_filter.value
+                log.debug(f"Filtering on {column_key} {op.ascii_operator} {val}")
+                if op is constants.CompareOperation.EQ:
+                    mask &= (this_column == val)
+                elif op is constants.CompareOperation.NE:
+                    mask &= (this_column != val)
+                elif op is constants.CompareOperation.GT:
+                    mask &= (this_column > val)
+                elif op is constants.CompareOperation.GE:
+                    mask &= (this_column >= val)
+                elif op is constants.CompareOperation.LT:
+                    mask &= (this_column < val)
+                elif op is constants.CompareOperation.LE:
+                    mask &= (this_column <= val)
+            else:
+                log.debug(f"Filtering on {column_key} == {this_filter}")
+                mask &= (grid_df[column_key] == this_filter)
+
+
+
 
         limits_df, detections_df = characterization.summarize_grid(
             grid_df,

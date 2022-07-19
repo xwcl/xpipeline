@@ -7,6 +7,7 @@ import astropy.units as u
 import pandas as pd
 from typing import List, Optional, Union
 from dataclasses import dataclass
+from numpy.lib.recfunctions import drop_fields, append_fields
 import numba
 from numba import njit
 import math
@@ -671,6 +672,28 @@ def detection_map_cube_from_table(tbl, coverage_mask, ring_px=3, **kwargs):
             **final_kwargs
         )
     return filters, detection_map_cube
+
+def normalize_snr_for_grid(
+    tbl,
+    r_px_colname : str,
+    pa_deg_colname : str,
+    snr_colname : str,
+    injected_scale_colname : str,
+    hyperparameter_colnames : list[str],
+):
+    # retain the original SNR value to look at if we need it
+    tbl = append_fields(tbl, 'unnormalized_snr', tbl[snr_colname])
+    no_injection_mask = tbl[injected_scale_colname] == 0.0
+    detections = tbl[no_injection_mask]
+    config_params = [r_px_colname, pa_deg_colname] + hyperparameter_colnames
+    configurations = np.unique(detections[config_params])
+    for config in configurations:
+        mask = np.ones(len(tbl), dtype=bool)
+        for colname in config_params:
+            mask &= tbl[colname] == config[colname]
+        noise_factor = np.std(tbl[no_injection_mask & mask][snr_colname])
+        tbl[mask & ~no_injection_mask][snr_colname] /= noise_factor
+    return np.array(tbl)  # somehow got converted to masked_array, maybe by append_fields
 
 def summarize_grid(grid_df : pd.DataFrame,
                    r_px_colname : str,
