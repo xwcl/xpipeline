@@ -1,9 +1,13 @@
 from collections import defaultdict
+import orjson
+from pprint import pformat
 from astropy.convolution import convolve_fft, Tophat2DKernel
 import math
+from astropy.io import fits
 import time
 from copy import copy, deepcopy
 from dataclasses import dataclass
+import dataclasses
 import xconf
 import numpy as np
 from xconf.contrib import BaseRayGrid, FileConfig, join, PathConfig, DirectoryConfig
@@ -21,7 +25,7 @@ import logging
 log = logging.getLogger(__name__)
 
 POST_FILTER_NAMES = ('tophat', 'matched')
-
+DEFAULT_DESTINATION_EXTS_FACTORY = lambda: ['finim']
 
 @xconf.config
 class PixelRotationRangeConfig:
@@ -137,7 +141,7 @@ class ModelSignalInputConfig:
 class PipelineInput:
     sci_arr: np.ndarray
     estimation_mask: np.ndarray
-    destination_ext: str = "finim"
+    destination_exts: list[str] = dataclasses.field(default_factory=DEFAULT_DESTINATION_EXTS_FACTORY)
     combination_mask: Optional[np.ndarray] = None
     model_inputs : Optional[ModelSignalInput] = None
     model_arr : Optional[np.ndarray] = None
@@ -161,10 +165,12 @@ class StarlightSubtractionData:
             rows += np.count_nonzero(pi.estimation_mask)
         return min(rows, cols)
 
+
+
 @dataclass
 class PipelineOutput:
     sci_arr: np.ndarray
-    destination_ext: str = "finim"
+    destination_exts: list[str] = dataclasses.field(default_factory=DEFAULT_DESTINATION_EXTS_FACTORY)
     model_arr: Optional[np.ndarray] = None
     mean_image: Optional[np.ndarray] = None
 
@@ -175,7 +181,7 @@ class PipelineInputConfig:
     combination_mask: Optional[FitsConfig] = xconf.field(default=None, help="Combination mask with the shape of a single plane of sci_arr, or False to exclude from final combination")
     radial_mask : Optional[RadialMaskConfig] = xconf.field(default=None, help="Radial mask to exclude pixels min_r_px > r || r > max_r_px from center")
     model_inputs : Optional[ModelSignalInputConfig] = xconf.field(default=None, help="Model signal for matched filtering")
-    destination_ext: str = xconf.field(default="finim", help="Extension into which final image should be combined")
+    destination_exts: list[str] = xconf.field(default_factory=DEFAULT_DESTINATION_EXTS_FACTORY, help="Extension(s) into which final image should be combined")
 
     def load(self) -> PipelineInput:
         sci_arr = self.sci_arr.load()
@@ -190,7 +196,7 @@ class PipelineInputConfig:
             estimation_mask=estimation_mask,
             combination_mask=combination_mask,
             model_inputs=model_inputs,
-            destination_ext=self.destination_ext,
+            destination_exts=self.destination_exts,
         )
 
     def get_masks(self, single_plane_shape):
@@ -278,7 +284,7 @@ class ExcludeRangeConfig:
 class Klip:
     klip : bool = xconf.field(default=True, help="Include this option to explicitly select the Klip strategy")
     return_basis : bool = xconf.field(default=False, help="Bail out early and return the basis set")
-    reuse : bool = xconf.field(default=True, help="Use the same basis set for all frames")
+    reuse : bool = xconf.field(default=False, help="Use the same basis set for all frames")
     exclude : ExcludeRangeConfig = xconf.field(default=ExcludeRangeConfig(), help="How to exclude frames from reference sample")
     decomposer : learning.Decomposers = xconf.field(default=learning.Decomposers.svd, help="Modal decomposer for data matrix")
 
@@ -567,7 +573,7 @@ def residuals_matrix_to_outputs(
             )
         else:
             mean_image = None
-        pipeline_outputs.append(PipelineOutput(cube, input_data.destination_ext, signal, mean_image))
+        pipeline_outputs.append(PipelineOutput(cube, input_data.destination_exts, signal, mean_image))
         start_idx += n_features
     return pipeline_outputs
 
@@ -717,7 +723,7 @@ class TophatPreStackFilter:
                     fill_value=0.0,
                     preserve_nan=True,
                 )
-            out.append(PipelineOutput(sci_arr_filtered, po.destination_ext, model_arr=po.model_arr))
+            out.append(PipelineOutput(sci_arr_filtered, po.destination_exts, model_arr=po.model_arr))
         return out
 
 @xconf.config
@@ -756,7 +762,7 @@ class MatchedPreStackFilter(PreStackFilter):
                     fill_value=0.0,
                     preserve_nan=True,
                 )
-            out.append(PipelineOutput(sci_arr_filtered, po.destination_ext, model_arr=po.model_arr))
+            out.append(PipelineOutput(sci_arr_filtered, po.destination_exts, model_arr=po.model_arr))
         return out
 
 @dataclass
@@ -767,13 +773,15 @@ class ImageStackingResult:
 @xconf.config
 class ImageStack:
     combine : constants.CombineOperation = xconf.field(default=constants.CombineOperation.MEDIAN, help="How to combine image for stacking")
-    minimum_coverage_frac: float = xconf.field(default=0.2, help="Number of overlapping source frames covering a derotated frame pixel for it to be kept in the final image as a fraction of the total number of frames")
+    minimum_coverage: int = xconf.field(default=1, help="Number of overlapping source frames covering a derotated frame pixel for it to be kept in the final image")
+
 
     def execute(self, pipeline_outputs: list[PipelineOutput], angles: Optional[np.ndarray]) -> tuple[dict[str, ImageStackingResult], dict[str, list[PipelineOutput]]]:
         # group outputs by their destination extension
         outputs_by_ext = defaultdict(list)
         for po in pipeline_outputs:
-            outputs_by_ext[po.destination_ext].append(po)
+            for destination_ext in po.destination_exts:
+                outputs_by_ext[destination_ext].append(po)
         destination_images = {}
         for ext in outputs_by_ext:
             log.debug(f"Stacking {len(outputs_by_ext[ext])} outputs for {ext=}")
@@ -799,7 +807,7 @@ class ImageStack:
             # apply minimum coverage mask
             finite_elements_cube = np.isfinite(all_outputs_cube)
             coverage_count = np.sum(finite_elements_cube, axis=0)
-            coverage_mask = coverage_count > (finite_elements_cube.shape[0] * self.minimum_coverage_frac)
+            coverage_mask = coverage_count > self.minimum_coverage
             finim[~coverage_mask] = np.nan
             destination_images[ext] = ImageStackingResult(image=finim, coverage=coverage_count)
         return destination_images, outputs_by_ext
@@ -974,10 +982,12 @@ class StarlightSubtract:
     def execute(self, data : StarlightSubtractionData) -> StarlightSubtractResult:
         destination_exts = defaultdict(list)
         for pinput in data.inputs:
-            if len(destination_exts[pinput.destination_ext]):
-                if pinput.sci_arr.shape != destination_exts[pinput.destination_ext][0].sci_arr.shape:
-                    raise ValueError(f"Dimensions of current science array {pinput.sci_arr.shape=} mismatched with others. Use separate destination_ext settings for each input, or make them the same size.")
-            destination_exts[pinput.destination_ext].append(pinput)
+            for destination_ext in pinput.destination_exts:
+                if len(destination_exts[destination_ext]):
+                    if pinput.sci_arr.shape != destination_exts[destination_ext][0].sci_arr.shape:
+                        raise ValueError(f"Dimensions of current science array {pinput.sci_arr.shape=} mismatched with others. Use separate destination_ext settings for each input, or make them the same size.")
+
+                destination_exts[destination_ext].append(pinput)
         max_rank = data.max_rank()
         k_modes_values = self.k_modes.as_values(max_rank)
         log.debug(f"Estimation masks and data cubes imply max rank {max_rank}, implying {k_modes_values=} from {self.k_modes}")
@@ -1086,8 +1096,8 @@ class MeasureStarlightSubtraction:
             meas = StarlightSubtractionMeasurementSet(by_ext={})
             for ext in ssresult.modes[k_modes].destination_images:
                 pfresults : PostFilteringResults = ssresult.modes[k_modes].destination_images[ext]
-                coverage_mask = (pfresults.coverage_count / np.nanmax(pfresults.coverage_count)) > self.subtraction.image_stack.minimum_coverage_frac
-                log.debug(f"Measuring SNR from {np.count_nonzero(coverage_mask)} pixels with coverage > {self.subtraction.image_stack.minimum_coverage_frac}")
+                coverage_mask = pfresults.coverage_count > self.subtraction.image_stack.minimum_coverage
+                log.debug(f"Measuring SNR from {np.count_nonzero(coverage_mask)} pixels with coverage > {self.subtraction.image_stack.minimum_coverage}")
                 measurements = {}
                 for filter_name in POST_FILTER_NAMES:
                     filter_result : PostFilteringResult = getattr(pfresults, filter_name)
@@ -1141,3 +1151,213 @@ class MeasureStarlightSubtractionPipeline(MeasureStarlightSubtraction):
     def execute(self) -> StarlightSubtractionMeasurements:
         data = self.data.load()
         return super().execute(data)
+
+@xconf.config
+class SaveMeasuredStarlightSubtraction:
+    save_decomposition : bool = xconf.field(default=False, help="Whether to save data decomposition components as a FITS file")
+    save_residuals : bool = xconf.field(default=False, help="Whether to save starlight subtraction residuals as a FITS file")
+    save_inputs : bool = xconf.field(default=False, help="Whether to save input data (post-injection) and model as a FITS file")
+    save_unfiltered_images : bool = xconf.field(default=False, help="Whether to save stacked but unfiltered images")
+    save_pre_stack_filtered_images : bool = xconf.field(default=False, help="Whether to save image sequences that have been filtered before being stacked")
+    save_post_filtering_images : bool = xconf.field(default=False, help="Whether to save stacked and post-filtering images")
+    save_coverage_map : bool = xconf.field(default=False, help="Whether to save a coverage map counting the frames contributing to each pixel")
+    save_ds9_regions : bool = xconf.field(default=False, help="Whether to write a ds9 region file for the signal estimation pixels")
+
+    def execute(self, data : StarlightSubtractionData, measure_subtraction: MeasureStarlightSubtraction, destination : DirectoryConfig) -> StarlightSubtractionMeasurements:
+        if self.save_decomposition:
+            measure_subtraction.return_starlight_subtraction = True
+            measure_subtraction.subtraction.return_decomposition = True
+        if self.save_residuals:
+            measure_subtraction.return_starlight_subtraction = True
+            measure_subtraction.subtraction.return_residuals = True
+        if self.save_inputs:
+            measure_subtraction.return_starlight_subtraction = True
+            measure_subtraction.subtraction.return_inputs = True
+        if self.save_unfiltered_images:
+            measure_subtraction.return_starlight_subtraction = True
+        if self.save_post_filtering_images:
+            measure_subtraction.return_post_filtering_result = True
+        if self.save_ds9_regions:
+            measure_subtraction.return_post_filtering_result = True
+        if self.save_pre_stack_filtered_images:
+            if measure_subtraction.subtraction.pre_stack_filter is None:
+                raise RuntimeError("Must specify pre stack filter if saving images")
+            measure_subtraction.subtraction.return_pre_stack_filtered = True
+
+        output_filenames = {
+            'decomposition.fits': self.save_decomposition,
+            'residuals.fits': self.save_residuals,
+            'inputs.fits': self.save_inputs,
+            'unfiltered.fits': self.save_unfiltered_images,
+            'post_filtering.fits': self.save_post_filtering_images,
+            'pre_filtering.fits': self.save_pre_stack_filtered_images,
+            'coverage.fits': self.save_coverage_map,
+        }
+        destination.ensure_exists()
+        for fn, condition in output_filenames.items():
+            if condition and destination.exists(fn):
+                log.error(f"Output filename {fn} exists at {destination.join(fn)}")
+
+        res : StarlightSubtractionMeasurements = measure_subtraction.execute(data)
+        k_modes_values = list(res.by_modes.keys())
+        n_inputs = len(data.inputs)
+        output_dict = measure_subtraction.measurements_to_jsonable(res, k_modes_values)
+        log.debug(pformat(output_dict))
+        output_json = orjson.dumps(
+            output_dict,
+            option=orjson.OPT_NON_STR_KEYS | orjson.OPT_SERIALIZE_NUMPY | orjson.OPT_INDENT_2,
+        )
+        with destination.open_path('result.json', 'wb') as fh:
+            fh.write(output_json)
+
+        if self.save_unfiltered_images:
+            images_by_ext = {}
+            for k_modes in k_modes_values:
+                for ext, postfilteringresults in res.subtraction_result.modes[k_modes].destination_images.items():
+                    if ext not in images_by_ext:
+                        images_by_ext[ext] = []
+                    images_by_ext[ext].append(postfilteringresults.unfiltered_image)
+            for ext in images_by_ext:
+                unfilt_hdul = fits.HDUList([
+                    fits.PrimaryHDU(),
+                ])
+                unfilt_hdul[0].header['K_MODES'] = ','.join(map(str, k_modes_values))
+                unfilt_hdul.append(fits.ImageHDU(
+                    np.stack(images_by_ext[ext]),
+                    name=ext
+                ))
+            with destination.open_path('unfiltered.fits', 'wb') as fh:
+                unfilt_hdul.writeto(fh)
+
+        if self.save_pre_stack_filtered_images:
+            sci_arrays_by_output = [[] for i in range(n_inputs)]
+            for k_modes in k_modes_values:
+                for i in range(n_inputs):
+                    sci_arrays_by_output[i].append(
+                        res.subtraction_result.modes[k_modes].pre_stack_filtered[i].sci_arr
+                    )
+            prefilter_hdul = fits.HDUList([
+                fits.PrimaryHDU(),
+            ])
+            prefilter_hdul[0].header['K_MODES'] = ','.join(map(str, k_modes_values))
+            for i in range(n_inputs):
+                ext = f"PRE_STACK_FILTERED_{i:02}"
+                sci_array_stack = np.stack(sci_arrays_by_output[i])
+                prefilter_hdul.append(fits.ImageHDU(sci_array_stack, name=ext))
+            with destination.open_path('pre_stack_filtered.fits', 'wb') as fh:
+                prefilter_hdul.writeto(fh)
+
+        if self.save_coverage_map:
+            coverage_hdul = fits.HDUList([
+                fits.PrimaryHDU(),
+            ])
+            # coverage will be the same for all modes values, so pick
+            # the first one
+            for ext in res.by_modes[k_modes_values[0]].by_ext:
+                res_for_ext = res.by_modes[k_modes_values[0]].by_ext[ext]
+                coverage_count = res_for_ext.coverage_count
+                coverage_hdul.append(fits.ImageHDU(coverage_count, name=f"COVERAGE_{ext}"))
+            with destination.open_path(f"coverage.fits", "wb") as fh:
+                coverage_hdul.writeto(fh)
+
+        if self.save_post_filtering_images or self.save_ds9_regions:
+            images_by_filt_by_ext = {}
+            kernels_by_filt_by_ext = {}
+            for k_modes in k_modes_values:
+                for ext, ss_result_by_filter in res.by_modes[k_modes].by_ext.items():
+                    for filt_name in POST_FILTER_NAMES:
+                        ss_result : StarlightSubtractionMeasurement = getattr(ss_result_by_filter, filt_name)
+                        region_file_name = None
+                        if filt_name not in images_by_filt_by_ext:
+                            images_by_filt_by_ext[filt_name] = {}
+                            kernels_by_filt_by_ext[filt_name] = {}
+                        if ext not in images_by_filt_by_ext[filt_name]:
+                            images_by_filt_by_ext[filt_name][ext] = []
+                            kernels_by_filt_by_ext[filt_name][ext] = []
+                        images_by_filt_by_ext[filt_name][ext].append(ss_result.post_filtering_result.image)
+                        kernels_by_filt_by_ext[filt_name][ext].append(ss_result.post_filtering_result.kernel)
+                        if self.save_ds9_regions and region_file_name is None:
+                            from ..tasks import characterization, improc
+                            yc, xc = improc.arr_center(images_by_filt_by_ext[filt_name][ext][0])
+                            # ds9 is 1-indexed
+                            yc += 1
+                            xc += 1
+                            region_specs = ""
+                            kernel_diameter_px = ss_result.post_filtering_result.kernel_diameter_px
+                            for companion in data.companions:
+                                for idx, (x, y) in enumerate(characterization.simple_aperture_locations(
+                                    companion.r_px,
+                                    companion.pa_deg,
+                                    kernel_diameter_px,
+                                    measure_subtraction.exclude_nearest_apertures,
+                                    xcenter=xc, ycenter=yc
+                                )):
+                                    region_specs += f"circle({x},{y},{kernel_diameter_px / 2 if filt_name != 'none' else 0.5}) # color={'red' if idx == 0 else 'green'}\n"
+                            region_file_name = f"regions_{ext}_{filt_name}.reg"
+                            with destination.open_path(region_file_name, "wb") as fh:
+                                fh.write(region_specs.encode('utf8'))
+
+            postfilt_hdul = fits.HDUList([
+                fits.PrimaryHDU(),
+            ])
+            postfilt_hdul[0].header['K_MODES'] = ','.join(map(str, k_modes_values))
+            for filt_name in images_by_filt_by_ext:
+                for ext in images_by_filt_by_ext[filt_name]:
+                    postfilt_hdul.append(fits.ImageHDU(
+                        np.stack(images_by_filt_by_ext[filt_name][ext]),
+                        name=f"{ext}_{filt_name}",
+                    ))
+                    postfilt_hdul.append(fits.ImageHDU(
+                        np.stack(kernels_by_filt_by_ext[filt_name][ext]),
+                        name=f"{ext}_{filt_name}_KERNEL",
+                    ))
+
+            with destination.open_path(f'post_filtering.fits', 'wb') as fh:
+                postfilt_hdul.writeto(fh)
+
+        if measure_subtraction.return_starlight_subtraction:
+            if self.save_decomposition:
+                decomp = res.subtraction_result.decomposition
+                decomp_hdul = fits.HDUList([fits.PrimaryHDU(),])
+                decomp_hdul.append(fits.ImageHDU(decomp.mtx_u0, name='MTX_U0'))
+                decomp_hdul.append(fits.ImageHDU(decomp.diag_s0, name='DIAG_S0'))
+                decomp_hdul.append(fits.ImageHDU(decomp.mtx_v0, name='MTX_V0'))
+                with destination.open_path('decomposition.fits', 'wb') as fh:
+                    decomp_hdul.writeto(fh)
+            if self.save_residuals:
+                sci_arrays_by_output = [[] for i in range(n_inputs)]
+                model_arrays_by_output = [[] for i in range(n_inputs)]
+                for k_modes in k_modes_values:
+                    for i in range(n_inputs):
+                        sci_arrays_by_output[i].append(
+                            res.subtraction_result.modes[k_modes].pipeline_outputs[i].sci_arr
+                        )
+                        model_arrays_by_output[i].append(
+                            res.subtraction_result.modes[k_modes].pipeline_outputs[i].model_arr
+                        )
+                if self.save_residuals:
+                    resid_hdul = fits.HDUList([
+                        fits.PrimaryHDU(),
+                        fits.ImageHDU(np.array(k_modes_values, dtype=int), name="K_MODES_VALUES")
+                    ])
+                    for i in range(n_inputs):
+                        ext = f"RESID_{i:02}"
+                        model_ext = f"MODEL_RESID_{i:02}"
+                        sci_array_stack = np.stack(sci_arrays_by_output[i])
+                        model_array_stack = np.stack(model_arrays_by_output[i])
+                        resid_hdul.append(fits.ImageHDU(sci_array_stack, name=ext))
+                        resid_hdul.append(fits.ImageHDU(model_array_stack, name=model_ext))
+                    with destination.open_path('residuals.fits', 'wb') as fh:
+                        resid_hdul.writeto(fh)
+            if self.save_inputs:
+                inputs_hdul = fits.HDUList([
+                    fits.PrimaryHDU(),
+                ])
+                for i in range(n_inputs):
+                    ext = f"INPUT_{i:02}"
+                    model_ext = f"MODEL_INPUT_{i:02}"
+                    inputs_hdul.append(fits.ImageHDU(res.subtraction_result.pipeline_inputs[i].sci_arr, name=ext))
+                    inputs_hdul.append(fits.ImageHDU(res.subtraction_result.pipeline_inputs[i].model_arr, name=model_ext))
+                with destination.open_path('inputs.fits', 'wb') as fh:
+                    inputs_hdul.writeto(fh)
+        return res

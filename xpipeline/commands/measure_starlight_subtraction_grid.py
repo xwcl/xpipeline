@@ -11,6 +11,7 @@ from ..pipelines.new import (
     MeasureStarlightSubtraction, StarlightSubtractionData, KModesConfig,
     KModesFractionConfig, KModesValuesConfig, StarlightSubtractionDataConfig,
     StarlightSubtractionMeasurement, StarlightSubtractionFilterMeasurements,
+    SaveMeasuredStarlightSubtraction,
 )
 from ..constants import KlipStrategy
 from ..tasks import characterization
@@ -20,7 +21,10 @@ log = logging.getLogger(__name__)
 def _measure_subtraction_task(
     chunk: np.ndarray,
     measure_subtraction: MeasureStarlightSubtraction,
+    save_subtraction: SaveMeasuredStarlightSubtraction,
     data_config: StarlightSubtractionDataConfig,
+    destination: DirectoryConfig,
+    save_intermediates: bool = False
 ):
     # apply configuration for chunk points
     k_modes_requested = list(sorted(np.unique(chunk['k_modes_requested'])))
@@ -50,7 +54,12 @@ def _measure_subtraction_task(
     start = time.perf_counter()
     log.debug(f"Starting measure subtraction task at {start=}")
     data = data_config.load()
-    meas = measure_subtraction.execute(data)
+
+    if save_intermediates:
+        intermed_path = destination.join(f"chunk_{np.min(chunk['index'])}-{np.max(chunk['index'])}")
+        meas = save_subtraction.execute(data, measure_subtraction, destination=DirectoryConfig(path=intermed_path))
+    else:
+        meas = measure_subtraction.execute(data)
     elapsed = time.perf_counter() - start
     log.debug(f"Completed measure subtraction task in {elapsed} sec from {start=}")
 
@@ -98,6 +107,8 @@ class MeasureStarlightSubtractionGrid(BaseRayGrid):
         help="Ray distributed framework configuration"
     )
     measure_subtraction : MeasureStarlightSubtraction = xconf.field(help="")
+    save_subtraction : SaveMeasuredStarlightSubtraction = xconf.field(default_factory=SaveMeasuredStarlightSubtraction, help="")
+    save_intermediates : bool = xconf.field(default=False, help="Whether to run or skip the saving steps configured under 'save_subtraction'")
     data : StarlightSubtractionDataConfig = xconf.field(help="Starlight subtraction data")
     decimate_frames_by_values : list[float] = xconf.field(default_factory=lambda x: [1], help="Evaluate a grid at multiple decimation levels (taking every Nth frame)")
     ram_mb_for_decimation_values : Optional[list[float]] = xconf.field(default=None, help="Amount of RAM needed at each decimation level, omit to measure")
@@ -121,7 +132,8 @@ class MeasureStarlightSubtractionGrid(BaseRayGrid):
     def generate_grid(self) -> np.ndarray:
         destination_exts = set()
         for pinput in self.data.inputs:
-            destination_exts.add(pinput.destination_ext)
+            for destination_ext in pinput.destination_exts:
+                destination_exts.add(destination_ext)
         max_len_destination_ext = max(len(f) for f in destination_exts)
         filter_names = [
             'tophat',
@@ -206,10 +218,14 @@ class MeasureStarlightSubtractionGrid(BaseRayGrid):
         decimate_level_to_ram_bytes = {}
         if self.ram_mb_for_decimation_values is None:
             for decimate_level in np.unique(pending_tbl['decimate_frames_by']):
-                expensive_grid_points = pending_tbl[
-                    (pending_tbl['injected_scale'] != 0)
-                    & (pending_tbl['decimate_frames_by'] == decimate_level)
-                ]
+                expensive_mask = pending_tbl['decimate_frames_by'] == decimate_level
+                if np.count_nonzero(expensive_mask) == 0:
+                    log.debug(f"Skipping RAM use estimate for {decimate_level} because no points are pending")
+                    continue
+                need_injection_mask = pending_tbl['injected_scale'] != 0
+                if np.count_nonzero(expensive_mask & need_injection_mask):
+                    expensive_mask &= need_injection_mask
+                expensive_grid_points = pending_tbl[expensive_mask]
                 no_annulus_mask = expensive_grid_points['annulus_resel'] == 0
                 if np.count_nonzero(no_annulus_mask):
                     expensive_grid_points = expensive_grid_points[no_annulus_mask]
@@ -219,6 +235,7 @@ class MeasureStarlightSubtractionGrid(BaseRayGrid):
                 expensive_grid_point = expensive_grid_points[:1]
                 pending_modes_values = np.unique(pending_tbl['k_modes_requested'])
                 expensive_grid_chunk = np.repeat(expensive_grid_point, len(pending_modes_values))
+                expensive_grid_chunk['index'] = -1
                 expensive_grid_chunk['k_modes_requested'] = pending_modes_values
 
                 log.debug(f"Measure RAM requirement for {decimate_level=}...")
@@ -227,7 +244,10 @@ class MeasureStarlightSubtractionGrid(BaseRayGrid):
                     {},
                     expensive_grid_chunk,
                     self.measure_subtraction,
-                    self.data
+                    self.save_subtraction,
+                    self.data,
+                    self.destination,
+                    self.save_intermediates,
                 )
                 ram_requirement_bytes = ram_requirement_mb * 1024 * 1024
                 decimate_level_to_ram_bytes[int(decimate_level)] = ram_requirement_bytes
@@ -249,7 +269,10 @@ class MeasureStarlightSubtractionGrid(BaseRayGrid):
             ).remote(
                 chunk,
                 self.measure_subtraction,
+                self.save_subtraction,
                 self.data,
+                self.destination,
+                self.save_intermediates,
             )
             pending_refs.append(ref)
         return pending_refs

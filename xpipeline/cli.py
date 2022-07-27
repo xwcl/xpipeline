@@ -9,6 +9,7 @@ from .commands import (
     # copy_test,
     # local_klip,
     base,
+    save_measured_starlight_subtraction,
     update_headers,
     clio_split,
     clio_calibrate,
@@ -28,7 +29,6 @@ from .commands import (
     vapp_trap,
     summarize_grid,
     klipt_fm,
-    measure_starlight_subtraction,
     measure_starlight_subtraction_grid,
 )
 
@@ -58,7 +58,7 @@ COMMANDS = {
     vapp_trap.VappTrap,
     summarize_grid.SummarizeGrid,
     klipt_fm.KlipTFm,
-    measure_starlight_subtraction.MeasureStarlightSubtraction,
+    save_measured_starlight_subtraction.SaveMeasuredStarlightSubtraction,
     measure_starlight_subtraction_grid.MeasureStarlightSubtractionGrid,
 }
 

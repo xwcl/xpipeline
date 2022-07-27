@@ -59,8 +59,7 @@ class SummarizeGrid(InputCommand):
             log.debug("Applying SNR rescaling by azimuthal stddev of non-injected SNR measurements")
             grid_tbl = characterization.normalize_snr_for_grid(
                 grid_tbl,
-                r_px_colname=self.columns.r_px,
-                pa_deg_colname=self.columns.pa_deg,
+                group_by_colname=self.columns.r_px,
                 snr_colname=self.columns.snr,
                 injected_scale_colname=self.columns.injected_scale,
                 hyperparameter_colnames=self.columns.hyperparameters,
@@ -89,13 +88,16 @@ class SummarizeGrid(InputCommand):
                     mask &= (this_column <= val)
             else:
                 log.debug(f"Filtering on {column_key} == {this_filter}")
+                if isinstance(this_filter, str):
+                    this_filter = this_filter.encode('utf8')
                 mask &= (grid_df[column_key] == this_filter)
+                log.debug(f"Remaining rows = {np.count_nonzero(mask)}")
 
 
 
 
         limits_df, detections_df = characterization.summarize_grid(
-            grid_df,
+            grid_df[mask],
             r_px_colname=self.columns.r_px,
             pa_deg_colname=self.columns.pa_deg,
             snr_colname=self.columns.snr,

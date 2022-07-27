@@ -11,6 +11,7 @@ from numpy.lib.recfunctions import drop_fields, append_fields
 import numba
 from numba import njit
 import math
+from tqdm import tqdm
 from scipy.signal import fftconvolve
 from scipy.interpolate import griddata, interp1d
 
@@ -675,25 +676,26 @@ def detection_map_cube_from_table(tbl, coverage_mask, ring_px=3, **kwargs):
 
 def normalize_snr_for_grid(
     tbl,
-    r_px_colname : str,
-    pa_deg_colname : str,
+    group_by_colname : str,
     snr_colname : str,
     injected_scale_colname : str,
     hyperparameter_colnames : list[str],
 ):
     # retain the original SNR value to look at if we need it
-    tbl = append_fields(tbl, 'unnormalized_snr', tbl[snr_colname])
+    # it somehow got converted to masked_array, so np.array() changes it back
+    tbl = np.array(append_fields(np.ascontiguousarray(tbl), 'unnormalized_snr', tbl[snr_colname]))
+
     no_injection_mask = tbl[injected_scale_colname] == 0.0
     detections = tbl[no_injection_mask]
-    config_params = [r_px_colname, pa_deg_colname] + hyperparameter_colnames
+    config_params = [group_by_colname] + hyperparameter_colnames
     configurations = np.unique(detections[config_params])
-    for config in configurations:
+    for config in tqdm(configurations):
         mask = np.ones(len(tbl), dtype=bool)
         for colname in config_params:
             mask &= tbl[colname] == config[colname]
-        noise_factor = np.std(tbl[no_injection_mask & mask][snr_colname])
-        tbl[mask & ~no_injection_mask][snr_colname] /= noise_factor
-    return np.array(tbl)  # somehow got converted to masked_array, maybe by append_fields
+        noise_factor = np.nanstd(tbl[no_injection_mask & mask][snr_colname])
+        tbl[snr_colname][mask & ~no_injection_mask] = tbl[mask & ~no_injection_mask][snr_colname] / noise_factor
+    return tbl
 
 def summarize_grid(grid_df : pd.DataFrame,
                    r_px_colname : str,
@@ -703,7 +705,8 @@ def summarize_grid(grid_df : pd.DataFrame,
                    hyperparameter_colnames : list[str],
                    min_snr_for_injection=2):
     injections = grid_df[(grid_df[injected_scale_colname] > 0) & (grid_df[snr_colname] > min_snr_for_injection)].copy()
-
+    if len(injections) == 0:
+        raise ValueError(f"No rows in injections table after filtering for nonzero injection and {min_snr_for_injection=}")
     injections['contrast_limit_5sigma'] = injections[injected_scale_colname] / injections[snr_colname] * 5
     grouping_colnames = [r_px_colname, pa_deg_colname]
     grouping_colnames.extend(hyperparameter_colnames)
