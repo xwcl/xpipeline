@@ -360,6 +360,8 @@ def _calc_snr_mawet(signal, noises):
         if np.isfinite(noise):
             noise_total += noise
             num_noises += 1
+    if num_noises == 0:
+        return np.nan
     noise_avg = noise_total / num_noises
     numerator = signal - noise_avg
     # second pass thru to compute stddev now we have the noise avg
