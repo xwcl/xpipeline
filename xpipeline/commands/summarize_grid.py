@@ -37,7 +37,7 @@ class SummarizeGrid(InputCommand):
     wavelength_um : float = xconf.field(help="Wavelength in microns")
     primary_diameter_m : float = xconf.field(default=magellan.PRIMARY_MIRROR_DIAMETER.to(u.m).value)
     coverage_mask : FitsConfig = xconf.field(help="Mask image with 1s where pixels have observation coverage and 0 elsewhere")
-    min_snr_for_injection: float = xconf.field(default=5, help="Minimum SNR to recover in order to trust the 5sigma contrast value")
+    min_snr_for_injection: float = xconf.field(default=10, help="Minimum SNR to recover in order to trust the 5sigma contrast value")
     normalize_snrs: bool = xconf.field(default=False, help="Rescales the SNR values at a given radius by dividing by the stddev of all SNRs for that radius")
     filters : dict[str, FilterSpec] = xconf.field(default_factory=dict, help="Filter on column == value before grouping and summarizing")
 
@@ -53,17 +53,6 @@ class SummarizeGrid(InputCommand):
         grid_hdul = iofits.load_fits_from_path(self.input)
         grid_tbl = grid_hdul[self.ext].data
         log.info(f"Loaded {len(grid_tbl)} points for evaluation")
-
-
-        if self.normalize_snrs:
-            log.debug("Applying SNR rescaling by azimuthal stddev of non-injected SNR measurements")
-            grid_tbl = characterization.normalize_snr_for_grid(
-                grid_tbl,
-                group_by_colname=self.columns.r_px,
-                snr_colname=self.columns.snr,
-                injected_scale_colname=self.columns.injected_scale,
-                hyperparameter_colnames=self.columns.hyperparameters,
-            )
 
         grid_df = pd.DataFrame(grid_tbl)
         mask = np.ones(len(grid_df), dtype=bool)
@@ -93,11 +82,20 @@ class SummarizeGrid(InputCommand):
                 mask &= (grid_df[column_key] == this_filter)
                 log.debug(f"Remaining rows = {np.count_nonzero(mask)}")
 
+        grid_df = grid_df[mask]
 
-
+        if self.normalize_snrs:
+            log.debug("Applying SNR rescaling by azimuthal stddev of non-injected SNR measurements")
+            grid_tbl = characterization.normalize_snr_for_grid(
+                grid_tbl,
+                group_by_colname=self.columns.r_px,
+                snr_colname=self.columns.snr,
+                injected_scale_colname=self.columns.injected_scale,
+                hyperparameter_colnames=self.columns.hyperparameters,
+            )
 
         limits_df, detections_df = characterization.summarize_grid(
-            grid_df[mask],
+            grid_df,
             r_px_colname=self.columns.r_px,
             pa_deg_colname=self.columns.pa_deg,
             snr_colname=self.columns.snr,

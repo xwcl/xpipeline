@@ -699,40 +699,30 @@ def normalize_snr_for_grid(
         tbl[snr_colname][mask & ~no_injection_mask] = tbl[mask & ~no_injection_mask][snr_colname] / noise_factor
     return tbl
 
+
 def summarize_grid(grid_df : pd.DataFrame,
                    r_px_colname : str,
                    pa_deg_colname : str,
                    snr_colname : str,
                    injected_scale_colname : str,
                    hyperparameter_colnames : list[str],
-                   min_snr_for_injection=2):
-    injections = grid_df[(grid_df[injected_scale_colname] > 0) & (grid_df[snr_colname] > min_snr_for_injection)].copy()
+                   min_snr_for_injection: float):
+    injection_rows_mask = (grid_df[injected_scale_colname] > 0)
+    injections = grid_df[injection_rows_mask & (grid_df[snr_colname] > min_snr_for_injection)].copy()
+    detections = grid_df[~injection_rows_mask].copy()
+    detections.set_index([r_px_colname, pa_deg_colname])
     if len(injections) == 0:
         raise ValueError(f"No rows in injections table after filtering for nonzero injection and {min_snr_for_injection=}")
     injections['contrast_limit_5sigma'] = injections[injected_scale_colname] / injections[snr_colname] * 5
     grouping_colnames = [r_px_colname, pa_deg_colname]
-    grouping_colnames.extend(hyperparameter_colnames)
-    detections = grid_df[grid_df[injected_scale_colname] == 0].copy()
 
-    def interpolate_5sigma_contrast(grp):
-        rec = grp.iloc[:1].copy()
-        for colname in rec.columns:
-            if colname not in grouping_colnames and colname != 'contrast_limit_5sigma':
-                del rec[colname]
-        try:
-            rec['contrast_limit_5sigma'] = interp1d(grp[snr_colname], grp['contrast_limit_5sigma'])(5)
-        except ValueError:
-            rec['contrast_limit_5sigma'] = grp['contrast_limit_5sigma'].min()
-        return rec
-
-    injections_interpolated = injections.groupby(grouping_colnames).apply(interpolate_5sigma_contrast).reset_index(drop = True) #, inplace = True)
-    best_params : pd.DataFrame = injections_interpolated.groupby(
+    best_params : pd.DataFrame = injections.groupby(
         by=[r_px_colname, pa_deg_colname],
     ).apply(
-        lambda grp: grp[grp['contrast_limit_5sigma'] == grp['contrast_limit_5sigma'].min()]
+        lambda grp: grp[grp['contrast_limit_5sigma'] == grp['contrast_limit_5sigma'].min()].iloc[:1]
     ).droplevel([r_px_colname, pa_deg_colname])
 
-    detections = best_params.merge(detections)
+    detections = best_params.merge(detections, on=grouping_colnames + hyperparameter_colnames, suffixes=('_best', None))
     return best_params, detections
 
 def apparent_mag(absolute_mag, d):
