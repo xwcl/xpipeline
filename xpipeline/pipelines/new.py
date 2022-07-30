@@ -1160,6 +1160,7 @@ class SaveMeasuredStarlightSubtraction:
     save_unfiltered_images : bool = xconf.field(default=False, help="Whether to save stacked but unfiltered images")
     save_pre_stack_filtered_images : bool = xconf.field(default=False, help="Whether to save image sequences that have been filtered before being stacked")
     save_post_filtering_images : bool = xconf.field(default=False, help="Whether to save stacked and post-filtering images")
+    save_filter_kernels : bool = xconf.field(default=False, help="Save matched filter kernels")
     save_coverage_map : bool = xconf.field(default=False, help="Whether to save a coverage map counting the frames contributing to each pixel")
     save_ds9_regions : bool = xconf.field(default=False, help="Whether to write a ds9 region file for the signal estimation pixels")
 
@@ -1175,7 +1176,7 @@ class SaveMeasuredStarlightSubtraction:
             measure_subtraction.subtraction.return_inputs = True
         if self.save_unfiltered_images:
             measure_subtraction.return_starlight_subtraction = True
-        if self.save_post_filtering_images:
+        if self.save_post_filtering_images or self.save_filter_kernels:
             measure_subtraction.return_post_filtering_result = True
         if self.save_ds9_regions:
             measure_subtraction.return_post_filtering_result = True
@@ -1190,6 +1191,7 @@ class SaveMeasuredStarlightSubtraction:
             'inputs.fits': self.save_inputs,
             'unfiltered.fits': self.save_unfiltered_images,
             'post_filtering.fits': self.save_post_filtering_images,
+            'filter_kernels.fits': self.save_filter_kernels,
             'pre_filtering.fits': self.save_pre_stack_filtered_images,
             'coverage.fits': self.save_coverage_map,
         }
@@ -1210,18 +1212,18 @@ class SaveMeasuredStarlightSubtraction:
         with destination.open_path('result.json', 'wb') as fh:
             fh.write(output_json)
 
+        images_by_ext = {}
+        for k_modes in k_modes_values:
+            for ext, postfilteringresults in res.subtraction_result.modes[k_modes].destination_images.items():
+                if ext not in images_by_ext:
+                    images_by_ext[ext] = []
+                images_by_ext[ext].append(postfilteringresults.unfiltered_image)
         if self.save_unfiltered_images:
-            images_by_ext = {}
-            for k_modes in k_modes_values:
-                for ext, postfilteringresults in res.subtraction_result.modes[k_modes].destination_images.items():
-                    if ext not in images_by_ext:
-                        images_by_ext[ext] = []
-                    images_by_ext[ext].append(postfilteringresults.unfiltered_image)
+            unfilt_hdul = fits.HDUList([
+                fits.PrimaryHDU(),
+            ])
+            unfilt_hdul[0].header['K_MODES'] = ','.join(map(str, k_modes_values))
             for ext in images_by_ext:
-                unfilt_hdul = fits.HDUList([
-                    fits.PrimaryHDU(),
-                ])
-                unfilt_hdul[0].header['K_MODES'] = ','.join(map(str, k_modes_values))
                 unfilt_hdul.append(fits.ImageHDU(
                     np.stack(images_by_ext[ext]),
                     name=ext
@@ -1260,7 +1262,7 @@ class SaveMeasuredStarlightSubtraction:
             with destination.open_path(f"coverage.fits", "wb") as fh:
                 coverage_hdul.writeto(fh)
 
-        if self.save_post_filtering_images or self.save_ds9_regions:
+        if self.save_post_filtering_images or self.save_ds9_regions or self.save_filter_kernels:
             images_by_filt_by_ext = {}
             kernels_by_filt_by_ext = {}
             for k_modes in k_modes_values:
@@ -1297,23 +1299,40 @@ class SaveMeasuredStarlightSubtraction:
                             with destination.open_path(region_file_name, "wb") as fh:
                                 fh.write(region_specs.encode('utf8'))
 
-            postfilt_hdul = fits.HDUList([
-                fits.PrimaryHDU(),
-            ])
-            postfilt_hdul[0].header['K_MODES'] = ','.join(map(str, k_modes_values))
-            for filt_name in images_by_filt_by_ext:
-                for ext in images_by_filt_by_ext[filt_name]:
-                    postfilt_hdul.append(fits.ImageHDU(
-                        np.stack(images_by_filt_by_ext[filt_name][ext]),
-                        name=f"{ext}_{filt_name}",
-                    ))
-                    postfilt_hdul.append(fits.ImageHDU(
-                        np.stack(kernels_by_filt_by_ext[filt_name][ext]),
-                        name=f"{ext}_{filt_name}_KERNEL",
-                    ))
 
-            with destination.open_path(f'post_filtering.fits', 'wb') as fh:
-                postfilt_hdul.writeto(fh)
+            if self.save_post_filtering_images:
+                postfilt_hdul = fits.HDUList([
+                    fits.PrimaryHDU(),
+                ])
+                postfilt_hdul[0].header['K_MODES'] = ','.join(map(str, k_modes_values))
+                for ext in images_by_ext:
+                    postfilt_hdul.append(fits.ImageHDU(
+                        images_by_ext[ext],
+                        name=f"{ext}",
+                    ))
+                    for filt_name in images_by_filt_by_ext:
+                        postfilt_hdul.append(fits.ImageHDU(
+                            np.stack(images_by_filt_by_ext[filt_name][ext]),
+                            name=f"{ext}_{filt_name}",
+                        ))
+                with destination.open_path(f'post_filtering.fits', 'wb') as fh:
+                    postfilt_hdul.writeto(fh)
+
+            if self.save_filter_kernels:
+                kernels_hdul = fits.HDUList([
+                    fits.PrimaryHDU(),
+                ])
+                kernels_hdul[0].header['K_MODES'] = ','.join(map(str, k_modes_values))
+                for filt_name in images_by_filt_by_ext:
+                    for ext in images_by_filt_by_ext[filt_name]:
+                        kernels_hdul.append(fits.ImageHDU(
+                            np.stack(kernels_by_filt_by_ext[filt_name][ext]),
+                            name=f"{ext}_{filt_name}_KERNEL",
+                        ))
+                with destination.open_path(f'filter_kernels.fits', 'wb') as fh:
+                    kernels_hdul.writeto(fh)
+
+
 
         if measure_subtraction.return_starlight_subtraction:
             if self.save_decomposition:
