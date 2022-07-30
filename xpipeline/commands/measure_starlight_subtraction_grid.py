@@ -110,7 +110,7 @@ class MeasureStarlightSubtractionGrid(BaseRayGrid):
     save_subtraction : SaveMeasuredStarlightSubtraction = xconf.field(default_factory=SaveMeasuredStarlightSubtraction, help="")
     save_intermediates : bool = xconf.field(default=False, help="Whether to run or skip the saving steps configured under 'save_subtraction'")
     data : StarlightSubtractionDataConfig = xconf.field(help="Starlight subtraction data")
-    decimate_frames_by_values : list[float] = xconf.field(default_factory=lambda x: [1], help="Evaluate a grid at multiple decimation levels (taking every Nth frame)")
+    decimate_frames_by_values : list[float] = xconf.field(default_factory=lambda: [1], help="Evaluate a grid at multiple decimation levels (taking every Nth frame)")
     ram_mb_for_decimation_values : Optional[list[float]] = xconf.field(default=None, help="Amount of RAM needed at each decimation level, omit to measure")
     sampling : SamplingConfig = xconf.field(help="")
     included_annuli_resel : list[float] = xconf.field(
