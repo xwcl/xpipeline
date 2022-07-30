@@ -65,14 +65,19 @@ def _measure_subtraction_task(
 
     # update chunk entries with measurements
     k_modes_chosen = list(sorted(meas.by_modes.keys()))
+    if len(k_modes_chosen) != len(k_modes_requested):
+        raise RuntimeError(f"Got {k_modes_chosen=} for {k_modes_requested=}")
     chunk = chunk.copy()
     chunk['time_total_sec'] = elapsed / len(chunk)   # at the end, column should add up to total execution time
     for idx in range(len(chunk)):
         k_modes_for_row = chunk[idx]['k_modes_requested']
-        for k_modes_idx in range(len(k_modes_requested)):
+        k_modes_chosen_for_row = None
+        for k_modes_idx in range(len(k_modes_chosen)):
             if k_modes_for_row == k_modes_requested[k_modes_idx]:
                 k_modes_chosen_for_row = k_modes_chosen[k_modes_idx]
                 break
+        if k_modes_chosen_for_row is None:
+            raise ValueError(f"Got {k_modes_chosen=} for {k_modes_requested=} and {k_modes_spec=} but couldn't match them up")
         chunk[idx]['k_modes_chosen'] = k_modes_chosen_for_row
         ext = chunk[idx]['ext'].decode('utf8')
         filter_name = chunk[idx]['filter_name'].decode('utf8')
