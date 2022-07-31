@@ -595,6 +595,7 @@ class StarlightSubtractModesResult:
     destination_images : dict[str, PostFilteringResults]
     pipeline_outputs : Optional[list[PipelineOutput]]
     pre_stack_filtered : Optional[list[PipelineOutput]]
+    modes_requested : Union[int, float]
 
 @xconf.config
 class PrecomputedDecompositionConfig:
@@ -667,20 +668,22 @@ class StarlightSubtractionDataConfig:
 class KModesValuesConfig:
     values: list[int] = xconf.field(help="Which values to try for number of modes to subtract")
 
-    def as_values(self, max_rank: int):
-        values = [x for x in self.values if x < max_rank]
+    def as_request_value_pairs(self, max_rank: int):
+        '''Returns (value, value) pairs for each entry in `values` that's < max_rank'''
+        values = [(x, x) for x in self.values if x < max_rank]
         if not len(values):
             raise ValueError(f"Given {max_rank=}, no valid values from {self.values}")
         return values
 
 @xconf.config
 class KModesFractionConfig:
-    fractions: list[float] = xconf.field(default_factory=lambda: [0.1], help="Which values to try for number of modes to subtract")
+    fractions: list[float] = xconf.field(default_factory=lambda: [0.1], help="Fraction of the maximum number of modes to subtract in (0, 1.0)")
 
-    def as_values(self, max_rank: int):
+    def as_request_value_pairs(self, max_rank: int):
+        '''Returns (requested fraction, actual value) pairs for each entry in `fractions`'''
         if any(x >= 1.0 for x in self.fractions):
             raise ValueError(f"Invalid fractions in config: {self.fractions} (must be 0 < x < 1)")
-        values = [int(x * max_rank) for x in self.fractions]
+        values = [(x, int(x * max_rank)) for x in self.fractions]
         return values
 
 KModesConfig = Union[KModesValuesConfig,KModesFractionConfig]
@@ -989,12 +992,12 @@ class StarlightSubtract:
 
                 destination_exts[destination_ext].append(pinput)
         max_rank = data.max_rank()
-        k_modes_values = self.k_modes.as_values(max_rank)
-        log.debug(f"Estimation masks and data cubes imply max rank {max_rank}, implying {k_modes_values=} from {self.k_modes}")
+        k_modes_requested_and_values = self.k_modes.as_request_value_pairs(max_rank)
+        log.debug(f"Estimation masks and data cubes imply max rank {max_rank}, implying {k_modes_requested_and_values=} from {self.k_modes}")
         decomp = data.initial_decomposition
 
         if decomp is None:
-            max_k_modes = max(k_modes_values)
+            max_k_modes = max(val for _, val in k_modes_requested_and_values)
             log.debug(f"Computing basis with {max_k_modes=}")
             decomp = self.strategy.prepare(
                 data,
@@ -1003,8 +1006,8 @@ class StarlightSubtract:
             )
 
         results_for_modes = {}
-        for mode_idx, k_modes in enumerate(k_modes_values):
-            log.debug(f"Subtracting starlight for modes value k={k_modes} ({mode_idx+1}/{len(k_modes_values)})")
+        for mode_idx, (k_modes_requested, k_modes) in enumerate(k_modes_requested_and_values):
+            log.debug(f"Subtracting starlight for modes value k={k_modes} ({mode_idx+1}/{len(k_modes_requested_and_values)})")
             res = self.strategy.execute(
                 data,
                 k_modes,
@@ -1045,6 +1048,7 @@ class StarlightSubtract:
                 destination_images=post_filtered_image_results,
                 pre_stack_filtered=filtered_outputs if (self.pre_stack_filter and self.return_pre_stack_filtered) else None,
                 pipeline_outputs=pipeline_outputs if self.return_residuals else None,
+                modes_requested=k_modes_requested,
             )
             results_for_modes[k_modes] = res
 
@@ -1073,6 +1077,7 @@ class StarlightSubtractionMeasurements:
     companion : CompanionSpec
     by_modes: dict[int,StarlightSubtractionMeasurementSet]
     subtraction_result : Optional[StarlightSubtractResult]
+    modes_chosen_to_requested_lookup : dict[int, Union[int, float]]
 
 @xconf.config
 class MeasureStarlightSubtraction:
@@ -1091,6 +1096,7 @@ class MeasureStarlightSubtraction:
             companion=companion,
             by_modes={},
             subtraction_result=ssresult if self.return_starlight_subtraction else None,
+            modes_chosen_to_requested_lookup={}
         )
         for k_modes in ssresult.modes:
             meas = StarlightSubtractionMeasurementSet(by_ext={})
@@ -1122,6 +1128,7 @@ class MeasureStarlightSubtraction:
                 )
                 meas.by_ext[ext] = measurements
             result.by_modes[k_modes] = meas
+            result.modes_chosen_to_requested_lookup[k_modes] = ssresult.modes[k_modes].modes_requested
         return result
 
     def measurements_to_jsonable(self, res : StarlightSubtractionMeasurements, k_modes_values):
