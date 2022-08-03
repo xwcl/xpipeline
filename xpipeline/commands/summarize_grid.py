@@ -38,7 +38,7 @@ class SummarizeGrid(InputCommand):
     primary_diameter_m : float = xconf.field(default=magellan.PRIMARY_MIRROR_DIAMETER.to(u.m).value)
     coverage_mask : FitsConfig = xconf.field(help="Mask image with 1s where pixels have observation coverage and 0 elsewhere")
     min_snr_for_injection: float = xconf.field(default=10, help="Minimum SNR to recover in order to trust the 5sigma contrast value")
-    normalize_snrs: bool = xconf.field(default=False, help="Rescales the SNR values at a given radius by dividing by the stddev of all SNRs for that radius")
+    normalize_snrs: Union[bool, list[str]] = xconf.field(default=False, help="Rescales the SNR values at a given radius by dividing by the stddev of all SNRs for that radius, if given as list of str, is used as names of grouping params")
     filters : dict[str, FilterSpec] = xconf.field(default_factory=dict, help="Filter on column == value before grouping and summarizing")
 
     def main(self):
@@ -80,18 +80,22 @@ class SummarizeGrid(InputCommand):
                 if isinstance(this_filter, str):
                     this_filter = this_filter.encode('utf8')
                 mask &= (grid_df[column_key] == this_filter)
-                log.debug(f"Remaining rows = {np.count_nonzero(mask)}")
+            log.debug(f"Remaining rows = {np.count_nonzero(mask)}")
 
         grid_df = grid_df[mask]
 
         if self.normalize_snrs:
             log.debug("Applying SNR rescaling by azimuthal stddev of non-injected SNR measurements")
+            if isinstance(self.normalize_snrs, list):
+                extra_grouping_colnames = self.normalize_snrs
+            else:
+                extra_grouping_colnames = self.columns.hyperparameters
             grid_tbl = characterization.normalize_snr_for_grid(
                 grid_tbl,
                 group_by_colname=self.columns.r_px,
                 snr_colname=self.columns.snr,
                 injected_scale_colname=self.columns.injected_scale,
-                hyperparameter_colnames=self.columns.hyperparameters,
+                hyperparameter_colnames=extra_grouping_colnames,
             )
 
         limits_df, detections_df = characterization.summarize_grid(
