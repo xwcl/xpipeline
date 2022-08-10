@@ -150,7 +150,6 @@ class PipelineInput:
 class StarlightSubtractionData:
     inputs : list[PipelineInput]
     angles : np.ndarray
-    initial_decomposition : learning.PrecomputedDecomposition
     companions : list[CompanionSpec]
 
     def max_rank(self):
@@ -620,14 +619,13 @@ class StarlightSubtractResult:
 class StarlightSubtractionDataConfig:
     inputs : list[PipelineInputConfig] = xconf.field(help="Input data to simultaneously reduce")
     angles : Union[FitsConfig,FitsTableColumnConfig] = xconf.field(help="1-D array or table column of derotation angles")
-    initial_decomposition : Optional[PrecomputedDecompositionConfig] = xconf.field(default=None, help="Initial decomposition of the data to reuse")
     decimate_frames_by : int = xconf.field(default=1, help="Keep every Nth frame")
     decimate_frames_offset : int = xconf.field(default=0, help="Slice to begin decimation at this frame")
-    companion : CompanionConfig = xconf.field(default=CompanionConfig(r_px=30, pa_deg=0, scale=0), help="Companion amplitude and location to inject (scale 0 for no injection) and probe")
+    companions : list[CompanionConfig] = xconf.field(default_factory=lambda: [CompanionConfig(r_px=30, pa_deg=0, scale=0)], help="Companion amplitude and location to inject (scale 0 for no injection) and probe")
 
     def load(self) -> StarlightSubtractionData:
         angles = self.angles.load()[self.decimate_frames_offset::self.decimate_frames_by]
-        companion = self.companion.to_companionspec()
+        companions = [companion.to_companionspec() for companion in self.companions]
         model_gen_sec = 0
         pipeline_inputs = []
         for pinputconfig in self.inputs:
@@ -638,30 +636,27 @@ class StarlightSubtractionDataConfig:
             if pinput.model_inputs.scale_factors is not None:
                 pinput.sci_arr /= pinput.model_inputs.scale_factors[self.decimate_frames_offset::self.decimate_frames_by, np.newaxis, np.newaxis]
             ts = time.time()
-            pinput.model_arr = generate_signal(
-                pinput.sci_arr.shape,
-                companion.r_px,
-                companion.pa_deg,
-                pinput.model_inputs.arr,
-                angles,
-                # pinput.model_inputs.scale_factors[::self.decimate_frames_by],
-            )
+            pinput.model_arr = np.zeros_like(pinput.sci_arr)
+            for companion in companions:
+                one_model_arr = generate_signal(
+                    pinput.sci_arr.shape,
+                    companion.r_px,
+                    companion.pa_deg,
+                    pinput.model_inputs.arr,
+                    angles,
+                )
+                pinput.model_arr += one_model_arr
+                if companion.scale != 0:
+                    pinput.sci_arr += companion.scale * one_model_arr
             dt = time.time() - ts
             model_gen_sec += dt
-            if companion.scale != 0:
-                pinput.sci_arr += companion.scale * pinput.model_arr
             pipeline_inputs.append(pinput)
         log.debug("Spent %f seconds in model generation", model_gen_sec)
 
-        if self.initial_decomposition is not None:
-            initial_decomposition = self.initial_decomposition.load()
-        else:
-            initial_decomposition = None
         return StarlightSubtractionData(
             inputs=pipeline_inputs,
             angles=angles,
-            initial_decomposition=initial_decomposition,
-            companions=[companion]
+            companions=companions,
         )
 
 @xconf.config
@@ -937,12 +932,17 @@ def signal_from_filter(img, mf):
 class StarlightSubtractionMeasurement:
     signal : float
     snr : float
+    companion_spec : CompanionSpec
+
+@dataclass
+class StarlightSubtractionFilterMeasurement:
+    locations : list[StarlightSubtractionMeasurement]
     post_filtering_result : Optional[PostFilteringResult]
 
 @dataclass
 class StarlightSubtractionFilterMeasurements:
-    tophat : StarlightSubtractionMeasurement
-    matched : StarlightSubtractionMeasurement
+    tophat : StarlightSubtractionFilterMeasurement
+    matched : StarlightSubtractionFilterMeasurement
     coverage_count : np.ndarray
     unfiltered_image : np.ndarray
 
@@ -994,16 +994,14 @@ class StarlightSubtract:
         max_rank = data.max_rank()
         k_modes_requested_and_values = self.k_modes.as_request_value_pairs(max_rank)
         log.debug(f"Estimation masks and data cubes imply max rank {max_rank}, implying {k_modes_requested_and_values=} from {self.k_modes}")
-        decomp = data.initial_decomposition
 
-        if decomp is None:
-            max_k_modes = max(val for _, val in k_modes_requested_and_values)
-            log.debug(f"Computing basis with {max_k_modes=}")
-            decomp = self.strategy.prepare(
-                data,
-                max_k_modes,
-                angles=data.angles,
-            )
+        max_k_modes = max(val for _, val in k_modes_requested_and_values)
+        log.debug(f"Computing basis with {max_k_modes=}")
+        decomp = self.strategy.prepare(
+            data,
+            max_k_modes,
+            angles=data.angles,
+        )
 
         results_for_modes = {}
         for mode_idx, (k_modes_requested, k_modes) in enumerate(k_modes_requested_and_values):
@@ -1074,7 +1072,7 @@ class StarlightSubtractionMeasurementSet:
 
 @dataclass
 class StarlightSubtractionMeasurements:
-    companion : CompanionSpec
+    companions : list[CompanionSpec]
     by_modes: dict[int,StarlightSubtractionMeasurementSet]
     subtraction_result : Optional[StarlightSubtractResult]
     modes_chosen_to_requested_lookup : dict[int, Union[int, float]]
@@ -1091,9 +1089,8 @@ class MeasureStarlightSubtraction:
         self, data : StarlightSubtractionData
     ) -> StarlightSubtractionMeasurements:
         ssresult : StarlightSubtractResult = self.subtraction.execute(data)
-        companion = data.companions[0]
         result = StarlightSubtractionMeasurements(
-            companion=companion,
+            companions=data.companions,
             by_modes={},
             subtraction_result=ssresult if self.return_starlight_subtraction else None,
             modes_chosen_to_requested_lookup={}
@@ -1106,19 +1103,25 @@ class MeasureStarlightSubtraction:
                 log.debug(f"Measuring SNR from {np.count_nonzero(coverage_mask)} pixels with coverage > {self.subtraction.image_stack.minimum_coverage}")
                 measurements = {}
                 for filter_name in POST_FILTER_NAMES:
+                    companion_measurements = []
                     filter_result : PostFilteringResult = getattr(pfresults, filter_name)
-                    snr, signal = snr_from_convolution(
-                        filter_result.image,
-                        loc_rho=companion.r_px,
-                        loc_pa_deg=companion.pa_deg,
-                        aperture_diameter_px=filter_result.kernel_diameter_px,
-                        exclude_nearest=self.exclude_nearest_apertures,
-                        good_pixel_mask=coverage_mask,
-                    )
-
-                    measurements[filter_name] = StarlightSubtractionMeasurement(
-                        signal=signal,
-                        snr=snr,
+                    for companion in data.companions:
+                        snr, signal = snr_from_convolution(
+                            filter_result.image,
+                            loc_rho=companion.r_px,
+                            loc_pa_deg=companion.pa_deg,
+                            aperture_diameter_px=filter_result.kernel_diameter_px,
+                            exclude_nearest=self.exclude_nearest_apertures,
+                            good_pixel_mask=coverage_mask,
+                        )
+                        cm = StarlightSubtractionMeasurement(
+                            signal=signal,
+                            snr=snr,
+                            companion_spec=companion,
+                        )
+                        companion_measurements.append(cm)
+                    measurements[filter_name] = StarlightSubtractionFilterMeasurement(
+                        locations=companion_measurements,
                         post_filtering_result=filter_result if self.return_post_filtering_result else None,
                     )
                 measurements = StarlightSubtractionFilterMeasurements(
@@ -1220,11 +1223,12 @@ class SaveMeasuredStarlightSubtraction:
             fh.write(output_json)
 
         images_by_ext = {}
-        for k_modes in k_modes_values:
-            for ext, postfilteringresults in res.subtraction_result.modes[k_modes].destination_images.items():
-                if ext not in images_by_ext:
-                    images_by_ext[ext] = []
-                images_by_ext[ext].append(postfilteringresults.unfiltered_image)
+        if self.save_post_filtering_images or self.save_unfiltered_images:
+            for k_modes in k_modes_values:
+                for ext, postfilteringresults in res.by_modes[k_modes].by_ext.items():
+                    if ext not in images_by_ext:
+                        images_by_ext[ext] = []
+                    images_by_ext[ext].append(postfilteringresults.unfiltered_image)
         if self.save_unfiltered_images:
             unfilt_hdul = fits.HDUList([
                 fits.PrimaryHDU(),

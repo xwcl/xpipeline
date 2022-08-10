@@ -50,11 +50,11 @@ def test_klip_pipeline(naco_betapic_data, strategy_cls, snr_threshold):
     data_config = StarlightSubtractionDataConfig(
         inputs=[input_config],
         angles=PreloadedArray(angles),
-        companion=CompanionConfig(
+        companions=[CompanionConfig(
             r_px=r_px,
             pa_deg=pa_deg,
             scale=0.0,
-        ),
+        )],
     )
     aperture_diameter_px = 4
     k_modes_values = [5]
@@ -101,11 +101,11 @@ def test_measure_starlight_subtraction_pipeline(naco_betapic_data, strategy_cls,
     data_config = StarlightSubtractionDataConfig(
         inputs=[input_config],
         angles=PreloadedArray(angles),
-        companion=CompanionConfig(
+        companions=[CompanionConfig(
             r_px=r_px,
             pa_deg=pa_deg,
             scale=0.0,
-        ),
+        )],
     )
     aperture_diameter_px = 4
     k_modes_values = [5]
@@ -121,7 +121,7 @@ def test_measure_starlight_subtraction_pipeline(naco_betapic_data, strategy_cls,
     )
     result: StarlightSubtractionMeasurements = pl.execute()
 
-    snr = result.by_modes[k_modes_values[0]].by_ext["finim"].tophat.snr
+    snr = result.by_modes[k_modes_values[0]].by_ext["finim"].tophat.locations[0].snr
     finim = result.by_modes[k_modes_values[0]].by_ext["finim"].unfiltered_image
     recalc_snr = calculate_snr(
         finim,
@@ -153,11 +153,11 @@ def test_klipt_annular_exclusion(naco_betapic_data):
     data_config = StarlightSubtractionDataConfig(
         inputs=[input_config],
         angles=PreloadedArray(angles),
-        companion=CompanionConfig(
+        companions=[CompanionConfig(
             r_px=r_px,
             pa_deg=pa_deg,
             scale=0.0,
-        ),
+        )],
     )
     aperture_diameter_px = 4
     k_modes_values = [5]
@@ -174,7 +174,7 @@ def test_klipt_annular_exclusion(naco_betapic_data):
         subtraction=subtraction,
     )
     result: StarlightSubtractionMeasurements = pl.execute()
-    snr = result.by_modes[k_modes_values[0]].by_ext["finim"].tophat.snr
+    snr = result.by_modes[k_modes_values[0]].by_ext["finim"].tophat.locations[0].snr
     finim = result.by_modes[k_modes_values[0]].by_ext["finim"].unfiltered_image
     recalc_snr = calculate_snr(
         finim,
@@ -187,14 +187,14 @@ def test_klipt_annular_exclusion(naco_betapic_data):
     assert snr > 27, "True detection SNR too low"
     for i in range(5):
         subtraction.strategy.excluded_annulus_width_px = 8
-        data_config.companion.pa_deg += 30
+        data_config.companions[0].pa_deg += 30
         result: StarlightSubtractionMeasurements = pl.execute()
-        snr = result.by_modes[k_modes_values[0]].by_ext["finim"].tophat.snr
+        snr = result.by_modes[k_modes_values[0]].by_ext["finim"].tophat.locations[0].snr
         finim = result.by_modes[k_modes_values[0]].by_ext["finim"].unfiltered_image
         recalc_snr = calculate_snr(
             finim,
-            data_config.companion.r_px,
-            data_config.companion.pa_deg,
+            data_config.companions[0].r_px,
+            data_config.companions[0].pa_deg,
             aperture_diameter_px,
             exclude_nearest=1,
         )
