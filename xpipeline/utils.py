@@ -206,3 +206,12 @@ def convert_obj_cols_to_str(arr):
         arr = drop_fields(arr, names)
         arr = append_fields(arr, names, cols)
     return arr
+
+def compute_chunk_slices(n_total, per_chunk, chunk_stride):
+    slices = []
+    cursor = 0
+    while cursor < n_total:
+        end = min(cursor + per_chunk, n_total)
+        slices.append(slice(cursor, end))
+        cursor += chunk_stride
+    return slices

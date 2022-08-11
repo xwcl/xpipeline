@@ -759,6 +759,32 @@ def regrid_image(image, x_prime, y_prime, method="cubic", mask=None, fill_value=
     return new_image
 
 
+def downsample_first_axis(data, chunk_size, operation: constants.CombineOperation):
+    '''Downsample chunks of `chunk_size` along axis 0 with median combination'''
+    if operation is constants.CombineOperation.MEAN:
+        op_ufunc = np.nanmean
+    elif operation is constants.CombineOperation.SUM:
+        op_ufunc = np.nansum
+    elif operation is constants.CombineOperation.MEDIAN:
+        op_ufunc = np.nanmedian
+    else:
+        raise ValueError("Supported operations: sum, mean, median")
+    ndata = data.shape[0]
+    nchunks = ndata // chunk_size
+    if ndata % chunk_size != 0:
+        nchunks += 1
+    output = np.zeros((nchunks,) + data.shape[1:])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        for chunk_idx in range(nchunks):
+            if (chunk_idx + 1) * chunk_size > ndata:
+                chunk = data[chunk_idx * chunk_size:]
+                output[chunk_idx] = op_ufunc(chunk, axis=0)
+            else:
+                chunk = data[chunk_idx * chunk_size:(chunk_idx + 1) * chunk_size]
+                output[chunk_idx] = op_ufunc(chunk, axis=0)
+    return output
+
 def encircled_energy_and_profile(
     data : np.ndarray,
     center : tuple[float, float],

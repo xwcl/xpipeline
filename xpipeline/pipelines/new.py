@@ -152,6 +152,26 @@ class StarlightSubtractionData:
     angles : np.ndarray
     companions : list[CompanionSpec]
 
+    def from_slice(self, the_slice):
+        new_inputs = []
+        for pi in self.inputs:
+            new_inputs.append(PipelineInput(
+                sci_arr=pi.sci_arr[the_slice],
+                model_arr=pi.model_arr[the_slice],
+                destination_exts=pi.destination_exts,
+                estimation_mask=pi.estimation_mask,
+                combination_mask=pi.combination_mask,
+                model_inputs=pi.model_inputs
+            ))
+        return self.__class__(
+            inputs=new_inputs,
+            angles=self.angles[the_slice],
+            companions=self.companions,
+        )
+
+    def observations_count(self):
+        return self.inputs[0].sci_arr.shape[0]
+
     def max_rank(self):
         cols = 0
         rows = 0
@@ -619,6 +639,8 @@ class StarlightSubtractResult:
 class StarlightSubtractionDataConfig:
     inputs : list[PipelineInputConfig] = xconf.field(help="Input data to simultaneously reduce")
     angles : Union[FitsConfig,FitsTableColumnConfig] = xconf.field(help="1-D array or table column of derotation angles")
+    coadd_chunk_size : int = xconf.field(default=1, help="Number of frames per coadded chunk (last chunk may be fewer)")
+    coadd_operation : constants.CombineOperation = xconf.field(default=constants.CombineOperation.SUM, help="NaN-safe operation with which to combine coadd chunks")
     decimate_frames_by : int = xconf.field(default=1, help="Keep every Nth frame")
     decimate_frames_offset : int = xconf.field(default=0, help="Slice to begin decimation at this frame")
     companions : list[CompanionConfig] = xconf.field(default_factory=lambda: [CompanionConfig(r_px=30, pa_deg=0, scale=0)], help="Companion amplitude and location to inject (scale 0 for no injection) and probe")
@@ -650,8 +672,14 @@ class StarlightSubtractionDataConfig:
                     pinput.sci_arr += companion.scale * one_model_arr
             dt = time.time() - ts
             model_gen_sec += dt
+            if self.coadd_chunk_size > 1:
+                pinput.model_arr = improc.downsample_first_axis(pinput.model_arr, self.coadd_chunk_size, self.coadd_operation)
+                pinput.sci_arr = improc.downsample_first_axis(pinput.sci_arr, self.coadd_chunk_size, self.coadd_operation)
             pipeline_inputs.append(pinput)
         log.debug("Spent %f seconds in model generation", model_gen_sec)
+
+        if self.coadd_chunk_size > 1:
+            angles = improc.downsample_first_axis(angles, self.coadd_chunk_size, constants.CombineOperation.MEAN)
 
         return StarlightSubtractionData(
             inputs=pipeline_inputs,
@@ -932,7 +960,8 @@ def signal_from_filter(img, mf):
 class StarlightSubtractionMeasurement:
     signal : float
     snr : float
-    companion_spec : CompanionSpec
+    r_px : float
+    pa_deg : float
 
 @dataclass
 class StarlightSubtractionFilterMeasurement:
@@ -989,7 +1018,6 @@ class StarlightSubtract:
                 if len(destination_exts[destination_ext]):
                     if pinput.sci_arr.shape != destination_exts[destination_ext][0].sci_arr.shape:
                         raise ValueError(f"Dimensions of current science array {pinput.sci_arr.shape=} mismatched with others. Use separate destination_ext settings for each input, or make them the same size.")
-
                 destination_exts[destination_ext].append(pinput)
         max_rank = data.max_rank()
         k_modes_requested_and_values = self.k_modes.as_request_value_pairs(max_rank)
@@ -1048,7 +1076,7 @@ class StarlightSubtract:
                 pipeline_outputs=pipeline_outputs if self.return_residuals else None,
                 modes_requested=k_modes_requested,
             )
-            results_for_modes[k_modes] = res
+            results_for_modes[k_modes_requested] = res
 
 
         return StarlightSubtractResult(
@@ -1084,11 +1112,91 @@ class MeasureStarlightSubtraction:
     subtraction : StarlightSubtract = xconf.field(help="Configure starlight subtraction options")
     return_starlight_subtraction : bool = xconf.field(default=False, help="whether to return the starlight subtraction result")
     return_post_filtering_result : bool = xconf.field(default=False, help="whether to return the post-filtered image")
+    frames_per_chunk : int = xconf.field(default=0, help="Construct chunks of N frames to reduce independently and combine with averaging at the end, 0 to disable")
+    chunk_stride : int = xconf.field(default=0, help="Offset between successive chunks, 0 for 'same as chunk size'. Permits overlapping chunks.")
+
+    def _combine_starlight_subtract_modes_results(self, intermediate_ssresults : list[StarlightSubtractResult]):
+        k_modes_requested_values = list(sorted(intermediate_ssresults[0].modes.keys()))
+        destination_exts = list(sorted(intermediate_ssresults[0].modes[k_modes_requested_values[0]].destination_images.keys()))
+        combined_results_by_modes = {}
+        for k_modes_requested in k_modes_requested_values:
+            destination_images = {}
+            for ext in destination_exts:
+                unfiltered_images = []
+                filter_stacks : dict[str, list[PostFilteringResult]] = {}
+
+                coverage_overall = None
+                for ssresult in intermediate_ssresults:
+                    pfresults : PostFilteringResults = ssresult.modes[k_modes_requested].destination_images[ext]
+                    unfiltered_images.append(pfresults.unfiltered_image)
+                    if coverage_overall is None:
+                        coverage_overall = pfresults.coverage_count.copy()
+                    else:
+                        coverage_overall += pfresults.coverage_count
+                    for filter_name in POST_FILTER_NAMES:
+                        filter_result : PostFilteringResult = getattr(pfresults, filter_name)
+                        if filter_name not in filter_stacks:
+                            filter_stacks[filter_name] = [filter_result]
+                        else:
+                            filter_stacks[filter_name].append(filter_result)
+
+                pfr_by_filter_name = {}
+                for filter_name in filter_stacks:
+                    pfresults : list[PostFilteringResult] = filter_stacks[filter_name]
+                    stacked_images = np.stack([pfr.image for pfr in pfresults])
+                    kernels = np.stack([pfr.kernel for pfr in pfresults])
+                    reduced_image = np.nanmean(stacked_images, axis=0)
+                    pfr_by_filter_name[filter_name] = PostFilteringResult(
+                        reduced_image,
+                        kernel_diameter_px=pfresults[0].kernel_diameter_px,
+                        kernel=kernels,
+                    )
+                destination_images[ext] = PostFilteringResults(
+                    unfiltered_image=np.nansum(unfiltered_images, axis=0),
+                    coverage_count=coverage_overall,
+                    **pfr_by_filter_name,
+                )
+
+            combined_results_by_modes[k_modes_requested] = StarlightSubtractModesResult(
+                destination_images=destination_images,
+                pipeline_outputs=None,
+                pre_stack_filtered=None,
+                modes_requested=k_modes_requested,
+            )
+
+        ssresult : StarlightSubtractResult = StarlightSubtractResult(
+            modes=combined_results_by_modes,
+            pipeline_inputs=None,
+            decomposition=None,
+        )
+
+        return ssresult
 
     def execute(
         self, data : StarlightSubtractionData
     ) -> StarlightSubtractionMeasurements:
-        ssresult : StarlightSubtractResult = self.subtraction.execute(data)
+        if self.frames_per_chunk > 0:
+            if self.return_starlight_subtraction:
+                raise NotImplementedError("TODO")
+
+            chunk_stride = self.frames_per_chunk if self.chunk_stride == 0 else self.chunk_stride
+            slices = utils.compute_chunk_slices(
+                data.observations_count(),
+                self.frames_per_chunk,
+                chunk_stride
+            )
+            log.debug(f"Got {len(slices)} slices in chunk mode: {slices}")
+        else:
+            slices = [slice(None)]
+        if len(slices) > 1:
+            intermediate_ssresults = []
+            for the_slice in slices:
+                log.debug(f"Using chunked mode, processing {the_slice}")
+                subset_data : StarlightSubtractionData = data.from_slice(the_slice)
+                intermediate_ssresults.append(self.subtraction.execute(subset_data))
+            ssresult : StarlightSubtractResult = self._combine_starlight_subtract_modes_results(intermediate_ssresults)
+        else:
+            ssresult : StarlightSubtractResult = self.subtraction.execute(data)
         result = StarlightSubtractionMeasurements(
             companions=data.companions,
             by_modes={},
@@ -1117,7 +1225,8 @@ class MeasureStarlightSubtraction:
                         cm = StarlightSubtractionMeasurement(
                             signal=signal,
                             snr=snr,
-                            companion_spec=companion,
+                            r_px=companion.r_px,
+                            pa_deg=companion.pa_deg,
                         )
                         companion_measurements.append(cm)
                     measurements[filter_name] = StarlightSubtractionFilterMeasurement(
@@ -1139,7 +1248,14 @@ class MeasureStarlightSubtraction:
         output_dict['config'] = xconf.asdict(self)
         output_dict['results'] = {
             'k_modes_values': k_modes_values,
+            'companions': [],
         }
+        for spec in res.companions:
+            output_dict['results']['companions'].append({
+                'r_px': spec.r_px,
+                'pa_deg': spec.pa_deg,
+                'scale': spec.scale,
+            })
 
         for k in k_modes_values:
             for ext in res.by_modes[k].by_ext:
@@ -1147,11 +1263,14 @@ class MeasureStarlightSubtraction:
                     output_dict['results'][ext] = []
                 filtered_measurements = {}
                 for filter_name in POST_FILTER_NAMES:
-                    filter_res = getattr(res.by_modes[k].by_ext[ext], filter_name)
-                    filtered_measurements[filter_name] = {
-                        'snr': filter_res.snr,
-                        'signal': filter_res.signal,
-                    }
+                    filter_res : StarlightSubtractionFilterMeasurement = getattr(res.by_modes[k].by_ext[ext], filter_name)
+                    loc_measurements = []
+                    for loc in filter_res.locations:
+                        loc_measurements.append({
+                            'snr': loc.snr,
+                            'signal': loc.signal,
+                        })
+                    filtered_measurements[filter_name] = loc_measurements
                 output_dict['results'][ext].append(filtered_measurements)
         return output_dict
 
