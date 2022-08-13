@@ -375,7 +375,108 @@ class Klip:
             reuse=self.reuse,
         )
         image_vecs, probe_model_vecs = unwrap_inputs_to_matrices(data.inputs)
-        return starlight_subtraction.klip_mtx(image_vecs, params=params, probe_model_vecs=probe_model_vecs)
+        return starlight_subtraction.klip_mtx(image_vecs, params=params, probe_model_vecs=probe_model_vecs) + (angles,)
+
+@xconf.config
+class DynamicModeDecomposition:
+    dynamic_mode_decomposition : bool = xconf.field(default=True, help="")
+    do_train_test_split : bool = xconf.field(default=True, help="Whether to use half the pairs of observation vectors for training and the other half for estimation")
+    truncate_before_mode_construction : bool = xconf.field(default=True, help="Whether to truncate the SVD before using it to construct the modal basis Phi (true), or merely truncate the final modal basis Phi (false)")
+
+    def train_test_split(self, vectors, angles):
+        if vectors.shape[1] % 2 != 0:
+            vectors = vectors[:,:-1]
+            angles = angles[:-1]
+        vec_pairs = utils.wrap_columns(vectors)
+        train_vecs = utils.unwrap_columns(vec_pairs[:,::2])
+
+        assert np.all(train_vecs[:,0] == vectors[:,0])
+        assert np.all(train_vecs[:,1] == vectors[:,1])
+        assert np.all(train_vecs[:,2] == vectors[:,4])
+        test_vecs = utils.unwrap_columns(vec_pairs[:,1::2])
+
+        # drop half the angles as well
+        angle_pairs = utils.wrap_columns(angles[np.newaxis, :])
+        train_angles = utils.unwrap_columns(angle_pairs[:,::2]).flatten()
+        test_angles = utils.unwrap_columns(angle_pairs[:,1::2]).flatten()
+
+        return train_vecs, test_vecs, train_angles, test_angles
+
+    def prepare(self,
+        data : StarlightSubtractionData,
+        k_modes : int,
+        *,
+        angles : Optional[np.ndarray] = None,
+        decomposition: Optional[learning.PrecomputedDecomposition] = None,
+    ) -> learning.PrecomputedDecomposition:
+        return None
+        image_vecs, probe_model_vecs = unwrap_inputs_to_matrices(data.inputs)
+        image_vecs_medsub = image_vecs.copy(order='F')
+        image_vecs_medsub -= np.median(image_vecs, axis=0)
+        # if image_vecs_medsub.shape[1] % 2 != 0:
+        #     image_vecs_medsub = image_vecs_medsub[:,:-1]
+        # vec_pairs = image_vecs_medsub.reshape(image_vecs_medsub.shape[0] * 2, image_vecs_medsub.shape[1] // 2)
+        # train_vecs = vec_pairs[:,::2].reshape(image_vecs_medsub.shape[0], image_vecs_medsub.shape[1] // 2)
+        train_vecs, test_vecs, train_angles, test_angles = self.train_test_split(image_vecs_medsub, angles)
+        mtx_x = train_vecs[:,:-1]  # drop last column (time-step)
+        mtx_u, diag_s, mtx_v = learning.generic_svd(mtx_x, k_modes)
+        return learning.PrecomputedDecomposition(
+            mtx_u0=mtx_u,
+            diag_s0=diag_s,
+            mtx_v0=mtx_v,
+        )
+        # return learning.DynamicModalDecomposition(
+            # mtx_phi,
+            # diag_eigs,
+        # )
+
+    def execute(
+        self,
+        data : StarlightSubtractionData,
+        k_modes : int,
+        *,
+        angles : Optional[np.ndarray] = None,
+        decomposition: Optional[learning.PrecomputedDecomposition] = None,
+    ):
+        # if decomposition is None:
+        #     decomposition = self.prepare(data, k_modes, angles=angles)
+        image_vecs, probe_model_vecs = unwrap_inputs_to_matrices(data.inputs)
+        median_vec = np.median(image_vecs, axis=0)
+        image_vecs_sub = image_vecs - median_vec
+
+        if self.do_train_test_split:
+            train_vecs, test_vecs, train_angles, test_angles = self.train_test_split(image_vecs_sub, angles)
+            _, probe_model_vecs, _, _ = self.train_test_split(probe_model_vecs, angles)
+        else:
+            train_vecs = test_vecs = image_vecs_sub
+            train_angles = test_angles = angles
+
+        mtx_x = train_vecs[:,:-1]  # drop last column (time-step)
+        mtx_xprime = train_vecs[:,1:]  # drop first column (time-step)
+        log.debug(f"{mtx_x.shape=}")
+        mtx_u, diag_s, mtx_v = learning.generic_svd(mtx_x, k_modes)
+        if self.truncate_before_mode_construction:
+            mtx_u, diag_s, mtx_v = mtx_u[:,:k_modes], diag_s[:k_modes], mtx_v[:,:k_modes]
+        mtx_s_inv = np.diag(diag_s**-1)
+        mtx_atilde = mtx_u.T @ mtx_xprime @ mtx_v @ mtx_s_inv
+        diag_eigs, mtx_w = np.linalg.eig(mtx_atilde)
+        mtx_phi = mtx_xprime @ mtx_v @ mtx_s_inv @ mtx_w
+
+        if not self.truncate_before_mode_construction:
+            mtx_phi = mtx_phi[:,:k_modes]
+            mtx_eigs = np.diag(diag_eigs[:k_modes])
+            mtx_phi_pinv = np.linalg.pinv(mtx_phi)
+        else:
+            mtx_eigs = np.diag(diag_eigs)
+            mtx_phi_pinv = np.linalg.pinv(mtx_phi)
+        dmd_recons_vecs = (mtx_phi @ (mtx_eigs @ (mtx_phi_pinv @ test_vecs)))
+        test_vecs -= dmd_recons_vecs.real
+        # test_vecs *= test_vecs_std[:, np.newaxis]  # train and test both scaled by std above, scale back
+        dmd_recons_probes = (mtx_phi @ (mtx_eigs @ (mtx_phi_pinv @ probe_model_vecs)))
+        probe_model_vecs_sub = probe_model_vecs - dmd_recons_probes.real
+        # probe_model_vecs_sub *= test_vecs_std[:, np.newaxis]
+        return test_vecs, probe_model_vecs_sub, decomposition, median_vec, test_angles
+
 
 @xconf.config
 class KlipSubspace:
@@ -431,7 +532,7 @@ class KlipSubspace:
         diag_s = decomposition.diag_s0[:k_modes]
         mtx_v = decomposition.mtx_v0[:,:k_modes]
         subspace_image_vec_projections = (mtx_u * diag_s) @ mtx_v.T
-        return image_vecs_medsub - subspace_image_vec_projections
+        return image_vecs_medsub - subspace_image_vec_projections, probe_model_vecs, None, None, angles
 
 @xconf.config
 class KlipTranspose:
@@ -512,7 +613,7 @@ class KlipTranspose:
             image_vecs_medsub, probe_model_vecs_medsub, decomposition,
             klipt_params=params_kt
         )
-        return image_vecs_resid, model_vecs_resid, decomposition, med_vec
+        return image_vecs_resid, model_vecs_resid, decomposition, med_vec, angles
 
 
 
@@ -1000,7 +1101,7 @@ class PostFilter:
 
 @xconf.config
 class StarlightSubtract:
-    strategy : Union[KlipTranspose,Klip,KlipSubspace] = xconf.field(help="Strategy with which to estimate and subtract starlight")
+    strategy : Union[KlipTranspose,Klip,KlipSubspace,DynamicModeDecomposition] = xconf.field(help="Strategy with which to estimate and subtract starlight")
     resolution_element_px : float = xconf.field(help="One resolution element (lambda / D) in pixels")
     image_stack: ImageStack = xconf.field(default=ImageStack(), help="How to combine images after starlight subtraction and filtering")
     pre_stack_filter : Union[MatchedPreStackFilter,TophatPreStackFilter,NoOpPreStackFilter] = xconf.field(default=None, help="Process after removing starlight and before stacking")
@@ -1040,7 +1141,8 @@ class StarlightSubtract:
                 angles=data.angles,
                 decomposition=decomp,
             )
-            data_vecs_resid, model_vecs_resid, _, _ = res
+            data_vecs_resid, model_vecs_resid, _, _, angles = res
+
             pipeline_outputs = residuals_matrix_to_outputs(
                 data_vecs_resid,
                 data.inputs,
@@ -1053,11 +1155,11 @@ class StarlightSubtract:
                     pipeline_outputs,
                     data.companions[0],
                     self.resolution_element_px,
-                    data.angles
+                    angles
                 )
             else:
                 filtered_outputs = pipeline_outputs
-            destination_stacking_results, outputs_by_ext = self.image_stack.execute(filtered_outputs, data.angles)
+            destination_stacking_results, outputs_by_ext = self.image_stack.execute(filtered_outputs, angles)
             # results_for_modes[k_modes] = res
             post_filtered_image_results = {}
             for dest_ext in destination_stacking_results:
@@ -1067,7 +1169,7 @@ class StarlightSubtract:
                     outputs_by_ext[dest_ext],
                     data.companions[0],
                     self.resolution_element_px,
-                    data.angles
+                    angles
                 )
                 post_filtered_image_results[dest_ext] = pfres
             res = StarlightSubtractModesResult(

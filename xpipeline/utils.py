@@ -215,3 +215,15 @@ def compute_chunk_slices(n_total, per_chunk, chunk_stride):
         slices.append(slice(cursor, end))
         cursor += chunk_stride
     return slices
+
+def wrap_columns(arr, n_to_stack=2):
+    cols = arr.shape[1]
+    remainder = cols % n_to_stack
+    arrT = arr.T
+    if remainder > 0:
+        arrT = arrT[:-int(remainder)]
+    return arrT.reshape(arrT.shape[0] // n_to_stack, arrT.shape[1] * n_to_stack).T
+
+def unwrap_columns(arr, n_stacked=2):
+    arrT = arr.T
+    return arrT.reshape(arrT.shape[0] * n_stacked, arrT.shape[1] // n_stacked).T
