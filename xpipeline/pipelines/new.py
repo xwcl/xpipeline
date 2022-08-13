@@ -381,6 +381,8 @@ class Klip:
 class DynamicModeDecomposition:
     dynamic_mode_decomposition : bool = xconf.field(default=True, help="")
     do_train_test_split : bool = xconf.field(default=True, help="Whether to use half the pairs of observation vectors for training and the other half for estimation")
+    scale_by_pix_std : bool = xconf.field(default=False, help="Whether to scale the values in each pixel series by their stddev before decomposition, and back after subtraction (makes things worse, apparently)")
+    scale_by_frame_std : bool = xconf.field(default=False, help="Whether to scale the pixel values in each frame by the frame's stddev before decomposition, and back after subtraction (doesn't make much difference, apparently)")
     truncate_before_mode_construction : bool = xconf.field(default=True, help="Whether to truncate the SVD before using it to construct the modal basis Phi (true), or merely truncate the final modal basis Phi (false)")
 
     def train_test_split(self, vectors, angles):
@@ -450,7 +452,18 @@ class DynamicModeDecomposition:
         else:
             train_vecs = test_vecs = image_vecs_sub
             train_angles = test_angles = angles
-
+        if self.scale_by_pix_std:
+            train_vecs_std = np.std(train_vecs, axis=1)
+            train_vecs /= train_vecs_std[:, np.newaxis]
+            test_vecs_std = np.std(test_vecs, axis=1)
+            test_vecs /= test_vecs_std[:, np.newaxis]
+            probe_model_vecs /= test_vecs_std[:, np.newaxis]
+        if self.scale_by_frame_std:
+            train_vecs_std = np.std(train_vecs, axis=0)
+            train_vecs /= train_vecs_std[np.newaxis, :]
+            test_vecs_std = np.std(test_vecs, axis=0)
+            test_vecs /= test_vecs_std[np.newaxis, :]
+            probe_model_vecs /= test_vecs_std[np.newaxis, :]
         mtx_x = train_vecs[:,:-1]  # drop last column (time-step)
         mtx_xprime = train_vecs[:,1:]  # drop first column (time-step)
         log.debug(f"{mtx_x.shape=}")
@@ -471,12 +484,17 @@ class DynamicModeDecomposition:
             mtx_phi_pinv = np.linalg.pinv(mtx_phi)
         dmd_recons_vecs = (mtx_phi @ (mtx_eigs @ (mtx_phi_pinv @ test_vecs)))
         test_vecs -= dmd_recons_vecs.real
-        # test_vecs *= test_vecs_std[:, np.newaxis]  # train and test both scaled by std above, scale back
+        if self.scale_by_pix_std:
+            test_vecs *= test_vecs_std[:, np.newaxis]  # train and test both scaled by std above, scale back
+        if self.scale_by_frame_std:
+            test_vecs *= test_vecs_std[np.newaxis, :]  # train and test both scaled by std above, scale back
         dmd_recons_probes = (mtx_phi @ (mtx_eigs @ (mtx_phi_pinv @ probe_model_vecs)))
         probe_model_vecs_sub = probe_model_vecs - dmd_recons_probes.real
-        # probe_model_vecs_sub *= test_vecs_std[:, np.newaxis]
+        if self.scale_by_frame_std:
+            probe_model_vecs_sub *= test_vecs_std[np.newaxis, :]  # scaled by std of test vecs above, scale back
+        if self.scale_by_pix_std:
+            probe_model_vecs_sub *= test_vecs_std[:, np.newaxis]  # scaled by std of test vecs above, scale back
         return test_vecs, probe_model_vecs_sub, decomposition, median_vec, test_angles
-
 
 @xconf.config
 class KlipSubspace:
