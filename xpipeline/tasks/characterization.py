@@ -696,7 +696,7 @@ def normalize_snr_for_grid(
         for colname in config_params:
             mask &= tbl[colname] == config[colname]
         noise_factor = np.nanstd(tbl[no_injection_mask & mask][snr_colname])
-        tbl[snr_colname][mask & ~no_injection_mask] = tbl[mask & ~no_injection_mask][snr_colname] / noise_factor
+        tbl[snr_colname][mask] = tbl[mask][snr_colname] / noise_factor
     return tbl
 
 
