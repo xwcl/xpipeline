@@ -37,6 +37,7 @@ class SummarizeGrid(InputCommand):
     wavelength_um : float = xconf.field(help="Wavelength in microns")
     primary_diameter_m : float = xconf.field(default=magellan.PRIMARY_MIRROR_DIAMETER.to(u.m).value)
     coverage_mask : FitsConfig = xconf.field(help="Mask image with 1s where pixels have observation coverage and 0 elsewhere")
+    min_coverage : float = xconf.field(default=1.0, help="minimum number of frames covering a pixel for it to be used in the final interpolated map")
     min_snr_for_injection: float = xconf.field(default=10, help="Minimum SNR to recover in order to trust the 5sigma contrast value")
     normalize_snrs: Union[bool, list[str]] = xconf.field(default=False, help="Rescales the SNR values at a given radius by dividing by the stddev of all SNRs for that radius, if given as list of str, is used as names of grouping params")
     filters : dict[str, FilterSpec] = xconf.field(default_factory=dict, help="Filter on column == value before grouping and summarizing")
@@ -47,7 +48,7 @@ class SummarizeGrid(InputCommand):
         output_filepath, = self.get_output_paths("summarize_grid.fits")
         self.quit_if_outputs_exist([output_filepath])
 
-        coverage_mask = self.coverage_mask.load() == 1
+        coverage_mask = self.coverage_mask.load() >= self.min_coverage
         yc, xc = improc.arr_center(coverage_mask)
 
         grid_hdul = iofits.load_fits_from_path(self.input)
@@ -119,9 +120,23 @@ class SummarizeGrid(InputCommand):
         log.info(f"Sampled {len(limits_df)} locations for contrast limits and detection")
 
         lim_xs, lim_ys = characterization.r_pa_to_x_y(limits_df[self.columns.r_px], limits_df[self.columns.pa_deg], xc, yc)
-        contrast_lim_map = characterization.points_to_map(lim_xs, lim_ys, limits_df['contrast_limit_5sigma'], coverage_mask)
+        min_r_px = np.min(limits_df[self.columns.r_px])
+        iwa_pa_degs = np.unique(limits_df[limits_df[self.columns.r_px] == min_r_px][self.columns.pa_deg])
+        dr_px = np.diff(np.sort(np.unique(limits_df[self.columns.r_px])))[0] / 2
+        iwa_r_pxs = np.repeat(min_r_px - dr_px, len(iwa_pa_degs))
+        iwa_contrasts = np.repeat(1.0, len(iwa_pa_degs))
+        iwa_xs, iwa_ys = characterization.r_pa_to_x_y(iwa_r_pxs, iwa_pa_degs, xc, yc)
+        lim_xs = np.concatenate([lim_xs, iwa_xs])
+        lim_ys = np.concatenate([lim_ys, iwa_ys])
+        lim_contrasts = np.concatenate([limits_df['contrast_limit_5sigma'], iwa_contrasts])
+
+        contrast_lim_map = characterization.points_to_map(lim_xs, lim_ys, lim_contrasts, coverage_mask)
+
         det_xs, det_ys = characterization.r_pa_to_x_y(detections_df[self.columns.r_px], detections_df[self.columns.pa_deg], xc, yc)
-        detection_map = characterization.points_to_map(det_xs, det_ys, detections_df['snr'], coverage_mask)
+        det_xs = np.concatenate([det_xs, iwa_xs])
+        det_ys = np.concatenate([det_ys, iwa_ys])
+        det_snrs = np.concatenate([detections_df['snr'], np.repeat(0, len(iwa_pa_degs))])
+        detection_map = characterization.points_to_map(det_xs, det_ys, det_snrs, coverage_mask)
 
         hdus = [iofits.DaskHDU(None, kind="primary")]
         hdus.append(iofits.DaskHDU(contrast_lim_map, name="limits_5sigma_contrast_map"))
