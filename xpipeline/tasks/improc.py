@@ -513,7 +513,7 @@ class BBox:
     @classmethod
     def from_center(cls, center : Pixel, extent : PixelExtent):
         cy, cx = center.y, center.x
-        origin = Pixel(y=cy - extent.height / 2, x= cx - extent.width / 2)
+        origin = Pixel(y=cy - (extent.height - 1) / 2, x=cx - (extent.width - 1)/ 2)
         return cls(origin=origin, extent=extent)
 
     @classmethod
@@ -528,7 +528,7 @@ class BBox:
     def center(self):
         oy, ox = self.origin.y, self.origin.x
         dy, dx = self.extent.height, self.extent.width
-        return Point(oy + (dy - 1) / 2, ox + (dx - 1) / 2)
+        return Point(y=oy + (dy - 1) / 2, x=ox + (dx - 1) / 2)
 
     @center.setter
     def center(self, value):
@@ -538,7 +538,7 @@ class BBox:
         oy, ox = self.origin
         if (oy + dy) - int(oy + dy) > 0.01 or (ox + dx) - int(ox + dx) > 0.01:
             warnings.warn(f"Loss of precision rounding origin to integer pixels")
-        self.origin = Pixel(int(oy + dy), int(ox + dx))
+        self.origin = Pixel(y=int(oy + dy), x=int(ox + dx))
 
     @property
     def slices(self):
