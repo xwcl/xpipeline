@@ -11,7 +11,7 @@ from ..pipelines.new import (
     MeasureStarlightSubtraction, StarlightSubtractionData, KModesConfig,
     KModesFractionConfig, KModesValuesConfig, StarlightSubtractionDataConfig,
     StarlightSubtractionMeasurement, StarlightSubtractionFilterMeasurements,
-    SaveMeasuredStarlightSubtraction,
+    SaveMeasuredStarlightSubtraction, CompanionConfig, StarlightSubtractionFilterMeasurement
 )
 from ..constants import KlipStrategy
 from ..tasks import characterization
@@ -33,21 +33,24 @@ def _measure_subtraction_task(
     else:
         k_modes_spec = KModesValuesConfig(values=k_modes_requested)
     measure_subtraction.subtraction.k_modes = k_modes_spec
-    data_config.companion.r_px = chunk[0]['r_px']
-    data_config.companion.pa_deg = chunk[0]['pa_deg']
-    data_config.companion.scale = chunk[0]['injected_scale']
+    data_config.companions = [CompanionConfig(
+        r_px=chunk[0]['r_px'],
+        pa_deg=chunk[0]['pa_deg'],
+        scale=chunk[0]['injected_scale'],
+    )]
+
     data_config.decimate_frames_by = chunk[0]['decimate_frames_by']
     resel_px = measure_subtraction.subtraction.resolution_element_px
     annulus_resel = chunk[0]['annulus_resel']
     if annulus_resel > 0:
         for idx in range(len(data_config.inputs)):
-            data_config.inputs[idx].radial_mask.min_r_px = data_config.companion.r_px - (annulus_resel * resel_px) / 2
-            data_config.inputs[idx].radial_mask.max_r_px = data_config.companion.r_px + (annulus_resel * resel_px) / 2
+            data_config.inputs[idx].radial_mask.min_r_px = data_config.companions[0].r_px - (annulus_resel * resel_px) / 2
+            data_config.inputs[idx].radial_mask.max_r_px = data_config.companions[0].r_px + (annulus_resel * resel_px) / 2
     log.debug(f'''Configured:
 {measure_subtraction.subtraction.k_modes=}
-{data_config.companion.r_px=}
-{data_config.companion.pa_deg=}
-{data_config.companion.scale=}
+{data_config.companions[0].r_px=}
+{data_config.companions[0].pa_deg=}
+{data_config.companions[0].scale=}
 {data_config.inputs[0].radial_mask.min_r_px=}, {data_config.inputs[0].radial_mask.max_r_px=}
 ''')
     # measure starlight subtraction
@@ -83,9 +86,10 @@ def _measure_subtraction_task(
             k_modes_chosen_for_row = k_modes_requested_to_chosen[k_modes_for_row]
             chunk[idx]['k_modes_chosen'] = k_modes_chosen_for_row
             measurements : StarlightSubtractionFilterMeasurements = meas.by_modes[k_modes_chosen_for_row].by_ext[ext]
-            filter_measurement : StarlightSubtractionMeasurement = getattr(measurements, filter_name)
-            chunk[idx]['signal'] = filter_measurement.signal
-            chunk[idx]['snr'] = filter_measurement.snr
+            filter_measurement : StarlightSubtractionFilterMeasurement = getattr(measurements, filter_name)
+
+            chunk[idx]['signal'] = filter_measurement.locations[0].signal
+            chunk[idx]['snr'] = filter_measurement.locations[0].snr
     return chunk
 
 
