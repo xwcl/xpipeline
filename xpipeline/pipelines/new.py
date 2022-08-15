@@ -407,6 +407,7 @@ def construct_time_contiguous_pairs(vectors, angles, times_sec):
 class DynamicModeDecomposition:
     dynamic_mode_decomposition : bool = xconf.field(default=True, help="")
     do_train_test_split : bool = xconf.field(default=True, help="Whether to use half the pairs of observation vectors for training and the other half for estimation")
+    reduce_both_halves : bool = xconf.field(default=False, help="Whether to repeat the procedure on the training set with the testing set, using all input data")
     enforce_time_contiguity : bool = xconf.field(default=False, help="Whether to check timestamps when making vector pairs for train and test")
     scale_by_pix_std : bool = xconf.field(default=False, help="Whether to scale the values in each pixel series by their stddev before decomposition, and back after subtraction (makes things worse, apparently)")
     scale_by_frame_std : bool = xconf.field(default=False, help="Whether to scale the pixel values in each frame by the frame's stddev before decomposition, and back after subtraction (doesn't make much difference, apparently)")
@@ -454,6 +455,20 @@ class DynamicModeDecomposition:
             print(f"{train_angles.shape=}, {test_angles.shape=}")
             train_probe_model_vecs, test_probe_model_vecs, _, _ = self.train_test_split(probe_model_vecs, angles, data.times_sec)
         else:
+            vec_pairs, angle_pairs = construct_time_contiguous_pairs(
+                image_vecs_sub,
+                angles,
+                np.ascontiguousarray(data.times_sec),
+            )
+            probe_model_vec_pairs, _ = construct_time_contiguous_pairs(
+                probe_model_vecs,
+                angles,
+                np.ascontiguousarray(data.times_sec),
+            )
+            image_vecs_sub = utils.unwrap_columns(vec_pairs)
+            probe_model_vecs = utils.unwrap_columns(probe_model_vec_pairs)
+            angles = utils.unwrap_columns(angle_pairs).flatten()
+            print(f"{image_vecs_sub.shape=} {angles.shape=}")
             train_vecs = test_vecs = image_vecs_sub
             train_probe_model_vecs = test_probe_model_vecs = probe_model_vecs
             train_angles = test_angles = angles
@@ -541,10 +556,12 @@ class DynamicModeDecomposition:
             solver = learning.cpu_top_k_svd_arpack
         for idx, (vecs, model_vecs, vecs_std, part_angles) in enumerate(partitions):
             # print(f"{vecs.shape=} {part_angles.shape=}")
-            if idx == 0:
+            if self.do_train_test_split and idx == 0:
                 train_vecs = partitions[1][0]
             else:
                 train_vecs = partitions[0][0]
+                if self.do_train_test_split and not self.reduce_both_halves:
+                    continue
             mtx_x = train_vecs[:,:-1]  # drop last column (time-step)
             mtx_xprime = train_vecs[:,1:]  # drop first column (time-step)
             mtx_u, diag_s, mtx_v = solver(mtx_x, k_modes)
