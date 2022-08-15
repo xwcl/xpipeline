@@ -380,15 +380,15 @@ from numba import njit
 def construct_time_contiguous_pairs(vectors, angles, times_sec):
     dt = 5 * np.median(np.diff(times_sec))
     vector_pairs = np.zeros((2 * vectors.shape[0], vectors.shape[1]), dtype=vectors.dtype)
-    print("before", vector_pairs.shape)
+    # print("before", vector_pairs.shape)
     out_angles = np.zeros((2, vectors.shape[1]))
-    print("before", out_angles.shape)
+    # print("before", out_angles.shape)
     col_cursor = 0
     for i in range(vectors.shape[1] - 1):
         delta = times_sec[i + 1] - times_sec[i]
         if delta > dt:
             # this is a chunk boundary, don't make a pair out of this index and i+1
-            print('chunk boundary at idx', i, 'delta was', delta, 'dt was', dt)
+            # print('chunk boundary at idx', i, 'delta was', delta, 'dt was', dt)
             continue
         vector_pairs[:, col_cursor] = np.concatenate((vectors[:, i], vectors[:, i+1]))
         out_angles[0, col_cursor] = angles[i]
@@ -396,10 +396,10 @@ def construct_time_contiguous_pairs(vectors, angles, times_sec):
         col_cursor += 1
         # print(i, i+1, vector_pairs.shape, out_angles.shape, col_cursor)
     vector_pairs = vector_pairs[:, :col_cursor + 1]
-    print("after", vector_pairs.shape)
-    print("before2", out_angles.shape)
+    # print("after", vector_pairs.shape)
+    # print("before2", out_angles.shape)
     out_angles = out_angles[:, :col_cursor+1]
-    print("after", out_angles.shape)
+    # print("after", out_angles.shape)
     return vector_pairs, out_angles
 
 
@@ -540,7 +540,7 @@ class DynamicModeDecomposition:
         if self.use_iterative_svd:
             solver = learning.cpu_top_k_svd_arpack
         for idx, (vecs, model_vecs, vecs_std, part_angles) in enumerate(partitions):
-            print(f"{vecs.shape=} {part_angles.shape=}")
+            # print(f"{vecs.shape=} {part_angles.shape=}")
             if idx == 0:
                 train_vecs = partitions[1][0]
             else:
@@ -548,7 +548,7 @@ class DynamicModeDecomposition:
             mtx_x = train_vecs[:,:-1]  # drop last column (time-step)
             mtx_xprime = train_vecs[:,1:]  # drop first column (time-step)
             mtx_u, diag_s, mtx_v = solver(mtx_x, k_modes)
-            print(f"{mtx_x.shape=} {mtx_xprime.shape=}")
+            # print(f"{mtx_x.shape=} {mtx_xprime.shape=}")
             if self.truncate_before_mode_construction:
                 mtx_u, diag_s, mtx_v = mtx_u[:,:k_modes], diag_s[:k_modes], mtx_v[:,:k_modes]
             mtx_s_inv = np.diag(diag_s**-1)
@@ -564,7 +564,7 @@ class DynamicModeDecomposition:
                 mtx_eigs = np.diag(diag_eigs)
                 mtx_phi_pinv = np.linalg.pinv(mtx_phi)
             dmd_recons_vecs = (mtx_phi @ (mtx_eigs @ (mtx_phi_pinv @ vecs)))
-            vecs -= dmd_recons_vecs.real
+            vecs = vecs - dmd_recons_vecs.real # intentionally making a copy because we need them for the other partition
             if self.scale_by_pix_std:
                 vecs *= vecs_std[:, np.newaxis]  # train and test both scaled by std above, scale back
             if self.scale_by_frame_std:
@@ -580,13 +580,13 @@ class DynamicModeDecomposition:
                 subtracted_model_vecs = probe_model_vecs_sub
                 final_angles = part_angles
             else:
-                print(f"concatenate {subtracted_vecs.shape=} {vecs.shape=}")
+                # print(f"concatenate {subtracted_vecs.shape=} {vecs.shape=}")
                 subtracted_vecs = np.concatenate([subtracted_vecs, vecs], axis=1)
                 subtracted_model_vecs = np.concatenate([subtracted_model_vecs, probe_model_vecs_sub], axis=1)
-                print(f"concatenate {final_angles.shape=} {part_angles.shape=}")
+                # print(f"concatenate {final_angles.shape=} {part_angles.shape=}")
                 final_angles = np.concatenate([final_angles, part_angles])
 
-        print(f"{subtracted_vecs.shape=} {final_angles.shape=}")
+        # print(f"{subtracted_vecs.shape=} {final_angles.shape=}")
         return subtracted_vecs, subtracted_model_vecs, decomposition, median_vec, final_angles
 
 @xconf.config
