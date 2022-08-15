@@ -150,6 +150,7 @@ class PipelineInput:
 class StarlightSubtractionData:
     inputs : list[PipelineInput]
     angles : np.ndarray
+    times_sec : Optional[np.ndarray]
     companions : list[CompanionSpec]
 
     def from_slice(self, the_slice):
@@ -166,6 +167,7 @@ class StarlightSubtractionData:
         return self.__class__(
             inputs=new_inputs,
             angles=self.angles[the_slice],
+            times_sec=self.times_sec[the_slice],
             companions=self.companions,
         )
 
@@ -337,11 +339,9 @@ class Klip:
     def prepare(
         self,
         data : StarlightSubtractionData,
-        # image_vecs: np.ndarray,
         k_modes : int,
         *,
         angles : Optional[np.ndarray] = None,
-        # probe_model_vecs: Optional[np.ndarray] = None,
         decomposition: Optional[learning.PrecomputedDecomposition] = None,
     ):
         assert decomposition is None
@@ -360,11 +360,9 @@ class Klip:
     def execute(
         self,
         data : StarlightSubtractionData,
-        # image_vecs: np.ndarray,
         k_modes : int,
         *,
         angles : Optional[np.ndarray] = None,
-        # probe_model_vecs: Optional[np.ndarray] = None,
         decomposition: Optional[learning.PrecomputedDecomposition] = None,
     ):
         params = starlight_subtraction.KlipParams(
@@ -377,81 +375,87 @@ class Klip:
         image_vecs, probe_model_vecs = unwrap_inputs_to_matrices(data.inputs)
         return starlight_subtraction.klip_mtx(image_vecs, params=params, probe_model_vecs=probe_model_vecs) + (angles,)
 
+from numba import njit
+@njit
+def construct_time_contiguous_pairs(vectors, angles, times_sec):
+    dt = 5 * np.median(np.diff(times_sec))
+    vector_pairs = np.zeros((2 * vectors.shape[0], vectors.shape[1]), dtype=vectors.dtype)
+    print("before", vector_pairs.shape)
+    out_angles = np.zeros((2, vectors.shape[1]))
+    print("before", out_angles.shape)
+    col_cursor = 0
+    for i in range(vectors.shape[1] - 1):
+        delta = times_sec[i + 1] - times_sec[i]
+        if delta > dt:
+            # this is a chunk boundary, don't make a pair out of this index and i+1
+            print('chunk boundary at idx', i, 'delta was', delta, 'dt was', dt)
+            continue
+        vector_pairs[:, col_cursor] = np.concatenate((vectors[:, i], vectors[:, i+1]))
+        out_angles[0, col_cursor] = angles[i]
+        out_angles[1, col_cursor] = angles[i + 1]
+        col_cursor += 1
+        # print(i, i+1, vector_pairs.shape, out_angles.shape, col_cursor)
+    vector_pairs = vector_pairs[:, :col_cursor + 1]
+    print("after", vector_pairs.shape)
+    print("before2", out_angles.shape)
+    out_angles = out_angles[:, :col_cursor+1]
+    print("after", out_angles.shape)
+    return vector_pairs, out_angles
+
+
 @xconf.config
 class DynamicModeDecomposition:
     dynamic_mode_decomposition : bool = xconf.field(default=True, help="")
     do_train_test_split : bool = xconf.field(default=True, help="Whether to use half the pairs of observation vectors for training and the other half for estimation")
+    enforce_time_contiguity : bool = xconf.field(default=False, help="Whether to check timestamps when making vector pairs for train and test")
     scale_by_pix_std : bool = xconf.field(default=False, help="Whether to scale the values in each pixel series by their stddev before decomposition, and back after subtraction (makes things worse, apparently)")
     scale_by_frame_std : bool = xconf.field(default=False, help="Whether to scale the pixel values in each frame by the frame's stddev before decomposition, and back after subtraction (doesn't make much difference, apparently)")
+    use_iterative_svd : bool = xconf.field(default=False, help="For low numbers of modes it may be much faster to use an iterative SVD solver")
     truncate_before_mode_construction : bool = xconf.field(default=True, help="Whether to truncate the SVD before using it to construct the modal basis Phi (true), or merely truncate the final modal basis Phi (false)")
 
-    def train_test_split(self, vectors, angles):
+    def train_test_split(self, vectors, angles, times_sec):
+        print(f"{vectors.shape=} {angles.shape=}")
         if vectors.shape[1] % 2 != 0:
             vectors = vectors[:,:-1]
             angles = angles[:-1]
-        vec_pairs = utils.wrap_columns(vectors)
+        if self.enforce_time_contiguity:
+            vec_pairs, angle_pairs = construct_time_contiguous_pairs(
+                vectors,
+                angles,
+                np.ascontiguousarray(times_sec),
+            )
+            print(f"x {vec_pairs.shape=} {angle_pairs.shape=}")
+        else:
+            vec_pairs = utils.wrap_columns(vectors)
+            # drop half the angles as well
+            angle_pairs = utils.wrap_columns(angles[np.newaxis, :])
+
         train_vecs = utils.unwrap_columns(vec_pairs[:,::2])
-
-        assert np.all(train_vecs[:,0] == vectors[:,0])
-        assert np.all(train_vecs[:,1] == vectors[:,1])
-        assert np.all(train_vecs[:,2] == vectors[:,4])
+        print(f"{train_vecs.shape=}")
         test_vecs = utils.unwrap_columns(vec_pairs[:,1::2])
+        print(f"{test_vecs.shape=}")
 
-        # drop half the angles as well
-        angle_pairs = utils.wrap_columns(angles[np.newaxis, :])
+        # assert np.all(train_vecs[:,0] == vectors[:,0])
+        # assert np.all(train_vecs[:,1] == vectors[:,1])
+        # assert np.all(train_vecs[:,2] == vectors[:,4])
         train_angles = utils.unwrap_columns(angle_pairs[:,::2]).flatten()
+        print(f"{train_angles.shape=}")
         test_angles = utils.unwrap_columns(angle_pairs[:,1::2]).flatten()
-
+        print(f"{test_vecs.shape=} {test_angles.shape=}")
         return train_vecs, test_vecs, train_angles, test_angles
 
-    def prepare(self,
-        data : StarlightSubtractionData,
-        k_modes : int,
-        *,
-        angles : Optional[np.ndarray] = None,
-        decomposition: Optional[learning.PrecomputedDecomposition] = None,
-    ) -> learning.PrecomputedDecomposition:
-        return None
-        image_vecs, probe_model_vecs = unwrap_inputs_to_matrices(data.inputs)
-        image_vecs_medsub = image_vecs.copy(order='F')
-        image_vecs_medsub -= np.median(image_vecs, axis=0)
-        # if image_vecs_medsub.shape[1] % 2 != 0:
-        #     image_vecs_medsub = image_vecs_medsub[:,:-1]
-        # vec_pairs = image_vecs_medsub.reshape(image_vecs_medsub.shape[0] * 2, image_vecs_medsub.shape[1] // 2)
-        # train_vecs = vec_pairs[:,::2].reshape(image_vecs_medsub.shape[0], image_vecs_medsub.shape[1] // 2)
-        train_vecs, test_vecs, train_angles, test_angles = self.train_test_split(image_vecs_medsub, angles)
-        mtx_x = train_vecs[:,:-1]  # drop last column (time-step)
-        mtx_u, diag_s, mtx_v = learning.generic_svd(mtx_x, k_modes)
-        return learning.PrecomputedDecomposition(
-            mtx_u0=mtx_u,
-            diag_s0=diag_s,
-            mtx_v0=mtx_v,
-        )
-        # return learning.DynamicModalDecomposition(
-            # mtx_phi,
-            # diag_eigs,
-        # )
-
-    def execute(
-        self,
-        data : StarlightSubtractionData,
-        k_modes : int,
-        *,
-        angles : Optional[np.ndarray] = None,
-        decomposition: Optional[learning.PrecomputedDecomposition] = None,
-    ):
-        # if decomposition is None:
-        #     decomposition = self.prepare(data, k_modes, angles=angles)
+    def collect_inputs(self, data, angles):
         image_vecs, probe_model_vecs = unwrap_inputs_to_matrices(data.inputs)
         median_vec = np.median(image_vecs, axis=0)
         image_vecs_sub = image_vecs - median_vec
 
         if self.do_train_test_split:
-            train_vecs, test_vecs, train_angles, test_angles = self.train_test_split(image_vecs_sub, angles)
-            _, probe_model_vecs, _, _ = self.train_test_split(probe_model_vecs, angles)
+            train_vecs, test_vecs, train_angles, test_angles = self.train_test_split(image_vecs_sub, angles, data.times_sec)
+            _, probe_model_vecs, _, _ = self.train_test_split(probe_model_vecs, angles, data.times_sec)
         else:
             train_vecs = test_vecs = image_vecs_sub
             train_angles = test_angles = angles
+        test_vecs_std = None
         if self.scale_by_pix_std:
             train_vecs_std = np.std(train_vecs, axis=1)
             train_vecs /= train_vecs_std[:, np.newaxis]
@@ -464,10 +468,42 @@ class DynamicModeDecomposition:
             test_vecs_std = np.std(test_vecs, axis=0)
             test_vecs /= test_vecs_std[np.newaxis, :]
             probe_model_vecs /= test_vecs_std[np.newaxis, :]
+        return train_vecs, test_vecs, test_vecs_std, probe_model_vecs, median_vec, test_angles
+
+    def prepare(self,
+        data : StarlightSubtractionData,
+        k_modes : int,
+        *,
+        angles : Optional[np.ndarray] = None,
+        decomposition: Optional[learning.PrecomputedDecomposition] = None,
+    ) -> learning.PrecomputedDecomposition:
+        train_vecs, _, _, _, _, _ = self.collect_inputs(data, angles)
+        mtx_x = train_vecs[:,:-1]  # drop last column (time-step)
+        solver = learning.generic_svd
+        if self.use_iterative_svd:
+            solver = learning.cpu_top_k_svd_arpack
+        mtx_u, diag_s, mtx_v = solver(mtx_x, k_modes)
+        return learning.PrecomputedDecomposition(
+            mtx_u0=mtx_u,
+            diag_s0=diag_s,
+            mtx_v0=mtx_v,
+        )
+
+    def execute(
+        self,
+        data : StarlightSubtractionData,
+        k_modes : int,
+        *,
+        angles : Optional[np.ndarray] = None,
+        decomposition: Optional[learning.PrecomputedDecomposition] = None,
+    ):
+        if decomposition is None:
+            decomposition = self.prepare(data, k_modes, angles=angles)
+        mtx_u, diag_s, mtx_v = decomposition.mtx_u0, decomposition.diag_s0, decomposition.mtx_v0
+        train_vecs, test_vecs, test_vecs_std, probe_model_vecs, median_vec, test_angles = self.collect_inputs(data, angles)
         mtx_x = train_vecs[:,:-1]  # drop last column (time-step)
         mtx_xprime = train_vecs[:,1:]  # drop first column (time-step)
-        log.debug(f"{mtx_x.shape=}")
-        mtx_u, diag_s, mtx_v = learning.generic_svd(mtx_x, k_modes)
+        print(f"{mtx_x.shape=} {mtx_xprime.shape=}")
         if self.truncate_before_mode_construction:
             mtx_u, diag_s, mtx_v = mtx_u[:,:k_modes], diag_s[:k_modes], mtx_v[:,:k_modes]
         mtx_s_inv = np.diag(diag_s**-1)
@@ -526,7 +562,6 @@ class KlipSubspace:
         k_modes : int,
         *,
         angles : Optional[np.ndarray] = None,
-        # probe_model_vecs: Optional[np.ndarray] = None,
         decomposition: Optional[learning.PrecomputedDecomposition] = None,
     ) -> learning.PrecomputedDecomposition:
         image_vecs, probe_model_vecs = unwrap_inputs_to_matrices(data.inputs)
@@ -541,7 +576,6 @@ class KlipSubspace:
         k_modes : int,
         *,
         angles : Optional[np.ndarray] = None,
-        # probe_model_vecs: Optional[np.ndarray] = None,
         decomposition: Optional[learning.PrecomputedDecomposition] = None,
     ):
         image_vecs, probe_model_vecs = unwrap_inputs_to_matrices(data.inputs)
@@ -581,11 +615,9 @@ class KlipTranspose:
     def prepare(
         self,
         data : StarlightSubtractionData,
-        # image_vecs: np.ndarray,
         k_modes : int,
         *,
         angles : Optional[np.ndarray] = None,
-        # probe_model_vecs: Optional[np.ndarray] = None,
         decomposition: Optional[learning.PrecomputedDecomposition] = None,
     ) -> learning.PrecomputedDecomposition:
         klipt_params = starlight_subtraction.KlipTParams(
@@ -609,11 +641,10 @@ class KlipTranspose:
     def execute(
         self,
         data : StarlightSubtractionData,
-        # image_vecs: np.ndarray,
         k_modes : int,
         *,
         angles : Optional[np.ndarray] = None,
-        # probe_model_vecs: Optional[np.ndarray] = None,
+        timestamps_sec : Optional[np.ndarray] = None,
         decomposition: Optional[learning.PrecomputedDecomposition] = None,
     ):
         image_vecs, probe_model_vecs = unwrap_inputs_to_matrices(data.inputs)
@@ -758,6 +789,7 @@ class StarlightSubtractResult:
 class StarlightSubtractionDataConfig:
     inputs : list[PipelineInputConfig] = xconf.field(help="Input data to simultaneously reduce")
     angles : Union[FitsConfig,FitsTableColumnConfig] = xconf.field(help="1-D array or table column of derotation angles")
+    times_sec : Union[FitsConfig,FitsTableColumnConfig] = xconf.field(help="1-D array or table column of observation times in seconds (to identify chunks)")
     coadd_chunk_size : int = xconf.field(default=1, help="Number of frames per coadded chunk (last chunk may be fewer)")
     coadd_operation : constants.CombineOperation = xconf.field(default=constants.CombineOperation.SUM, help="NaN-safe operation with which to combine coadd chunks")
     decimate_frames_by : int = xconf.field(default=1, help="Keep every Nth frame")
@@ -766,6 +798,7 @@ class StarlightSubtractionDataConfig:
 
     def load(self) -> StarlightSubtractionData:
         angles = self.angles.load()[self.decimate_frames_offset::self.decimate_frames_by]
+        times_sec = self.times_sec.load()[self.decimate_frames_offset::self.decimate_frames_by]
         companions = [companion.to_companionspec() for companion in self.companions]
         model_gen_sec = 0
         pipeline_inputs = []
@@ -804,6 +837,7 @@ class StarlightSubtractionDataConfig:
             inputs=pipeline_inputs,
             angles=angles,
             companions=companions,
+            times_sec=times_sec,
         )
 
 @xconf.config

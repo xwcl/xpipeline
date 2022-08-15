@@ -262,3 +262,8 @@ class PrecomputedDecomposition:
     def __post_init__(self):
         if self.mtx_u0 is None and self.mtx_v0 is None:
             raise ValueError("Cannot have None for both mtx_u and mtx_v")
+
+@dataclass
+class DynamicModalDecomposition:
+    mtx_phi : np.ndarray
+    diag_eigs : np.ndarray
