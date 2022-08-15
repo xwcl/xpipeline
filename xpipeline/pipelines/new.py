@@ -415,9 +415,6 @@ class DynamicModeDecomposition:
 
     def train_test_split(self, vectors, angles, times_sec):
         print(f"{vectors.shape=} {angles.shape=}")
-        if vectors.shape[1] % 2 != 0:
-            vectors = vectors[:,:-1]
-            angles = angles[:-1]
         if self.enforce_time_contiguity:
             vec_pairs, angle_pairs = construct_time_contiguous_pairs(
                 vectors,
@@ -426,6 +423,9 @@ class DynamicModeDecomposition:
             )
             print(f"x {vec_pairs.shape=} {angle_pairs.shape=}")
         else:
+            if vectors.shape[1] % 2 != 0:
+                vectors = vectors[:,:-1]
+                angles = angles[:-1]
             vec_pairs = utils.wrap_columns(vectors)
             # drop half the angles as well
             angle_pairs = utils.wrap_columns(angles[np.newaxis, :])
@@ -451,24 +451,54 @@ class DynamicModeDecomposition:
 
         if self.do_train_test_split:
             train_vecs, test_vecs, train_angles, test_angles = self.train_test_split(image_vecs_sub, angles, data.times_sec)
-            _, probe_model_vecs, _, _ = self.train_test_split(probe_model_vecs, angles, data.times_sec)
+            print(f"{train_angles.shape=}, {test_angles.shape=}")
+            train_probe_model_vecs, test_probe_model_vecs, _, _ = self.train_test_split(probe_model_vecs, angles, data.times_sec)
         else:
             train_vecs = test_vecs = image_vecs_sub
+            train_probe_model_vecs = test_probe_model_vecs = probe_model_vecs
             train_angles = test_angles = angles
-        test_vecs_std = None
+
+        vecs_std = train_vecs_std = test_vecs_std = None
         if self.scale_by_pix_std:
-            train_vecs_std = np.std(train_vecs, axis=1)
-            train_vecs /= train_vecs_std[:, np.newaxis]
-            test_vecs_std = np.std(test_vecs, axis=1)
-            test_vecs /= test_vecs_std[:, np.newaxis]
-            probe_model_vecs /= test_vecs_std[:, np.newaxis]
+            if self.do_train_test_split:
+                train_vecs_std = np.std(train_vecs, axis=1)
+                train_vecs /= train_vecs_std[:, np.newaxis]
+                train_probe_model_vecs /= train_vecs_std[:, np.newaxis]
+                
+                test_vecs_std = np.std(test_vecs, axis=1)
+                test_vecs /= test_vecs_std[:, np.newaxis]
+                test_probe_model_vecs /= test_vecs_std[:, np.newaxis]
+            else:
+                vecs_std = np.std(image_vecs_sub, axis=1)
+                image_vecs_sub /= vecs_std[:, np.newaxis]
+                probe_model_vecs /= vecs_std[:, np.newaxis]
+
         if self.scale_by_frame_std:
-            train_vecs_std = np.std(train_vecs, axis=0)
-            train_vecs /= train_vecs_std[np.newaxis, :]
-            test_vecs_std = np.std(test_vecs, axis=0)
-            test_vecs /= test_vecs_std[np.newaxis, :]
-            probe_model_vecs /= test_vecs_std[np.newaxis, :]
-        return train_vecs, test_vecs, test_vecs_std, probe_model_vecs, median_vec, test_angles
+            if self.do_train_test_split:
+                train_vecs_std = np.std(train_vecs, axis=0)
+                train_vecs /= train_vecs_std[np.newaxis, :]
+                train_probe_model_vecs /= train_vecs_std[np.newaxis, :]
+
+                test_vecs_std = np.std(test_vecs, axis=0)
+                test_vecs /= test_vecs_std[np.newaxis, :]
+                test_probe_model_vecs /= test_vecs_std[np.newaxis, :]
+            else:
+                vecs_std = np.std(image_vecs_sub, axis=0)
+                image_vecs_sub /= vecs_std[np.newaxis, :]
+                probe_model_vecs /= test_vecs_std[np.newaxis, :]
+        
+        if self.do_train_test_split:
+            partitions = [
+                (train_vecs, train_probe_model_vecs, train_vecs_std, train_angles),
+                (test_vecs, test_probe_model_vecs, test_vecs_std, test_angles),
+            ]
+        else:
+            partitions = [(image_vecs_sub, probe_model_vecs, vecs_std, angles)]
+
+        return (
+            partitions,
+            median_vec,
+        )
 
     def prepare(self,
         data : StarlightSubtractionData,
@@ -477,6 +507,7 @@ class DynamicModeDecomposition:
         angles : Optional[np.ndarray] = None,
         decomposition: Optional[learning.PrecomputedDecomposition] = None,
     ) -> learning.PrecomputedDecomposition:
+        return None
         train_vecs, _, _, _, _, _ = self.collect_inputs(data, angles)
         mtx_x = train_vecs[:,:-1]  # drop last column (time-step)
         solver = learning.generic_svd
@@ -497,40 +528,66 @@ class DynamicModeDecomposition:
         angles : Optional[np.ndarray] = None,
         decomposition: Optional[learning.PrecomputedDecomposition] = None,
     ):
-        if decomposition is None:
-            decomposition = self.prepare(data, k_modes, angles=angles)
-        mtx_u, diag_s, mtx_v = decomposition.mtx_u0, decomposition.diag_s0, decomposition.mtx_v0
-        train_vecs, test_vecs, test_vecs_std, probe_model_vecs, median_vec, test_angles = self.collect_inputs(data, angles)
-        mtx_x = train_vecs[:,:-1]  # drop last column (time-step)
-        mtx_xprime = train_vecs[:,1:]  # drop first column (time-step)
-        print(f"{mtx_x.shape=} {mtx_xprime.shape=}")
-        if self.truncate_before_mode_construction:
-            mtx_u, diag_s, mtx_v = mtx_u[:,:k_modes], diag_s[:k_modes], mtx_v[:,:k_modes]
-        mtx_s_inv = np.diag(diag_s**-1)
-        mtx_atilde = mtx_u.T @ mtx_xprime @ mtx_v @ mtx_s_inv
-        diag_eigs, mtx_w = np.linalg.eig(mtx_atilde)
-        mtx_phi = mtx_xprime @ mtx_v @ mtx_s_inv @ mtx_w
+        # if decomposition is None:
+        #     decomposition = self.prepare(data, k_modes, angles=angles)
+        # mtx_u, diag_s, mtx_v = decomposition.mtx_u0, decomposition.diag_s0, decomposition.mtx_v0
+        partitions, median_vec = self.collect_inputs(data, angles)
+        subtracted_vecs = None
+        subtracted_model_vecs = None
+        decomposition = None
+        final_angles = None
+        solver = learning.generic_svd
+        if self.use_iterative_svd:
+            solver = learning.cpu_top_k_svd_arpack
+        for idx, (vecs, model_vecs, vecs_std, part_angles) in enumerate(partitions):
+            print(f"{vecs.shape=} {part_angles.shape=}")
+            if idx == 0:
+                train_vecs = partitions[1][0]
+            else:
+                train_vecs = partitions[0][0]
+            mtx_x = train_vecs[:,:-1]  # drop last column (time-step)
+            mtx_xprime = train_vecs[:,1:]  # drop first column (time-step)
+            mtx_u, diag_s, mtx_v = solver(mtx_x, k_modes)
+            print(f"{mtx_x.shape=} {mtx_xprime.shape=}")
+            if self.truncate_before_mode_construction:
+                mtx_u, diag_s, mtx_v = mtx_u[:,:k_modes], diag_s[:k_modes], mtx_v[:,:k_modes]
+            mtx_s_inv = np.diag(diag_s**-1)
+            mtx_atilde = mtx_u.T @ mtx_xprime @ mtx_v @ mtx_s_inv
+            diag_eigs, mtx_w = np.linalg.eig(mtx_atilde)
+            mtx_phi = mtx_xprime @ mtx_v @ mtx_s_inv @ mtx_w
 
-        if not self.truncate_before_mode_construction:
-            mtx_phi = mtx_phi[:,:k_modes]
-            mtx_eigs = np.diag(diag_eigs[:k_modes])
-            mtx_phi_pinv = np.linalg.pinv(mtx_phi)
-        else:
-            mtx_eigs = np.diag(diag_eigs)
-            mtx_phi_pinv = np.linalg.pinv(mtx_phi)
-        dmd_recons_vecs = (mtx_phi @ (mtx_eigs @ (mtx_phi_pinv @ test_vecs)))
-        test_vecs -= dmd_recons_vecs.real
-        if self.scale_by_pix_std:
-            test_vecs *= test_vecs_std[:, np.newaxis]  # train and test both scaled by std above, scale back
-        if self.scale_by_frame_std:
-            test_vecs *= test_vecs_std[np.newaxis, :]  # train and test both scaled by std above, scale back
-        dmd_recons_probes = (mtx_phi @ (mtx_eigs @ (mtx_phi_pinv @ probe_model_vecs)))
-        probe_model_vecs_sub = probe_model_vecs - dmd_recons_probes.real
-        if self.scale_by_frame_std:
-            probe_model_vecs_sub *= test_vecs_std[np.newaxis, :]  # scaled by std of test vecs above, scale back
-        if self.scale_by_pix_std:
-            probe_model_vecs_sub *= test_vecs_std[:, np.newaxis]  # scaled by std of test vecs above, scale back
-        return test_vecs, probe_model_vecs_sub, decomposition, median_vec, test_angles
+            if not self.truncate_before_mode_construction:
+                mtx_phi = mtx_phi[:,:k_modes]
+                mtx_eigs = np.diag(diag_eigs[:k_modes])
+                mtx_phi_pinv = np.linalg.pinv(mtx_phi)
+            else:
+                mtx_eigs = np.diag(diag_eigs)
+                mtx_phi_pinv = np.linalg.pinv(mtx_phi)
+            dmd_recons_vecs = (mtx_phi @ (mtx_eigs @ (mtx_phi_pinv @ vecs)))
+            vecs -= dmd_recons_vecs.real
+            if self.scale_by_pix_std:
+                vecs *= vecs_std[:, np.newaxis]  # train and test both scaled by std above, scale back
+            if self.scale_by_frame_std:
+                vecs *= vecs_std[np.newaxis, :]  # train and test both scaled by std above, scale back
+            dmd_recons_probes = (mtx_phi @ (mtx_eigs @ (mtx_phi_pinv @ model_vecs)))
+            probe_model_vecs_sub = model_vecs - dmd_recons_probes.real
+            if self.scale_by_frame_std:
+                probe_model_vecs_sub *= vecs_std[np.newaxis, :]  # scaled by std of test vecs above, scale back
+            if self.scale_by_pix_std:
+                probe_model_vecs_sub *= vecs_std[:, np.newaxis]  # scaled by std of test vecs above, scale back
+            if subtracted_vecs is None:
+                subtracted_vecs = vecs
+                subtracted_model_vecs = probe_model_vecs_sub
+                final_angles = part_angles
+            else:
+                print(f"concatenate {subtracted_vecs.shape=} {vecs.shape=}")
+                subtracted_vecs = np.concatenate([subtracted_vecs, vecs], axis=1)
+                subtracted_model_vecs = np.concatenate([subtracted_model_vecs, probe_model_vecs_sub], axis=1)
+                print(f"concatenate {final_angles.shape=} {part_angles.shape=}")
+                final_angles = np.concatenate([final_angles, part_angles])
+
+        print(f"{subtracted_vecs.shape=} {final_angles.shape=}")
+        return subtracted_vecs, subtracted_model_vecs, decomposition, median_vec, final_angles
 
 @xconf.config
 class KlipSubspace:
