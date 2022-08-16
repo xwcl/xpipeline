@@ -64,14 +64,13 @@ RUN mkdir -p /opt/xpipeline
 ADD . /opt/xpipeline/
 RUN pip install -e /opt/xpipeline
 WORKDIR /opt/xpipeline
-# Not only does this ensure we don't build a broken image,
-# but it also compiles those Numba functions we can ahead of time
+ENV NUMBA_CACHE_DIR=/tmp/xpipeline_numba_cache
+RUN python -c "import xpipeline"
 RUN pytest -x
+RUN xp diagnostic
+RUN rm -r /tmp/xpipeline_numba_cache
 RUN mkdir -p /srv
-# not used when run in Singularity
 WORKDIR /srv
 ENV DEBIAN_FRONTEND interactive
+# not used when run in Singularity
 USER containeruser
-# smoke test
-RUN python -c "import xpipeline"
-RUN xp diagnostic

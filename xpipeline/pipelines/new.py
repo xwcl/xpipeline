@@ -415,34 +415,31 @@ class DynamicModeDecomposition:
     truncate_before_mode_construction : bool = xconf.field(default=True, help="Whether to truncate the SVD before using it to construct the modal basis Phi (true), or merely truncate the final modal basis Phi (false)")
 
     def train_test_split(self, vectors, angles, times_sec):
-        print(f"{vectors.shape=} {angles.shape=}")
         if self.enforce_time_contiguity:
             vec_pairs, angle_pairs = construct_time_contiguous_pairs(
                 vectors,
                 angles,
                 np.ascontiguousarray(times_sec),
             )
-            print(f"x {vec_pairs.shape=} {angle_pairs.shape=}")
+            log.debug(f"Made {vec_pairs.shape=} pairs of vectors adjacent in time from input {vectors.shape=}")
         else:
             if vectors.shape[1] % 2 != 0:
                 vectors = vectors[:,:-1]
                 angles = angles[:-1]
             vec_pairs = utils.wrap_columns(vectors)
+            log.debug(f"Interleaving column vectors gives {vec_pairs.shape=} pairs of vectors")
             # drop half the angles as well
             angle_pairs = utils.wrap_columns(angles[np.newaxis, :])
 
         train_vecs = utils.unwrap_columns(vec_pairs[:,::2])
-        print(f"{train_vecs.shape=}")
         test_vecs = utils.unwrap_columns(vec_pairs[:,1::2])
-        print(f"{test_vecs.shape=}")
 
         # assert np.all(train_vecs[:,0] == vectors[:,0])
         # assert np.all(train_vecs[:,1] == vectors[:,1])
         # assert np.all(train_vecs[:,2] == vectors[:,4])
         train_angles = utils.unwrap_columns(angle_pairs[:,::2]).flatten()
-        print(f"{train_angles.shape=}")
         test_angles = utils.unwrap_columns(angle_pairs[:,1::2]).flatten()
-        print(f"{test_vecs.shape=} {test_angles.shape=}")
+
         return train_vecs, test_vecs, train_angles, test_angles
 
     def collect_inputs(self, data, angles):
@@ -452,7 +449,6 @@ class DynamicModeDecomposition:
 
         if self.do_train_test_split:
             train_vecs, test_vecs, train_angles, test_angles = self.train_test_split(image_vecs_sub, angles, data.times_sec)
-            print(f"{train_angles.shape=}, {test_angles.shape=}")
             train_probe_model_vecs, test_probe_model_vecs, _, _ = self.train_test_split(probe_model_vecs, angles, data.times_sec)
         else:
             vec_pairs, angle_pairs = construct_time_contiguous_pairs(
