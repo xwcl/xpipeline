@@ -862,8 +862,8 @@ class StarlightSubtractResult:
 @xconf.config
 class StarlightSubtractionDataConfig:
     inputs : list[PipelineInputConfig] = xconf.field(help="Input data to simultaneously reduce")
-    angles : Union[FitsConfig,FitsTableColumnConfig] = xconf.field(help="1-D array or table column of derotation angles")
-    times_sec : Union[FitsConfig,FitsTableColumnConfig] = xconf.field(help="1-D array or table column of observation times in seconds (to identify chunks)")
+    angles : Union[FitsConfig,FitsTableColumnConfig,None] = xconf.field(help="1-D array or table column of derotation angles")
+    times_sec : Union[FitsConfig,FitsTableColumnConfig,None] = xconf.field(default=None,help="1-D array or table column of observation times in seconds (to identify chunks)")
     coadd_chunk_size : int = xconf.field(default=1, help="Number of frames per coadded chunk (last chunk may be fewer)")
     coadd_operation : constants.CombineOperation = xconf.field(default=constants.CombineOperation.SUM, help="NaN-safe operation with which to combine coadd chunks")
     decimate_frames_by : int = xconf.field(default=1, help="Keep every Nth frame")
@@ -871,8 +871,8 @@ class StarlightSubtractionDataConfig:
     companions : list[CompanionConfig] = xconf.field(default_factory=lambda: [CompanionConfig(r_px=30, pa_deg=0, scale=0)], help="Companion amplitude and location to inject (scale 0 for no injection) and probe")
 
     def load(self) -> StarlightSubtractionData:
-        angles = self.angles.load()[self.decimate_frames_offset::self.decimate_frames_by]
-        times_sec = self.times_sec.load()[self.decimate_frames_offset::self.decimate_frames_by]
+        angles = self.angles.load()[self.decimate_frames_offset::self.decimate_frames_by] if self.angles is not None else None
+        times_sec = self.times_sec.load()[self.decimate_frames_offset::self.decimate_frames_by] if self.times_sec is not None else None
         companions = [companion.to_companionspec() for companion in self.companions]
         model_gen_sec = 0
         pipeline_inputs = []

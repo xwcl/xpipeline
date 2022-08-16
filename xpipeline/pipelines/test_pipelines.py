@@ -49,6 +49,7 @@ def test_klip_pipeline(naco_betapic_data, strategy_cls, snr_threshold):
     r_px, pa_deg = 18.4, -42.8
     data_config = StarlightSubtractionDataConfig(
         inputs=[input_config],
+        times_sec=None,
         angles=PreloadedArray(angles),
         companions=[CompanionConfig(
             r_px=r_px,
@@ -100,6 +101,7 @@ def test_measure_starlight_subtraction_pipeline(naco_betapic_data, strategy_cls,
     r_px, pa_deg = 18.4, -42.8
     data_config = StarlightSubtractionDataConfig(
         inputs=[input_config],
+        times_sec=None,
         angles=PreloadedArray(angles),
         companions=[CompanionConfig(
             r_px=r_px,
@@ -152,6 +154,7 @@ def test_klipt_annular_exclusion(naco_betapic_data):
     r_px, pa_deg = 18.4, -42.8
     data_config = StarlightSubtractionDataConfig(
         inputs=[input_config],
+        times_sec=None,
         angles=PreloadedArray(angles),
         companions=[CompanionConfig(
             r_px=r_px,
