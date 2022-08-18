@@ -474,7 +474,7 @@ class DynamicModeDecomposition:
                 train_vecs_std = np.std(train_vecs, axis=1)
                 train_vecs /= train_vecs_std[:, np.newaxis]
                 train_probe_model_vecs /= train_vecs_std[:, np.newaxis]
-                
+
                 test_vecs_std = np.std(test_vecs, axis=1)
                 test_vecs /= test_vecs_std[:, np.newaxis]
                 test_probe_model_vecs /= test_vecs_std[:, np.newaxis]
@@ -496,7 +496,7 @@ class DynamicModeDecomposition:
                 vecs_std = np.std(image_vecs_sub, axis=0)
                 image_vecs_sub /= vecs_std[np.newaxis, :]
                 probe_model_vecs /= test_vecs_std[np.newaxis, :]
-        
+
         if self.do_train_test_split:
             partitions = [
                 (train_vecs, train_probe_model_vecs, train_vecs_std, train_angles),
@@ -516,8 +516,29 @@ class DynamicModeDecomposition:
         *,
         angles : Optional[np.ndarray] = None,
         decomposition: Optional[learning.PrecomputedDecomposition] = None,
-    ) -> learning.PrecomputedDecomposition:
-        return None
+    ) -> list[learning.PrecomputedDecomposition]:
+        solver = learning.generic_svd
+        if self.use_iterative_svd:
+            solver = learning.cpu_top_k_svd_arpack
+        partitions, median_vec = self.collect_inputs(data, angles)
+        decomps = []
+        for idx, (vecs, model_vecs, vecs_std, part_angles) in enumerate(partitions):
+            # print(f"{vecs.shape=} {part_angles.shape=}")
+            if self.do_train_test_split and idx == 0:
+                train_vecs = partitions[1][0]
+            else:
+                train_vecs = partitions[0][0]
+                if self.do_train_test_split and not self.reduce_both_halves:
+                    continue
+            mtx_x = train_vecs[:,:-1]  # drop last column (time-step)
+            # mtx_xprime = train_vecs[:,1:]  # drop first column (time-step)
+            mtx_u, diag_s, mtx_v = solver(mtx_x, k_modes)
+            decomps.append(learning.PrecomputedDecomposition(
+                mtx_u0=mtx_u,
+                diag_s0=diag_s,
+                mtx_v0=mtx_v,
+            ))
+        return decomps
         train_vecs, _, _, _, _, _ = self.collect_inputs(data, angles)
         mtx_x = train_vecs[:,:-1]  # drop last column (time-step)
         solver = learning.generic_svd
@@ -536,7 +557,7 @@ class DynamicModeDecomposition:
         k_modes : int,
         *,
         angles : Optional[np.ndarray] = None,
-        decomposition: Optional[learning.PrecomputedDecomposition] = None,
+        decomposition: Optional[list[learning.PrecomputedDecomposition]] = None,
     ):
         # if decomposition is None:
         #     decomposition = self.prepare(data, k_modes, angles=angles)
@@ -544,11 +565,10 @@ class DynamicModeDecomposition:
         partitions, median_vec = self.collect_inputs(data, angles)
         subtracted_vecs = None
         subtracted_model_vecs = None
-        decomposition = None
+        if decomposition is None:
+            decomposition = self.prepare(data, k_modes, angles=angles)
         final_angles = None
-        solver = learning.generic_svd
-        if self.use_iterative_svd:
-            solver = learning.cpu_top_k_svd_arpack
+
         for idx, (vecs, model_vecs, vecs_std, part_angles) in enumerate(partitions):
             # print(f"{vecs.shape=} {part_angles.shape=}")
             if self.do_train_test_split and idx == 0:
@@ -557,9 +577,9 @@ class DynamicModeDecomposition:
                 train_vecs = partitions[0][0]
                 if self.do_train_test_split and not self.reduce_both_halves:
                     continue
-            mtx_x = train_vecs[:,:-1]  # drop last column (time-step)
+
             mtx_xprime = train_vecs[:,1:]  # drop first column (time-step)
-            mtx_u, diag_s, mtx_v = solver(mtx_x, k_modes)
+            mtx_u, diag_s, mtx_v = decomposition[idx].mtx_u0, decomposition[idx].diag_s0, decomposition[idx].mtx_v0
             # print(f"{mtx_x.shape=} {mtx_xprime.shape=}")
             if self.truncate_before_mode_construction:
                 mtx_u, diag_s, mtx_v = mtx_u[:,:k_modes], diag_s[:k_modes], mtx_v[:,:k_modes]
