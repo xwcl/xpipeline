@@ -1090,14 +1090,17 @@ class MatchedPostFilter(_BasePostFilter):
         derotated_cube = None
         if derotation_angles is None:
             raise NotImplementedError('need to handle no-derot case')
+        sci_arr = pipeline_outputs_for_ext[0].sci_arr
+        nobs = sci_arr.shape[0]
+        derotated_cube = np.zeros(
+            (len(pipeline_outputs_for_ext) * nobs,) + sci_arr.shape[1:],
+            dtype=sci_arr.dtype
+        )
         for idx, output in enumerate(pipeline_outputs_for_ext):
             log.debug(f"Derotating model residuals from output {idx + 1} / {len(pipeline_outputs_for_ext)}")
-            derotated_output = improc.derotate_cube(output.model_arr, derotation_angles)
-            if derotated_cube is None:
-                derotated_cube = derotated_output
-            else:
-                derotated_cube = np.concatenate([derotated_cube, derotated_output])
+            improc.derotate_cube(output.model_arr, derotation_angles, output=derotated_cube[idx * nobs:(idx+1) * nobs])
         kernel = improc.combine(derotated_cube, self.combine)
+        del derotated_cube
 
         # shift kernel to center
         dx, dy = characterization.r_pa_to_x_y(measurement_location.r_px, measurement_location.pa_deg, 0, 0)

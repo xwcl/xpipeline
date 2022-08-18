@@ -1304,7 +1304,7 @@ def _derotate_cube(cube, derotation_angles, output, interpolation_fill_value, mi
         matrix_transform_image(cube[idx], transform_mtx, output[idx], interpolation_fill_value, missing_fill_value)
     return output
 
-def derotate_cube(cube, derotation_angles, interpolation_fill_value=0, missing_fill_value=np.nan):
+def derotate_cube(cube, derotation_angles, interpolation_fill_value=0, missing_fill_value=np.nan, output=None):
     """Rotate each plane of `cube` by the corresponding entry
     in `derotation_angles`, with positive angle interpreted as
     deg to rotate E of N when N +Y and E +X (which is CCW
@@ -1329,6 +1329,10 @@ def derotate_cube(cube, derotation_angles, interpolation_fill_value=0, missing_f
     if not np.issubdtype(cube.dtype, np.floating):
         cube = cube.astype(np.float32)
 
-    output = np.zeros_like(cube)
+    if output is None:
+        output = np.zeros_like(cube)
+    else:
+        if output.shape != cube.shape:
+            raise ValueError(f"Got {output.shape=}, mismatched with {cube.shape=}")
     _derotate_cube(cube, derotation_angles, output, interpolation_fill_value, missing_fill_value)
     return output
