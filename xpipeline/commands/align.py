@@ -91,6 +91,3 @@ class Align(base.MultiInputCommand):
 
         result = res.compute()
         log.info(result)
-
-    def _search_box_to_bbox(self, search_box, default_height, default_width):
-        

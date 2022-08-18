@@ -54,6 +54,8 @@ class FitsConfig(FileConfig):
 
     def _load_hdul(self, cache):
         from ..tasks import iofits
+        if cache and self.path in self._cache:
+            return self._cache[self.path]
         with self.open() as fh:
             hdul = iofits.load_fits(fh)
         for ext in hdul.extnames:
