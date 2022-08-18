@@ -38,6 +38,8 @@ def load_file(fh):
     log.debug(f'Loading region from {fh}')
     regions = []
     for line in fh:
+        if isinstance(line, bytes):
+            line = line.decode('utf8')
         for re_opt in REGION_RE_OPTIONS:
             res = re_opt.match(line)
             if res is not None:
