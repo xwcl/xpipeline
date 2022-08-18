@@ -231,15 +231,18 @@ def load_fits(file_handle):
 
 def load_fits_from_path(url_or_path):
     log.debug(f"Loading {url_or_path}")
-    fs = utils.get_fs(url_or_path)
-    if isinstance(fs, LocalFileSystem):
-        # Workaround for https://github.com/astropy/astropy/issues/11586
-        path = fs._strip_protocol(url_or_path)
-        with open(path, "rb") as file_handle:
-            return load_fits(file_handle)
-    else:
-        with fsspec.open(url_or_path, "rb") as file_handle:
-            return load_fits(file_handle)
+    try:
+        fs = utils.get_fs(url_or_path)
+        if isinstance(fs, LocalFileSystem):
+            # Workaround for https://github.com/astropy/astropy/issues/11586
+            path = fs._strip_protocol(url_or_path)
+            with open(path, "rb") as file_handle:
+                return load_fits(file_handle)
+        else:
+            with fsspec.open(url_or_path, "rb") as file_handle:
+                return load_fits(file_handle)
+    except Exception as e:
+        raise RuntimeError(f"Exception loading {url_or_path} as FITS: {e}")
 
 
 def write_fits(hdul, destination_path, overwrite=False) -> str:
