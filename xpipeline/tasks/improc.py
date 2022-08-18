@@ -581,7 +581,6 @@ def gauss2d(shape, center, sigma):
 
 
 def pad_to_match(arr_a: np.ndarray, arr_b: np.ndarray):
-
     a_height, a_width = arr_a.shape
     b_height, b_width = arr_b.shape
     if a_height > b_height:
@@ -598,9 +597,7 @@ def pad_to_match(arr_a: np.ndarray, arr_b: np.ndarray):
 
 def shifts_from_cutout(sci_arr, spec, upsample_factor=100):
     # cut out bbox
-    log.debug(f'{spec.search_box.slices=}')
     rough_cutout = sci_arr[spec.search_box.slices]
-    # interp_cutout = regrid_image(rough_cutout, x_prime=xx, y_prime=yy, method="cubic")
     interp_cutout = interpolate_nonfinite(rough_cutout)
     template = spec.template
     # pad to match shapes
@@ -610,6 +607,7 @@ def shifts_from_cutout(sci_arr, spec, upsample_factor=100):
         reference_image=template,
         moving_image=interp_cutout,
         upsample_factor=upsample_factor,
+        normalization=None,
     )
     return shifts
 
