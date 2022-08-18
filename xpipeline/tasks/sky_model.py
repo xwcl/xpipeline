@@ -8,7 +8,7 @@ import distributed.protocol
 import numpy as np
 import scipy.ndimage
 
-from . import iofits, improc
+from . import iofits, improc, learning
 from ..utils import unwrap
 from .. import core
 
@@ -78,7 +78,7 @@ def compute_components(sky_cube, n_components):
             all_real_mtx, k=n_components
         )  # mtx_u is rows*cols x n_components
     else:
-        mtx_u, _, _ = np.linalg.svd(all_real_mtx, full_matrices=False)
+        mtx_u, _, _ = learning.cpu_top_k_svd_arpack(all_real_mtx, n_components)
 
     if n_components > mtx_u.shape[1]:
         raise ValueError(
