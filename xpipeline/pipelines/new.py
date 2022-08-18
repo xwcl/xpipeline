@@ -13,7 +13,7 @@ import numpy as np
 from xconf.contrib import BaseRayGrid, FileConfig, join, PathConfig, DirectoryConfig
 import sys
 import logging
-from typing import Optional, Union
+from typing import Optional, Union, ClassVar
 from ..commands.base import BaseCommand
 from .. import utils
 from ..tasks import starlight_subtraction, learning, improc, characterization
@@ -50,16 +50,21 @@ class FileConfig:
 class FitsConfig(FileConfig):
     path : str = xconf.field(help="Path from which to load the containing FITS file")
     ext : Union[int,str] = xconf.field(default=0, help="Extension from which to load")
+    _cache : ClassVar[dict] = {}
 
-    def load(self, cache=True) -> np.ndarray:
-        if cache and getattr(self, '_cache', None) is not None:
-            return self._cache
+    def _load_hdul(self, cache):
         from ..tasks import iofits
         with self.open() as fh:
             hdul = iofits.load_fits(fh)
-        data = hdul[self.ext].data
+        for ext in hdul.extnames:
+            hdul[ext].data.flags.writeable = False
         if cache:
-            self._cache = data
+            self._cache[self.path] = hdul
+        return hdul
+
+    def load(self, cache=True) -> np.ndarray:
+        hdul = self._load_hdul(cache)
+        data = hdul[self.ext].data
         return data
 
 class PreloadedArray:
@@ -77,14 +82,8 @@ class FitsTableColumnConfig(FitsConfig):
     ext : Union[int,str] = xconf.field(default="OBSTABLE", help="Extension from which to load")
 
     def load(self, cache=True) -> np.ndarray:
-        if cache and getattr(self, '_cache', None) is not None:
-            return self._cache
-        from ..tasks import iofits
-        with self.open() as fh:
-            hdul = iofits.load_fits(fh)
+        hdul = self._load_hdul(cache)
         coldata = hdul[self.ext].data[self.table_column]
-        if cache:
-            self._cache = coldata
         return coldata
 
 @xconf.config
