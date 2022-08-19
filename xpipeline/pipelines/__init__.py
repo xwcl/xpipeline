@@ -139,6 +139,7 @@ def sky_subtract(
 def align_to_templates(
     input_coll: PipelineCollection,
     cutout_specs: List[improc.CutoutTemplateSpec],
+    *,
     upsample_factor: int = 100,
     ext: Union[int, str] = 0,
     dq_ext: Union[int, str] = "DQ",

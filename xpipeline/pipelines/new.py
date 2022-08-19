@@ -877,6 +877,32 @@ class StarlightSubtractResult:
     decomposition : Optional[learning.PrecomputedDecomposition]
 
 @xconf.config
+class CompanionSpiral:
+    min_r_px : float = xconf.field(help="Input data to simultaneously reduce")
+    max_r_px : float = xconf.field(help="Input data to simultaneously reduce")
+    n_steps : int = xconf.field(help="Input data to simultaneously reduce")
+    exclude_deg : float = xconf.field(help="")
+    scale : Union[list[float],float] = xconf.field(help="")
+    n_arms : int = xconf.field(default=1, help="")
+    start_pa_deg : Union[list[float],float] = xconf.field(default=0, help="")
+
+    def load(self):
+        from xpipeline.tasks.characterization import CompanionSpec
+        spiral = []
+        delta_px = self.max_r_px - self.min_r_px
+        if not isinstance(self.scale, list):
+            scales = self.n_steps * [self.scale,]
+        else:
+            scales = self.scale
+        for ring_idx in range(self.n_steps):
+            r_px = self.min_r_px + (ring_idx / self.n_steps) * delta_px
+            deg_per_arm = 360 / self.n_arms
+            for arm_idx in range(self.n_arms):
+                theta_deg = deg_per_arm * arm_idx + np.rad2deg(ring_idx * self.exclude_deg) + self.start_pa_deg
+                spiral.append(CompanionSpec(r_px, theta_deg, scales[ring_idx]))
+        return spiral
+
+@xconf.config
 class StarlightSubtractionDataConfig:
     inputs : list[PipelineInputConfig] = xconf.field(help="Input data to simultaneously reduce")
     angles : Union[FitsConfig,FitsTableColumnConfig,None] = xconf.field(help="1-D array or table column of derotation angles")
@@ -885,12 +911,15 @@ class StarlightSubtractionDataConfig:
     coadd_operation : constants.CombineOperation = xconf.field(default=constants.CombineOperation.SUM, help="NaN-safe operation with which to combine coadd chunks")
     decimate_frames_by : int = xconf.field(default=1, help="Keep every Nth frame")
     decimate_frames_offset : int = xconf.field(default=0, help="Slice to begin decimation at this frame")
-    companions : list[CompanionConfig] = xconf.field(default_factory=lambda: [CompanionConfig(r_px=30, pa_deg=0, scale=0)], help="Companion amplitude and location to inject (scale 0 for no injection) and probe")
+    companions : Union[CompanionSpiral,list[CompanionConfig]] = xconf.field(default_factory=lambda: [CompanionConfig(r_px=30, pa_deg=0, scale=0)], help="Companion amplitude and location to inject (scale 0 for no injection) and probe")
 
     def load(self) -> StarlightSubtractionData:
         angles = self.angles.load()[self.decimate_frames_offset::self.decimate_frames_by] if self.angles is not None else None
         times_sec = self.times_sec.load()[self.decimate_frames_offset::self.decimate_frames_by] if self.times_sec is not None else None
-        companions = [companion.to_companionspec() for companion in self.companions]
+        if isinstance(self.companions, list):
+            companions = [companion.to_companionspec() for companion in self.companions]
+        else:
+            companions = self.companions.load()
         model_gen_sec = 0
         pipeline_inputs = []
         for pinputconfig in self.inputs:
@@ -942,6 +971,21 @@ class KModesValuesConfig:
             raise ValueError(f"Given {max_rank=}, no valid values from {self.values}")
         return values
 
+
+@xconf.config
+class KModesRangeConfig:
+    start: int = xconf.field(help="Which values to try for number of modes to subtract")
+    stop: int = xconf.field(help="Which values to try for number of modes to subtract")
+    step: int = xconf.field(help="Which values to try for number of modes to subtract")
+
+    def as_request_value_pairs(self, max_rank: int):
+        '''Returns (value, value) pairs for each entry in `values` that's < max_rank'''
+        values = [(x, x) for x in range(self.start, self.stop, self.step) if x < max_rank]
+        if not len(values):
+            raise ValueError(f"Given {max_rank=}, no valid values from {self.values}")
+        return values
+
+
 @xconf.config
 class KModesFractionConfig:
     fractions: list[float] = xconf.field(default_factory=lambda: [0.1], help="Fraction of the maximum number of modes to subtract in (0, 1.0)")
@@ -953,7 +997,7 @@ class KModesFractionConfig:
         values = [(x, int(x * max_rank)) for x in self.fractions]
         return values
 
-KModesConfig = Union[KModesValuesConfig,KModesFractionConfig]
+KModesConfig = Union[KModesValuesConfig,KModesFractionConfig,KModesRangeConfig]
 
 @xconf.config
 class PreStackFilter:
