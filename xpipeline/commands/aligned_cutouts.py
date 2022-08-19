@@ -1,4 +1,4 @@
-import sys
+import numpy as np
 from xpipeline.core import LazyPipelineCollection
 import fsspec.spec
 import logging
@@ -6,7 +6,7 @@ import typing
 import xconf
 
 
-from .. import utils
+from .. import utils, constants
 from . import base
 
 log = logging.getLogger(__name__)
@@ -16,6 +16,13 @@ log = logging.getLogger(__name__)
 class GaussianTemplate:
     sigma_px : float = xconf.field(default=1, help="Template PSF kernel stddev in pixels")
     size_px : int = xconf.field(default=128, help="Size of generated Gaussian template in pixels")
+
+    def load(self):
+        from ..tasks import improc
+        tpl_shape = self.size_px, self.size_px
+        center = improc.arr_center(tpl_shape)
+        template_array = improc.gauss2d(tpl_shape, center, (self.sigma_px, self.sigma_px))
+        return template_array
 
 @xconf.config
 class Box:
@@ -45,6 +52,7 @@ class CutoutConfig:
         default=False,
         help="Use the template to cross correlate with the first frame, then correlate subsequent frames with that one"
     )
+    faux_saturation_percentile : float = xconf.field(default=100, help="Percentile at which to clip template to simulate saturation")
 
 
 DEFAULT_CUTOUT = CutoutConfig(search_box=Box(), template=GaussianTemplate())
@@ -58,12 +66,13 @@ class AlignedCutouts(base.MultiInputCommand):
         help="Specify one or more cutouts with names and template PSFs to generate aligned cutouts for",
     )
     ext : typing.Union[str, int] = xconf.field(default=0, help="Extension index or name to load from input files")
+    dq_ext : typing.Union[str, int] = xconf.field(default="DQ", help="Extension index or name for data quality array")
     excluded_regions : typing.Optional[base.FileConfig] = xconf.field(default_factory=list, help="Regions to fill with zeros before cross-registration, stored as DS9 region file (reg format)")
 
     def main(self):
         import dask
         from .. import pipelines
-        from ..tasks import iofits, improc, regions
+        from ..tasks import iofits, improc, regions, data_quality
 
         log.debug(self)
         dest_fs = utils.get_fs(self.destination)
@@ -81,7 +90,7 @@ class AlignedCutouts(base.MultiInputCommand):
         example_hdul = dask.compute(coll.items[0])[0]
         dimensions = example_hdul[self.ext].data.shape
         default_height, default_width = dimensions
-        cutout_specs = []
+
         if isinstance(self.excluded_regions, base.FileConfig):
             with self.excluded_regions.open() as fh:
                 excluded_regions = regions.load_file(fh)
@@ -89,32 +98,33 @@ class AlignedCutouts(base.MultiInputCommand):
         else:
             excluded_pixels_mask = np.zeros(dimensions, dtype=bool)
 
+        cutout_specs = {}
+
         for name, cutout_config in self.cutouts.items():
             search_box = self._search_box_to_bbox(cutout_config.search_box, default_height, default_width)
             tpl = cutout_config.template
-            if isinstance(tpl, GaussianTemplate):
-                tpl_shape = tpl.size_px, tpl.size_px
-                center = improc.arr_center(tpl_shape)
-                template_array = improc.gauss2d(tpl_shape, center, (tpl.sigma_px, tpl.sigma_px))
-            else:
-                template_array = tpl.load()
+            template_array = tpl.load()
+
             spec = improc.CutoutTemplateSpec(
                 search_box=search_box,
-                template=template_array,
-                name=name
+                template=np.clip(template_array, 0, np.percentile(template_array, cutout_config.faux_saturation_percentile)),
+                name=name,
             )
             if cutout_config.use_first_as_template:
-                data = example_hdul[self.ext].data
+                data = data_quality.get_masked_data(example_hdul, ext=self.ext, dq_ext=self.dq_ext, permitted_flags=constants.DQ_SATURATED)
                 data_driven_template = improc.aligned_cutout(data, spec)
                 improc.interpolate_nonfinite(data_driven_template, data_driven_template)
-                import numpy as np
-                if np.any(np.isnan(data_driven_template)):
-                    from astropy.io import fits
-                    fits.PrimaryHDU(data_driven_template).writeto('./shifted_first_frame.fits', overwrite=True)
                 spec.template = data_driven_template
-            cutout_specs.append(spec)
+            cutout_specs[name] = spec
             log.debug(spec)
-        output_coll = pipelines.align_to_templates(coll, cutout_specs, excluded_pixels_mask)
+
+        output_coll = pipelines.align_to_templates(
+            coll,
+            [spec for _, spec in cutout_specs.items()],
+            ext=self.ext,
+            dq_ext=self.dq_ext,
+            excluded_pixels_mask=excluded_pixels_mask
+        )
         res = output_coll.zip_map(iofits.write_fits, output_filepaths, overwrite=True)
 
         result = res.compute()
