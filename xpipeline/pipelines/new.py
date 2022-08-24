@@ -13,7 +13,7 @@ import numpy as np
 from xconf.contrib import BaseRayGrid, FileConfig, join, PathConfig, DirectoryConfig
 import sys
 import logging
-from typing import Optional, Union, ClassVar
+from typing import Optional, Union, ClassVar, Any
 from ..commands.base import BaseCommand
 from .. import utils
 from ..tasks import starlight_subtraction, learning, improc, characterization
@@ -153,6 +153,7 @@ class StarlightSubtractionData:
     angles : np.ndarray
     times_sec : Optional[np.ndarray]
     companions : list[CompanionSpec]
+    config : Optional[object] = None
 
     def from_slice(self, the_slice):
         new_inputs = []
@@ -945,8 +946,12 @@ class StarlightSubtractionDataConfig:
             dt = time.time() - ts
             model_gen_sec += dt
             if self.coadd_chunk_size > 1:
-                pinput.model_arr = improc.downsample_first_axis(pinput.model_arr, self.coadd_chunk_size, self.coadd_operation)
-                pinput.sci_arr = improc.downsample_first_axis(pinput.sci_arr, self.coadd_chunk_size, self.coadd_operation)
+                model_arr = pinput.model_arr
+                pinput.model_arr = improc.downsample_first_axis(model_arr, self.coadd_chunk_size, self.coadd_operation)
+                del model_arr
+                sci_arr = pinput.sci_arr
+                pinput.sci_arr = improc.downsample_first_axis(sci_arr, self.coadd_chunk_size, self.coadd_operation)
+                del sci_arr
             pipeline_inputs.append(pinput)
         log.debug("Spent %f seconds in model generation", model_gen_sec)
 
@@ -958,6 +963,7 @@ class StarlightSubtractionDataConfig:
             angles=angles,
             companions=companions,
             times_sec=times_sec,
+            config=self,
         )
 
 @xconf.config
@@ -994,7 +1000,7 @@ class KModesFractionConfig:
         '''Returns (requested fraction, actual value) pairs for each entry in `fractions`'''
         if any(x >= 1.0 for x in self.fractions):
             raise ValueError(f"Invalid fractions in config: {self.fractions} (must be 0 < x < 1)")
-        values = [(x, int(x * max_rank)) for x in self.fractions]
+        values = [(x, max(int(x * max_rank), 1)) for x in self.fractions]
         return values
 
 KModesConfig = Union[KModesValuesConfig,KModesFractionConfig,KModesRangeConfig]
@@ -1535,9 +1541,11 @@ class MeasureStarlightSubtraction:
             result.modes_chosen_to_requested_lookup[k_modes] = ssresult.modes[k_modes].modes_requested
         return result
 
-    def measurements_to_jsonable(self, res : StarlightSubtractionMeasurements, k_modes_values):
+    def measurements_to_jsonable(self, res : StarlightSubtractionMeasurements, k_modes_values, data_config = None):
         output_dict = {}
         output_dict['config'] = xconf.asdict(self)
+        if data_config is not None:
+            output_dict['config']['data'] = xconf.asdict(data_config)
         output_dict['results'] = {
             'k_modes_values': k_modes_values,
             'companions': [],
@@ -1624,7 +1632,7 @@ class SaveMeasuredStarlightSubtraction:
         res : StarlightSubtractionMeasurements = measure_subtraction.execute(data)
         k_modes_values = list(res.by_modes.keys())
         n_inputs = len(data.inputs)
-        output_dict = measure_subtraction.measurements_to_jsonable(res, k_modes_values)
+        output_dict = measure_subtraction.measurements_to_jsonable(res, k_modes_values, data.config)
         log.debug(pformat(output_dict))
         output_json = orjson.dumps(
             output_dict,
