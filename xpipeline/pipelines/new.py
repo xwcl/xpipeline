@@ -1176,7 +1176,7 @@ class MatchedPostFilter(_BasePostFilter):
 
         # shift kernel to center
         dx, dy = characterization.r_pa_to_x_y(measurement_location.r_px, measurement_location.pa_deg, 0, 0)
-        kernel = improc.shift2(kernel, -dx, -dy)
+        kernel = improc.shift2(kernel, -dx, -dy, interpolation_fill_value=0, missing_fill_value=np.nan)
 
         # trim kernel to only central region
         radius_px = (self.kernel_diameter_resel * resolution_element_px) / 2
