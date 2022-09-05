@@ -1412,10 +1412,15 @@ class MeasureStarlightSubtraction:
     return_post_filtering_result : bool = xconf.field(default=False, help="whether to return the post-filtered image")
     frames_per_chunk : int = xconf.field(default=0, help="Construct chunks of N frames to reduce independently and combine with averaging at the end, 0 to disable")
     chunk_stride : int = xconf.field(default=0, help="Offset between successive chunks, 0 for 'same as chunk size'. Permits overlapping chunks.")
+    simultaneously_subtract_inputs : bool = xconf.field(default=True, help="Whether all PipelineInputs should be unwrapped together into the observation matrix (True) or reduced separately and combined at the end (False)")
 
     def _combine_starlight_subtract_modes_results(self, intermediate_ssresults : list[StarlightSubtractResult]):
         k_modes_requested_values = list(sorted(intermediate_ssresults[0].modes.keys()))
-        destination_exts = list(sorted(intermediate_ssresults[0].modes[k_modes_requested_values[0]].destination_images.keys()))
+        dest_exts_set = set()
+        for int_res in intermediate_ssresults:
+            int_res_exts = int_res.modes[k_modes_requested_values[0]].destination_images.keys()
+            dest_exts_set |= set(int_res_exts)
+        destination_exts = list(sorted(dest_exts_set))
         combined_results_by_modes = {}
         for k_modes_requested in k_modes_requested_values:
             destination_images = {}
@@ -1425,7 +1430,10 @@ class MeasureStarlightSubtraction:
 
                 coverage_overall = None
                 for ssresult in intermediate_ssresults:
-                    pfresults : PostFilteringResults = ssresult.modes[k_modes_requested].destination_images[ext]
+                    dest_imgs = ssresult.modes[k_modes_requested].destination_images
+                    if ext not in dest_imgs:
+                        continue
+                    pfresults : PostFilteringResults = dest_imgs[ext]
                     unfiltered_images.append(pfresults.unfiltered_image)
                     if coverage_overall is None:
                         coverage_overall = pfresults.coverage_count.copy()
@@ -1486,15 +1494,29 @@ class MeasureStarlightSubtraction:
             log.debug(f"Got {len(slices)} slices in chunk mode: {slices}")
         else:
             slices = [slice(None)]
-        if len(slices) > 1:
-            intermediate_ssresults = []
-            for the_slice in slices:
-                log.debug(f"Using chunked mode, processing {the_slice}")
-                subset_data : StarlightSubtractionData = data.from_slice(the_slice)
-                intermediate_ssresults.append(self.subtraction.execute(subset_data))
-            ssresult : StarlightSubtractResult = self._combine_starlight_subtract_modes_results(intermediate_ssresults)
+
+        datas = []
+        if not self.simultaneously_subtract_inputs:
+            for the_input in data.inputs:
+                single_input_data = StarlightSubtractionData([the_input], data.angles, data.times_sec, data.companions, data.config)
+                datas.append(single_input_data)
         else:
-            ssresult : StarlightSubtractResult = self.subtraction.execute(data)
+            datas = [data]
+
+        intermediate_ssresults = []
+        for data_idx, the_data in enumerate(datas):
+            log.debug(f"Processing StarlightSubtractionData {data_idx + 1} / {len(datas)}")
+            if len(slices) > 1:
+                for slice_idx, the_slice in enumerate(slices):
+                    log.debug(f"Using chunked mode, processing {the_slice} ({slice_idx + 1} / {len(slices)})")
+                    subset_data : StarlightSubtractionData = the_data.from_slice(the_slice)
+                    intermediate_ssresults.append(self.subtraction.execute(subset_data))
+            else:
+                ssresult : StarlightSubtractResult = self.subtraction.execute(the_data)
+                intermediate_ssresults.append(ssresult)
+        log.debug(f"Combining {len(intermediate_ssresults)} intermediate results from {len(slices)} chunks and {len(datas)} separated inputs")
+        ssresult : StarlightSubtractResult = self._combine_starlight_subtract_modes_results(intermediate_ssresults)
+
         result = StarlightSubtractionMeasurements(
             companions=data.companions,
             by_modes={},
