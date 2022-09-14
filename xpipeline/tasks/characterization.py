@@ -699,14 +699,14 @@ def normalize_snr_for_grid(
         tbl[snr_colname][mask] = tbl[mask][snr_colname] / noise_factor
     return tbl
 
-
 def summarize_grid(grid_df : pd.DataFrame,
                    r_px_colname : str,
                    pa_deg_colname : str,
                    snr_colname : str,
                    injected_scale_colname : str,
                    hyperparameter_colnames : list[str],
-                   min_snr_for_injection: float):
+                   min_snr_for_injection: float,
+                   non_detection_threshold : float):
     injection_rows_mask = (grid_df[injected_scale_colname] > 0)
     injections = grid_df[injection_rows_mask & (grid_df[snr_colname] > min_snr_for_injection)].copy()
     detections = grid_df[~injection_rows_mask].copy()
@@ -723,6 +723,19 @@ def summarize_grid(grid_df : pd.DataFrame,
     ).droplevel([r_px_colname, pa_deg_colname])
 
     detections = best_params.merge(detections, on=grouping_colnames + hyperparameter_colnames, suffixes=('_best', None))
+    # it's possible for multiple evaluations of the exact same parameters to get saved so limit to 1
+    detections = detections.groupby(grouping_colnames).apply(lambda idf: idf.iloc[:1]).droplevel(grouping_colnames)
+    # now go back and exclude contrast points where detection might have biased the SNR=5 level estimate
+    non_detections : pd.DataFrame = detections[detections['snr'] < non_detection_threshold]
+    non_detections_tbl = non_detections.to_records()
+    non_detection_locs = np.unique(non_detections_tbl[[r_px_colname, pa_deg_colname]])
+    indices = []
+    best_params_tbl = best_params.to_records()
+    for idx in range(len(best_params_tbl)):
+        loc = best_params_tbl[[r_px_colname, pa_deg_colname]][idx]
+        if loc in non_detection_locs:
+            indices.append(idx)
+    best_params = pd.DataFrame(best_params_tbl[indices])
     return best_params, detections
 
 def apparent_mag(absolute_mag, d):

@@ -39,8 +39,12 @@ class SummarizeGrid(InputCommand):
     coverage_mask : FitsConfig = xconf.field(help="Mask image with 1s where pixels have observation coverage and 0 elsewhere")
     min_coverage : float = xconf.field(default=1.0, help="minimum number of frames covering a pixel for it to be used in the final interpolated map")
     min_snr_for_injection: float = xconf.field(default=10, help="Minimum SNR to recover in order to trust the 5sigma contrast value")
+    non_detection_threshold: float = xconf.field(default=3, help="Minimum SNR in detection map to disqualify a calibration point's limiting contrast value")
     normalize_snrs: Union[bool, list[str]] = xconf.field(default=False, help="Rescales the SNR values at a given radius by dividing by the stddev of all SNRs for that radius, if given as list of str, is used as names of grouping params")
     filters : dict[str, FilterSpec] = xconf.field(default_factory=dict, help="Filter on column == value before grouping and summarizing")
+    ranking_colname : str = xconf.field(default='constrast_limit_5sigma', help="")
+    ranking_operation : str = xconf.field(default='min', help="")
+    enforce_radial_spacing : bool = xconf.field(default=True, help="Ensures radii are >= 1 lambda/D apart")
 
     def main(self):
         import pandas as pd
@@ -84,6 +88,7 @@ class SummarizeGrid(InputCommand):
             log.debug(f"Remaining rows = {np.count_nonzero(mask)}")
 
         grid_df = grid_df[mask]
+        grid_df = grid_df[~pd.isna(grid_df[self.columns.snr])]
 
         if self.normalize_snrs:
             log.debug("Applying SNR rescaling by azimuthal stddev of non-injected SNR measurements")
@@ -107,8 +112,32 @@ class SummarizeGrid(InputCommand):
             injected_scale_colname=self.columns.injected_scale,
             hyperparameter_colnames=self.columns.hyperparameters,
             min_snr_for_injection=self.min_snr_for_injection,
+            non_detection_threshold=self.non_detection_threshold,
         )
         limits_df['delta_mag_contrast_limit_5sigma'] = characterization.contrast_to_deltamag(limits_df['contrast_limit_5sigma'].to_numpy())
+
+        if self.enforce_radial_spacing:
+            lambda_over_d = characterization.lambda_over_d_to_arcsec(1, self.wavelength_um * u.um, self.primary_diameter_m * u.m)
+            radial_spacing_px = (lambda_over_d / (self.arcsec_per_pixel * u.arcsec / u.pixel)).to(u.pixel).value
+            radii = np.unique(grid_df[self.columns.r_px])
+            spaced_radii = []
+            last_radius = 0
+            for radius in radii:
+                # we check if *any* limits were calibrated successfully at this radius
+                # so we can skip radii where there's only garbage
+                if np.count_nonzero(limits_df[self.columns.r_px] == radius) and radius - last_radius >= radial_spacing_px:
+                    last_radius = radius
+                    spaced_radii.append(radius)
+            log.debug(f"Keeping radii spaced by {radial_spacing_px} px gives these: {spaced_radii}")
+
+            detections_mask = np.zeros(len(detections_df), dtype=bool)
+            for radius in spaced_radii:
+                detections_mask |= (detections_df[self.columns.r_px]).to_numpy() == radius
+
+            log.debug(f"Before radial spacing enforcement (>= {radial_spacing_px:3.1f} px): {len(detections_df)=}")
+            detections_df = detections_df[detections_mask].copy()
+            log.debug(f"Keeping the full {len(limits_df)} rows in limits, but {len(detections_df)} rows in detections")
+
         for df in [limits_df, detections_df]:
             df['r_as'] = (df['r_px'].to_numpy() * u.pix * self.arcsec_per_pixel).value
             df['r_lambda_over_d'] = characterization.arcsec_to_lambda_over_d(
