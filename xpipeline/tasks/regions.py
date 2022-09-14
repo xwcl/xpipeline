@@ -1,7 +1,7 @@
 import numpy as np
 import logging
 import re
-from typing import Union
+from typing import Optional, Union
 from .improc import mask_arc, mask_box
 from dataclasses import dataclass
 
@@ -9,9 +9,10 @@ log = logging.getLogger(__name__)
 
 @dataclass
 class Circle:
+    radius_px : float
     center_x : float
     center_y : float
-    radius_px : float
+    text : Optional[str] = None
 
     def mask(self, shape):
         return mask_arc((self.center_y, self.center_x), shape, from_radius=0, to_radius=self.radius_px)
@@ -23,6 +24,7 @@ class Box:
     width : float
     height : float
     rotation_deg : float
+    text : Optional[str] = None
 
     def mask(self, shape):
         return mask_box((self.center_y, self.center_x), shape, (self.height, self.width), rotation_deg=self.rotation_deg)
@@ -30,11 +32,12 @@ class Box:
 Region = Union[Circle,Box]
 
 REGION_RE_OPTIONS = (
-    re.compile(r'^(box)\(([\d.]+),([\d.]+),([\d.]+),([\d.]+),([\d.]+)\)$'),
-    re.compile(r'^(circle)\(([\d.]+),([\d.]+),([\d.]+)\)$'),
+    re.compile(r'^(box)\(([\d.]+),([\d.]+),([\d.]+),([\d.]+),([\d.]+)\)(?:\s+#\s+text=\{(.+)\})?$'),
+    # "circle(372,553,86.188632) # text={a}"
+    re.compile(r'^(circle)\(([\d.]+),([\d.]+),([\d.]+)\)(?:\s+#\s+text=\{(.+)\})?$'),
 )
 
-def load_file(fh):
+def load_file(fh) -> list[Region]:
     log.debug(f'Loading region from {fh}')
     regions = []
     for line in fh:
@@ -50,13 +53,13 @@ def load_file(fh):
         groups = res.groups()
         log.debug(groups)
         name = groups[0]
-        parts = [float(x) for x in groups[1:]]
+        parts = groups[1:]
         if name == 'box':
-            x, y, width, height, rot = parts
-            reg = Box(x, y, width, height, rot)
+            x, y, width, height, rot, maybe_text = parts
+            reg = Box(center_x=float(x), center_y=float(y), width=float(width), height=float(height), rotation_deg=float(rot), text=maybe_text)
         elif name == 'circle':
-            x, y, radius = parts
-            reg = Circle(x, y, radius)
+            x, y, radius, maybe_text = parts
+            reg = Circle(center_x=float(x), center_y=float(y), radius_px=float(radius), text=maybe_text)
         regions.append(reg)
     return regions
         
