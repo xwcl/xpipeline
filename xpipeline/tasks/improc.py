@@ -540,13 +540,42 @@ class BBox:
             warnings.warn(f"Loss of precision rounding origin to integer pixels")
         self.origin = Pixel(y=int(oy + dy), x=int(ox + dx))
 
-    @property
-    def slices(self):
+    def _slices(self):
         oy, ox = self.origin.y, self.origin.x
         dy, dx = self.extent.height, self.extent.width
         start_y, end_y = oy, oy + dy
         start_x, end_x = ox, ox + dx
+        start_y = max(start_y, 0)
+        start_x = max(start_x, 0)
+        return (start_y, end_y), (start_x, end_x)
+
+    @property
+    def slices(self):
+        (start_y, end_y), (start_x, end_x) = self._slices()
         return slice(start_y, end_y), slice(start_x, end_x)
+
+    def _coords_grid_xy(self, slice_y : slice, slice_x : slice):
+        xx, yy = np.meshgrid(
+            np.arange(slice_x.start, slice_x.stop), # + 0.5,
+            np.arange(slice_y.start, slice_y.stop), # + 0.5,
+        )
+        return xx, yy
+
+    @property
+    def coords_grid_xy(self):
+        slice_y, slice_x = self.slices
+        return self._coords_grid_xy(slice_y, slice_x)
+
+    def get_overlap_slices(self, other):
+        (start_y, end_y), (start_x, end_x) = self._slices()
+        end_y = min(end_y, other.shape[0])
+        end_x = min(end_x, other.shape[1])
+        return slice(start_y, end_y), slice(start_x, end_x)
+
+    def get_overlap_grid_xy(self, other):
+        slice_y, slice_x = self.get_overlap_slices(other)
+        return self._coords_grid_xy(slice_y, slice_x)
+
 
 
 distributed.protocol.register_generic(BBox)
