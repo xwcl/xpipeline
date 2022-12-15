@@ -951,19 +951,29 @@ def translation_matrix(dx, dy):
     return xform
 
 @numba.njit(numba.float64[:,:](numba.float64), cache=True, inline='always')
-def rotation_matrix(theta):
+def rotation_matrix(theta_rad):
     # return np.array([
     #     [np.cos(theta), -np.sin(theta), 0],
     #     [np.sin(theta), np.cos(theta), 0],
     #     [0, 0, 1]
     # ], dtype=float)
     xform = np.zeros((3, 3))
-    xform[0,0] = np.cos(theta)
-    xform[0,1] = -np.sin(theta)
-    xform[1,0] = np.sin(theta)
-    xform[1,1] = np.cos(theta)
+    xform[0,0] = np.cos(theta_rad)
+    xform[0,1] = -np.sin(theta_rad)
+    xform[1,0] = np.sin(theta_rad)
+    xform[1,1] = np.cos(theta_rad)
     xform[2,2] = 1
     return xform
+
+
+@numba.njit(numba.float64[:,:](numba.float64, numba.float64), cache=True, inline='always')
+def scaling_matrix(sx, sy):
+    xform = np.zeros((3, 3))
+    xform[0,0] = sx
+    xform[1,1] = sy
+    xform[2,2] = 1
+    return xform
+
 
 @numba.njit
 def make_rotation_about_center(image_shape, rotation_deg):

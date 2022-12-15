@@ -38,12 +38,10 @@ class SummarizeGrid(InputCommand):
     primary_diameter_m : float = xconf.field(default=magellan.PRIMARY_MIRROR_DIAMETER.to(u.m).value)
     coverage_mask : FitsConfig = xconf.field(help="Mask image with 1s where pixels have observation coverage and 0 elsewhere")
     min_coverage : float = xconf.field(default=1.0, help="minimum number of frames covering a pixel for it to be used in the final interpolated map")
-    min_snr_for_injection: float = xconf.field(default=10, help="Minimum SNR to recover in order to trust the 5sigma contrast value")
+    min_snr_for_injection: float = xconf.field(default=10, help="Minimum SNR to recover in order to trust the SNR=5 contrast value")
     non_detection_threshold: float = xconf.field(default=3, help="Minimum SNR in detection map to disqualify a calibration point's limiting contrast value")
     normalize_snrs: Union[bool, list[str]] = xconf.field(default=False, help="Rescales the SNR values at a given radius by dividing by the stddev of all SNRs for that radius, if given as list of str, is used as names of grouping params")
     filters : dict[str, FilterSpec] = xconf.field(default_factory=dict, help="Filter on column == value before grouping and summarizing")
-    ranking_colname : str = xconf.field(default='constrast_limit_5sigma', help="")
-    ranking_operation : str = xconf.field(default='min', help="")
     enforce_radial_spacing : bool = xconf.field(default=True, help="Ensures radii are >= 1 lambda/D apart")
 
     def main(self):
