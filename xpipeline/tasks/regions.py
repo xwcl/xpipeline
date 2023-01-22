@@ -2,7 +2,7 @@ import numpy as np
 import logging
 import re
 from typing import Optional, Union
-from .improc import mask_arc, mask_box
+from .improc import mask_arc, mask_box, BBox, Pixel, PixelExtent
 from dataclasses import dataclass
 
 log = logging.getLogger(__name__)
@@ -28,6 +28,11 @@ class Box:
 
     def mask(self, shape):
         return mask_box((self.center_y, self.center_x), shape, (self.height, self.width), rotation_deg=self.rotation_deg)
+
+    def to_bbox(self):
+        if self.rotation_deg > 0:
+            raise NotImplementedError("No rotated bbox support")
+        return BBox.from_center(Pixel(y=self.center_y, x=self.center_x), PixelExtent(height=self.height, width=self.width))
 
 Region = Union[Circle,Box]
 
@@ -62,12 +67,12 @@ def load_file(fh) -> list[Region]:
             reg = Circle(center_x=float(x), center_y=float(y), radius_px=float(radius), text=maybe_text)
         regions.append(reg)
     return regions
-        
+
 def make_mask(regions: list[Region], shape: tuple[int,int], mask_regions_as_true:bool=True):
     '''
     Parameters
     ----------
-    regions 
+    regions
     '''
     mask = np.zeros(shape, dtype=bool)
     for region in regions:

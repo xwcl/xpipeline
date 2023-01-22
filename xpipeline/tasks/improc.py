@@ -550,6 +550,34 @@ class BBox:
         return (start_y, end_y), (start_x, end_x)
 
     @property
+    def min_x(self):
+        return self._slices()[1][0]
+
+    @property
+    def max_x(self):
+        return self._slices()[1][1]
+
+    @property
+    def min_y(self):
+        return self._slices()[0][0]
+
+    @property
+    def max_y(self):
+        return self._slices()[0][1]
+
+    @property
+    def width(self):
+        return self.extent.width
+
+    @property
+    def height(self):
+        return self.extent.height
+
+    @property
+    def shape(self):
+        return self.extent.height, self.extent.width
+
+    @property
     def slices(self):
         (start_y, end_y), (start_x, end_x) = self._slices()
         return slice(start_y, end_y), slice(start_x, end_x)
@@ -642,8 +670,16 @@ def shifts_from_cutout(sci_arr, spec, upsample_factor=100):
 
 def subpixel_location_from_cutout(sci_arr, spec: CutoutTemplateSpec, upsample_factor=100):
     '''assuming the spec template is centered at the array center (npix-1)/2'''
-    shifts = shifts_from_cutout(sci_arr, spec, upsample_factor=upsample_factor)
-    return Point(spec.search_box.center.y + shifts[0], spec.search_box.center.x + shifts[1])
+    sci_arr, template = pad_to_match(interpolate_nonfinite(sci_arr), spec.template)
+    # xcorr
+    shifts, error, phasediff = skimage.registration.phase_cross_correlation(
+        reference_image=sci_arr,
+        moving_image=template,
+        upsample_factor=upsample_factor,
+        normalization=None,
+    )
+    yc, xc = arr_center(spec.template)
+    return Point(yc + shifts[0], xc + shifts[1])
 
 
 def aligned_cutout(
@@ -936,7 +972,8 @@ def encircled_energy_and_profile(
 
 @numba.njit(numba.float64[:,:](numba.float64, numba.float64), cache=True, inline='always')
 def translation_matrix(dx, dy):
-    """Affine transform matrix for displacement dx, dy"""
+    """When multiplied on the right by a [x, y, 1] augmented vector, has the effect
+    of translating the point to [x + dx, y + dy]"""
     xform = np.zeros((3, 3))
     xform[0,0] = 1
     xform[0,2] = dx
@@ -952,11 +989,8 @@ def translation_matrix(dx, dy):
 
 @numba.njit(numba.float64[:,:](numba.float64), cache=True, inline='always')
 def rotation_matrix(theta_rad):
-    # return np.array([
-    #     [np.cos(theta), -np.sin(theta), 0],
-    #     [np.sin(theta), np.cos(theta), 0],
-    #     [0, 0, 1]
-    # ], dtype=float)
+    '''When multiplied on the right by a [x, y, 1] augmented vector, has the effect
+    of rotating from +X towards +Y (CCW) by `theta_rad`'''
     xform = np.zeros((3, 3))
     xform[0,0] = np.cos(theta_rad)
     xform[0,1] = -np.sin(theta_rad)
