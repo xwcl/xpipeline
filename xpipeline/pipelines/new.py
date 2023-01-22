@@ -10,7 +10,7 @@ from dataclasses import dataclass
 import dataclasses
 import xconf
 import numpy as np
-from xconf.contrib import BaseRayGrid, FileConfig, join, PathConfig, DirectoryConfig
+from xconf import FileConfig, DirectoryConfig
 import sys
 import logging
 from typing import Optional, Union, ClassVar, Any
@@ -130,7 +130,7 @@ class ModelSignalInput:
 @xconf.config
 class ModelSignalInputConfig:
     model : FitsConfig = xconf.field(help="Model signal analogous to single science cube frame")
-    scale_factors : Union[FitsConfig, FitsTableColumnConfig, None] = xconf.field(help="1-D array or table column of scale factors that make the amplitude of the model_arr signal match that of the primary")
+    scale_factors : Union[FitsConfig, FitsTableColumnConfig, None] = xconf.field(default=None,help="1-D array or table column of scale factors that make the amplitude of the model_arr signal match that of the primary")
 
     def load(self) -> ModelSignalInput:
         return ModelSignalInput(
@@ -1622,9 +1622,6 @@ class SaveMeasuredStarlightSubtraction:
         if self.save_residuals:
             measure_subtraction.return_starlight_subtraction = True
             measure_subtraction.subtraction.return_residuals = True
-        if self.save_inputs:
-            measure_subtraction.return_starlight_subtraction = True
-            measure_subtraction.subtraction.return_inputs = True
         if self.save_unfiltered_images:
             measure_subtraction.return_starlight_subtraction = True
         if self.save_post_filtering_images or self.save_filter_kernels:
@@ -1806,20 +1803,19 @@ class SaveMeasuredStarlightSubtraction:
                         model_arrays_by_output[i].append(
                             res.subtraction_result.modes[k_modes].pipeline_outputs[i].model_arr
                         )
-                if self.save_residuals:
-                    resid_hdul = fits.HDUList([
-                        fits.PrimaryHDU(),
-                        fits.ImageHDU(np.array(k_modes_values, dtype=int), name="K_MODES_VALUES")
-                    ])
-                    for i in range(n_inputs):
-                        ext = f"RESID_{i:02}"
-                        model_ext = f"MODEL_RESID_{i:02}"
-                        sci_array_stack = np.stack(sci_arrays_by_output[i])
-                        model_array_stack = np.stack(model_arrays_by_output[i])
-                        resid_hdul.append(fits.ImageHDU(sci_array_stack, name=ext))
-                        resid_hdul.append(fits.ImageHDU(model_array_stack, name=model_ext))
-                    with destination.open_path('residuals.fits', 'wb') as fh:
-                        resid_hdul.writeto(fh)
+                resid_hdul = fits.HDUList([
+                    fits.PrimaryHDU(),
+                    fits.ImageHDU(np.array(k_modes_values, dtype=int), name="K_MODES_VALUES")
+                ])
+                for i in range(n_inputs):
+                    ext = f"RESID_{i:02}"
+                    model_ext = f"MODEL_RESID_{i:02}"
+                    sci_array_stack = np.stack(sci_arrays_by_output[i])
+                    model_array_stack = np.stack(model_arrays_by_output[i])
+                    resid_hdul.append(fits.ImageHDU(sci_array_stack, name=ext))
+                    resid_hdul.append(fits.ImageHDU(model_array_stack, name=model_ext))
+                with destination.open_path('residuals.fits', 'wb') as fh:
+                    resid_hdul.writeto(fh)
             if self.save_inputs:
                 inputs_hdul = fits.HDUList([
                     fits.PrimaryHDU(),
@@ -1827,8 +1823,8 @@ class SaveMeasuredStarlightSubtraction:
                 for i in range(n_inputs):
                     ext = f"INPUT_{i:02}"
                     model_ext = f"MODEL_INPUT_{i:02}"
-                    inputs_hdul.append(fits.ImageHDU(res.subtraction_result.pipeline_inputs[i].sci_arr, name=ext))
-                    inputs_hdul.append(fits.ImageHDU(res.subtraction_result.pipeline_inputs[i].model_arr, name=model_ext))
+                    inputs_hdul.append(fits.ImageHDU(data.inputs[i].sci_arr, name=ext))
+                    inputs_hdul.append(fits.ImageHDU(data.inputs[i].model_arr, name=model_ext))
                 with destination.open_path('inputs.fits', 'wb') as fh:
                     inputs_hdul.writeto(fh)
         return res

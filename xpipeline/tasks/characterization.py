@@ -706,37 +706,54 @@ def summarize_grid(grid_df : pd.DataFrame,
                    injected_scale_colname : str,
                    hyperparameter_colnames : list[str],
                    min_snr_for_injection: float,
-                   non_detection_threshold : float):
+                   non_detection_threshold : float,
+                   normalize_snr_at_radius : bool,
+):
     injection_rows_mask = (grid_df[injected_scale_colname] > 0)
     injections = grid_df[injection_rows_mask & (grid_df[snr_colname] > min_snr_for_injection)].copy()
     detections = grid_df[~injection_rows_mask].copy()
-    detections.set_index([r_px_colname, pa_deg_colname])
+    detections.set_index([r_px_colname, pa_deg_colname], drop=False)
+    print(detections)
     if len(injections) == 0:
         raise ValueError(f"No rows in injections table after filtering for nonzero injection and {min_snr_for_injection=}")
-    injections['contrast_limit_5sigma'] = injections[injected_scale_colname] / injections[snr_colname] * 5
+    injections['contrast_limit_snr5'] = injections[injected_scale_colname] / injections[snr_colname] * 5
+    if normalize_snr_at_radius:
+        # add column to hold pre-normalization value
+        injections['contrast_limit_snr5_unnormalized'] = injections['contrast_limit_snr5'].copy()
     grouping_colnames = [r_px_colname, pa_deg_colname]
 
     best_params : pd.DataFrame = injections.groupby(
         by=[r_px_colname, pa_deg_colname],
     ).apply(
-        lambda grp: grp[grp['contrast_limit_5sigma'] == grp['contrast_limit_5sigma'].min()].iloc[:1]
+        lambda grp: grp[grp['contrast_limit_snr5'] == grp['contrast_limit_snr5'].min()].iloc[:1]
     ).droplevel([r_px_colname, pa_deg_colname])
 
     detections = best_params.merge(detections, on=grouping_colnames + hyperparameter_colnames, suffixes=('_best', None))
     # it's possible for multiple evaluations of the exact same parameters to get saved so limit to 1
-    detections = detections.groupby(grouping_colnames).apply(lambda idf: idf.iloc[:1]).droplevel(grouping_colnames)
+    detections = detections.groupby(grouping_colnames).apply(lambda idf: idf.iloc[:1]).reset_index(drop=True)
     # now go back and exclude contrast points where detection might have biased the SNR=5 level estimate
     non_detections : pd.DataFrame = detections[detections['snr'] < non_detection_threshold]
-    non_detections_tbl = non_detections.to_records()
+    non_detections_tbl = non_detections.to_records(index=False)
     non_detection_locs = np.unique(non_detections_tbl[[r_px_colname, pa_deg_colname]])
     indices = []
-    best_params_tbl = best_params.to_records()
+    best_params_tbl = best_params.to_records(index=False)
     for idx in range(len(best_params_tbl)):
         loc = best_params_tbl[[r_px_colname, pa_deg_colname]][idx]
         if loc in non_detection_locs:
             indices.append(idx)
-    best_params = pd.DataFrame(best_params_tbl[indices])
-    return best_params, detections
+    best_params_tbl_good_points = best_params_tbl[indices]
+    # hacky but make a mutable table for detections for normalizing
+    detections_tbl = detections.to_records(index=False)
+    if normalize_snr_at_radius:
+        radii = np.unique(best_params_tbl_good_points[r_px_colname])
+        for r_px in radii:
+            params_mask = best_params_tbl_good_points[r_px_colname] == r_px
+            detections_mask = detections_tbl[r_px_colname] == r_px
+            normalization = np.nanstd(detections_tbl[detections_mask][snr_colname])
+            best_params_tbl_good_points[params_mask]['contrast_limit_snr5'] = 5 * best_params_tbl_good_points[params_mask][injected_scale_colname] / best_params_tbl_good_points[params_mask][snr_colname]
+            detections_tbl[detections_mask][snr_colname] /= normalization
+
+    return pd.DataFrame(best_params_tbl_good_points), pd.DataFrame(detections_tbl)
 
 def apparent_mag(absolute_mag, d):
     '''Scale an `absolute_mag` to an apparent magnitude using

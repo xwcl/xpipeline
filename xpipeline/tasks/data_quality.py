@@ -21,6 +21,6 @@ def get_masked_data(image_hdul, permitted_flags=0, ext=0, dq_ext="DQ", fill=np.n
         dq = dq & ~permitted_flags
         mask = dq == 0
         data[~mask] = fill
-    if excluded_pixels_mask is not None:
-        data[mask] = fill
+    if excluded_pixels_mask is not None and np.any(excluded_pixels_mask):
+        data[excluded_pixels_mask] = fill
     return data
