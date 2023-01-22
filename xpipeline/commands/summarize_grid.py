@@ -88,20 +88,6 @@ class SummarizeGrid(InputCommand):
         grid_df = grid_df[mask]
         grid_df = grid_df[~pd.isna(grid_df[self.columns.snr])]
 
-        if self.normalize_snrs:
-            log.debug("Applying SNR rescaling by azimuthal stddev of non-injected SNR measurements")
-            if isinstance(self.normalize_snrs, list):
-                extra_grouping_colnames = self.normalize_snrs
-            else:
-                extra_grouping_colnames = self.columns.hyperparameters
-            grid_tbl = characterization.normalize_snr_for_grid(
-                grid_tbl,
-                group_by_colname=self.columns.r_px,
-                snr_colname=self.columns.snr,
-                injected_scale_colname=self.columns.injected_scale,
-                hyperparameter_colnames=extra_grouping_colnames,
-            )
-
         limits_df, detections_df = characterization.summarize_grid(
             grid_df,
             r_px_colname=self.columns.r_px,
@@ -111,8 +97,9 @@ class SummarizeGrid(InputCommand):
             hyperparameter_colnames=self.columns.hyperparameters,
             min_snr_for_injection=self.min_snr_for_injection,
             non_detection_threshold=self.non_detection_threshold,
+            normalize_snr_at_radius=self.normalize_snrs,
         )
-        limits_df['delta_mag_contrast_limit_5sigma'] = characterization.contrast_to_deltamag(limits_df['contrast_limit_5sigma'].to_numpy())
+        limits_df['delta_mag_contrast_limit_snr5'] = characterization.contrast_to_deltamag(limits_df['contrast_limit_snr5'].to_numpy())
 
         if self.enforce_radial_spacing:
             lambda_over_d = characterization.lambda_over_d_to_arcsec(1, self.wavelength_um * u.um, self.primary_diameter_m * u.m)
@@ -155,7 +142,7 @@ class SummarizeGrid(InputCommand):
         iwa_xs, iwa_ys = characterization.r_pa_to_x_y(iwa_r_pxs, iwa_pa_degs, xc, yc)
         lim_xs = np.concatenate([lim_xs, iwa_xs])
         lim_ys = np.concatenate([lim_ys, iwa_ys])
-        lim_contrasts = np.concatenate([limits_df['contrast_limit_5sigma'], iwa_contrasts])
+        lim_contrasts = np.concatenate([limits_df['contrast_limit_snr5'], iwa_contrasts])
 
         contrast_lim_map = characterization.points_to_map(lim_xs, lim_ys, lim_contrasts, coverage_mask)
 
@@ -166,7 +153,7 @@ class SummarizeGrid(InputCommand):
         detection_map = characterization.points_to_map(det_xs, det_ys, det_snrs, coverage_mask)
 
         hdus = [iofits.DaskHDU(None, kind="primary")]
-        hdus.append(iofits.DaskHDU(contrast_lim_map, name="limits_5sigma_contrast_map"))
+        hdus.append(iofits.DaskHDU(contrast_lim_map, name="limits_snr5_contrast_map"))
         hdus.append(iofits.DaskHDU(utils.convert_obj_cols_to_str(limits_df.to_records(index=False)), kind="bintable", name="limits"))
         hdus.append(iofits.DaskHDU(detection_map, name="detection_snr_map"))
         hdus.append(iofits.DaskHDU(utils.convert_obj_cols_to_str(detections_df.to_records(index=False)), kind="bintable", name="detection"))

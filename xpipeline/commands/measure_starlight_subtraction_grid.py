@@ -3,7 +3,7 @@ import numpy as np
 import xconf
 import logging
 from typing import Optional
-from xconf.contrib import BaseRayGrid, FileConfig, join, PathConfig, DirectoryConfig
+from xconf.contrib import BaseRayGrid, DirectoryConfig
 import ray
 from ray._raylet import ObjectRef
 from ..commands.base import AnyRayConfig, LocalRayConfig, measure_ram

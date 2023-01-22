@@ -4,7 +4,8 @@ import xconf
 import ray
 from astropy.io import fits
 from astropy.convolution import convolve_fft
-from xconf.contrib import BaseRayGrid, FileConfig, join, PathConfig, DirectoryConfig
+from xconf import FileConfig, join, PathConfig, DirectoryConfig
+from xconf.contrib import BaseRayGrid
 import sys
 import logging
 from typing import Optional, Union

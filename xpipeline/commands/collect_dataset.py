@@ -49,7 +49,6 @@ class VappAdiObservation(AdiObservation):
         complementary gvAPP-180 PSF where the dark hole is right of +Y"""
     ))
 
-
 @xconf.config
 class CollectDataset(MultiInputCommand):
     """Convert collection of single observation files to a single multi-extension FITS file"""
