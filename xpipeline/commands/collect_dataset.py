@@ -5,6 +5,7 @@ import logging
 import xconf
 
 from .base import MultiInputCommand
+from . import base
 from .. import types, utils
 
 log = logging.getLogger(__name__)
@@ -50,6 +51,32 @@ class VappAdiObservation(AdiObservation):
     ))
 
 @xconf.config
+class HeaderSelectionFilter:
+    keyword : str = xconf.field(
+        default="DATE-OBS",
+        help="FITS keyword to compare"
+    )
+    value : typing.Union[int, str] = xconf.field(
+        help="Keyword value to compare"
+    )
+    equal : bool = xconf.field(default=True, help="Enforce that frames have equal (true) or not equal (false) values for this keyword")
+    ext : types.FITS_EXT = xconf.field(default=0, help="Extension with this header")
+    # HIERARCH TWEETERSPECK SEPARATIONS == 15
+    # HIERARCH HOLOOP LOOP STATE == 2
+
+def apply_filters_to_hdulist(hdul, filters: list[HeaderSelectionFilter]):
+    keep = True
+    for filt in filters:
+        the_val = hdul[filt.ext].header.get(filt.keyword)
+        if filt.equal:
+            keep = the_val == filt.value
+        else:
+            keep = the_val != filt.value
+        if not keep:
+            break
+    return keep
+
+@xconf.config
 class CollectDataset(MultiInputCommand):
     """Convert collection of single observation files to a single multi-extension FITS file"""
     metadata_ext : typing.Union[str, int] = xconf.field(
@@ -61,9 +88,21 @@ class CollectDataset(MultiInputCommand):
         default=SimpleObservation(),
         help="Observation strategy metatdata"
     )
+    filters : typing.Optional[list[HeaderSelectionFilter]] = xconf.field(
+        default_factory=list,
+        help="Filters to remove frames from the collection"
+    )
+    ray : base.AnyRayConfig = xconf.field(
+        default=base.LocalRayConfig(),
+        help="Ray distributed framework configuration"
+    )
+
+    
 
     def main(self):
         import dask
+        from ray.util.dask import ray_dask_get
+        self.ray.init()
         from xpipeline.core import LazyPipelineCollection
         import fsspec.spec
         import numpy as np
@@ -82,7 +121,9 @@ class CollectDataset(MultiInputCommand):
         output_filepath = utils.join(destination, utils.basename("collect_dataset.fits"))
         self.quit_if_outputs_exist([output_filepath])
 
-        inputs = LazyPipelineCollection(all_inputs).map(iofits.load_fits_from_path)
+        inputs = LazyPipelineCollection(all_inputs).map(iofits.load_fits_from_path).precompute(scheduler=ray_dask_get)
+        inputs.filter(apply_filters_to_hdulist, self.filters).compute()
+
         (first,) = dask.compute(inputs.items[0])
         n_inputs = len(inputs.items)
         cubes = {}

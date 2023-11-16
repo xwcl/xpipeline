@@ -177,6 +177,17 @@ class PipelineCollection:
             ]
         )
 
+    def filter(self, the_callable, *args, _delayed_kwargs=None, **kwargs):
+        return self.__class__(
+            [
+                self._wrap_callable(lambda item, *args, **kwargs: (
+                    item
+                    if the_callable(item, *args, **kwargs) 
+                    else None, _delayed_kwargs
+                )(x, *args, **kwargs)
+            ]
+        )
+
     def collect(self, the_callable, *args, _delayed_kwargs=None, **kwargs):
         """
         Apply function to entire collection, returning Delayed

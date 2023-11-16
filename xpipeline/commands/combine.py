@@ -59,7 +59,7 @@ class Combine(InputCommand):
             range_spec = improc.FrameIndexRangeSpec(n_frames=self.combine.n_frames)
         elif hasattr(self.combine, "angle"):
             if hasattr(self.combine.angle, "delta_deg"):
-                range_spec = improc.AngleRangeSpec(delta_deg=self.combine.angle.delta_deg)
+                range_spec = improc.AngleRangeSpec(delta_deg=self.combine.angle.delta_deg, angle_deg_column_name='derotation_angle_deg')
             else:
                 range_spec = improc.PixelRotationRangeSpec(delta_px=self.combine.angle.delta_px, r_px=self.combine.angle.r_px)
         elif hasattr(self.combine, 'all'):

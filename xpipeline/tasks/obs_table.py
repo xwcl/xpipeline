@@ -91,7 +91,7 @@ def construct_headers_table(all_headers : list[fits.Header]):
     tbl_data = np.zeros(len(all_headers), varying_dtypes)
     mask_dtypes = []
     for parts in varying_dtypes:
-        mask_dtypes.append((parts[0], np.bool))
+        mask_dtypes.append((parts[0], np.bool_))
     tbl_mask = np.zeros(len(all_headers), mask_dtypes)
     for idx, header in enumerate(all_headers):
         for kw in varying_kw:

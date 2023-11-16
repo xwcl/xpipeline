@@ -204,7 +204,7 @@ class Align(base.MultiInputCommand):
         d_offsets_per_feature = []
         for feature_spec in self.registration_features:
             search_box = feature_spec.to_bbox(original_dimensions)
-            print(f"{search_box=}")
+            log.debug(f"make {search_box=} search")
             initial_template = example_data[search_box.slices]
             d_offsets_per_feature.append((masked_data
                 .map(fit_feature, improc.ImageFeatureSpec(search_box=search_box, template=initial_template))
@@ -214,7 +214,7 @@ class Align(base.MultiInputCommand):
         
         # load saturated frames
         if self.saturated_input is not None:
-            sat_hduls = LazyPipelineCollection(sat_inputs).map(iofits.load_fits_from_path)
+            sat_hduls = LazyPipelineCollection(sat_inputs).map(iofits.load_fits_from_path).precompute(scheduler=ray_dask_get)
             sat_masked_data = (
                 sat_hduls
                 .map(data_quality.get_masked_data, ext=ext, dq_ext=dq_ext, permitted_flags=const.DQ_SATURATED, excluded_pixels_mask=excluded_pixels_mask)
@@ -222,7 +222,7 @@ class Align(base.MultiInputCommand):
             d_sat_frame_centers_by_feature = []
             for feature_spec, d_center_offset in zip(self.registration_features, d_offsets_per_feature):
                 search_box = feature_spec.to_bbox(original_dimensions)
-                print(f"{search_box=}")
+                log.debug(f"make {search_box=} search in saturated")
                 initial_template = example_data[search_box.slices]
                 d_sat_frame_centers_by_feature.append((sat_masked_data
                     # fit features in sat frames
@@ -234,7 +234,7 @@ class Align(base.MultiInputCommand):
             d_true_centers = sat_masked_data.zip_map(estimate_true_center, *d_sat_frame_centers_by_feature).items
             aligned_sat_frame_paths = (sat_masked_data
                 .zip_map(make_aligned_image, d_true_centers, new_dimensions, new_ctr)
-                .zip_map(construct_output_fits, coll.items, self.ext)
+                .zip_map(construct_output_fits, sat_hduls.items, self.ext)
                 .zip_map(iofits.write_fits, output_sat_filepaths)
                 .end()
             )
