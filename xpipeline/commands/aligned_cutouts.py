@@ -80,7 +80,7 @@ class AlignedCutouts(base.MultiInputCommand):
         log.debug(f"calling makedirs on {dest_fs} at {self.destination}")
         dest_fs.makedirs(self.destination, exist_ok=True)
 
-        all_inputs = self.get_all_inputs()
+        all_inputs = self.get_all_inputs(self.input)
         n_output_files = len(all_inputs)
         output_filepaths = [utils.join(self.destination, f"aligned_cutouts_{i:04}.fits") for i in range(n_output_files)]
         self.quit_if_outputs_exist(output_filepaths)
@@ -105,7 +105,7 @@ class AlignedCutouts(base.MultiInputCommand):
             tpl = cutout_config.template
             template_array = tpl.load()
 
-            spec = improc.CutoutTemplateSpec(
+            spec = improc.ImageFeatureSpec(
                 search_box=search_box,
                 template=np.clip(template_array, 0, np.percentile(template_array, cutout_config.faux_saturation_percentile)),
                 name=name,

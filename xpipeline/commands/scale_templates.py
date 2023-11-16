@@ -26,7 +26,7 @@ class ScaleTemplates(MultiInputCommand):
         output_filepath = utils.join(destination, utils.basename("template_scale_factors.fits"))
         self.quit_if_outputs_exist([output_filepath])
 
-        all_inputs = self.get_all_inputs()
+        all_inputs = self.get_all_inputs(self.input)
         template_hdul = iofits.load_fits_from_path(self.template_path)
         if len(all_inputs) == 1:
             data_hdul = iofits.load_fits_from_path(all_inputs[0])

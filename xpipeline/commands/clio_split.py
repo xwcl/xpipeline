@@ -35,7 +35,7 @@ class ClioSplit(MultiInputCommand):
         dest_fs.makedirs(destination, exist_ok=True)
 
         # infer planes per cube
-        all_inputs = self.get_all_inputs()
+        all_inputs = self.get_all_inputs(self.input)
         hdul = iofits.load_fits_from_path(all_inputs[0])
         planes = hdul[0].data.shape[0]
         # plane_shape = hdul[0].data.shape[1:]

@@ -25,7 +25,7 @@ from ..tasks import (
 )
 from ..tasks.starlight_subtraction import KlipInput, KlipParams
 from ..constants import KlipStrategy, CombineOperation
-from ..ref import clio
+from ..ref import clio, magaox
 
 log = logging.getLogger(__name__)
 
@@ -114,6 +114,18 @@ def clio_badpix_linearity(
     log.debug("done assembling clio_badpix_linearity")
     return coll
 
+def magaox_preprocess(
+    inputs_coll: PipelineCollection,
+    bias_arr: np.ndarray,
+) -> PipelineCollection:
+    log.debug("Assembling magaox_preprocess pipeline...")
+    coll = (
+        inputs_coll.map(iofits.ensure_dq)
+        .map(magaox.flag_saturation)
+        .map(detector.subtract_bias, bias_arr)
+    )
+    log.debug("done assembling magaox_preprocess")
+    return coll
 
 def sky_subtract(
     input_coll: PipelineCollection,
@@ -138,7 +150,7 @@ def sky_subtract(
 
 def align_to_templates(
     input_coll: PipelineCollection,
-    cutout_specs: List[improc.CutoutTemplateSpec],
+    cutout_specs: List[improc.ImageFeatureSpec],
     *,
     upsample_factor: int = 100,
     ext: Union[int, str] = 0,

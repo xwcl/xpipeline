@@ -130,7 +130,7 @@ def test_aligned_cutout_oversized_template():
     picshape = 128, 128
     psfim = improc.gauss2d(picshape, improc.arr_center(picshape), (10, 10))
     sci_arr = improc.ft_shift2(psfim, -4.33, -5.75)[15:100,20:90]
-    spec = improc.CutoutTemplateSpec(
+    spec = improc.ImageFeatureSpec(
         search_box=improc.BBox(origin=improc.Pixel(0,0), extent=improc.PixelExtent(*picshape)),
         template=psfim,
         name="primary"
@@ -142,7 +142,7 @@ def test_aligned_cutout_undersized_template():
     picshape = 128, 128
     psfim = improc.gauss2d(picshape, improc.arr_center(picshape), (10, 10))
     sci_arr = improc.ft_shift2(psfim, -4.33, -5.75)
-    spec = improc.CutoutTemplateSpec(
+    spec = improc.ImageFeatureSpec(
         search_box=improc.BBox(origin=improc.Pixel(0,0), extent=improc.PixelExtent(*picshape)),
         template=psfim[5:-5,5:-5],
         name="primary"

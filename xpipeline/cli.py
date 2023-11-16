@@ -30,6 +30,8 @@ from .commands import (
     summarize_grid,
     klipt_fm,
     measure_starlight_subtraction_grid,
+    magaox_calibrate,
+    align,
 )
 
 log = logging.getLogger(__name__)
@@ -60,6 +62,8 @@ COMMANDS = {
     klipt_fm.KlipTFm,
     save_measured_starlight_subtraction.SaveMeasuredStarlightSubtraction,
     measure_starlight_subtraction_grid.MeasureStarlightSubtractionGrid,
+    magaox_calibrate.MagaoxCalibrate,
+    align.Align
 }
 
 class Dispatcher(xconf.Dispatcher):

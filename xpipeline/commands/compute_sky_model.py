@@ -34,7 +34,7 @@ class ComputeSkyModel(MultiInputCommand):
         self.quit_if_outputs_exist([model_fn])
 
         # execute
-        inputs_coll = LazyPipelineCollection(self.get_all_inputs()).map(iofits.load_fits_from_path)
+        inputs_coll = LazyPipelineCollection(self.get_all_inputs(self.input)).map(iofits.load_fits_from_path)
         one_input_hdul = dask.compute(inputs_coll.items[0])[0]
         if self.ext not in one_input_hdul or self.dq_ext not in one_input_hdul:
             raise RuntimeError(f"Looking for {self.ext=} and {self.dq_ext=} in first input failed, check inputs?")

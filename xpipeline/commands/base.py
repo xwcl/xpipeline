@@ -121,26 +121,26 @@ class MultiInputCommand(InputCommand):
     sample_every_n : int = xconf.field(default=1, help="Take every Nth file from inputs (for speed of debugging)")
     file_extensions : list[str] = xconf.field(default=DEFAULT_EXTENSIONS, help="File extensions to match in the input (when given a directory)")
 
-    def get_all_inputs(self):
-        src_fs = utils.get_fs(self.input)
-        if '*' in self.input:
+    def get_all_inputs(self, input_str):
+        src_fs = utils.get_fs(input_str)
+        if '*' in input_str:
             # handle globbing
-            all_inputs = src_fs.glob(self.input)
+            all_inputs = src_fs.glob(input_str)
         else:
             # handle directory
-            if src_fs.isdir(self.input):
+            if src_fs.isdir(input_str):
                 all_inputs = []
                 for extension in self.file_extensions:
-                    glob_result = src_fs.glob(utils.join(self.input, f"*{extension}"))
+                    glob_result = src_fs.glob(utils.join(input_str, f"*{extension}"))
                     # returned paths from glob won't have protocol string or host
                     # so take the basenames of the files and we stick the other
                     # part back on from `entry`
                     all_inputs.extend(
-                        [utils.join(self.input, utils.basename(x)) for x in glob_result]
+                        [utils.join(input_str, utils.basename(x)) for x in glob_result]
                     )
             # handle single file
             else:
-                all_inputs = [self.input]
+                all_inputs = [input_str]
         return list(sorted(all_inputs))[::self.sample_every_n]
 
 @xconf.config

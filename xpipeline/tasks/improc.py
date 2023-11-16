@@ -29,16 +29,21 @@ def gaussian_smooth(data, kernel_stddev_px):
     return convolve_fft(data, Gaussian2DKernel(kernel_stddev_px), boundary="wrap")
 
 
-def arr_center(arr_or_shape):
+def arr_center(arr_or_shape_or_extent):
     """Center coordinates in (y, x) order for a 2D image (or shape) using the
     convention that indices are the coordinates of the centers
     of pixels, which run from (idx - 0.5) to (idx + 0.5)
     """
-    shape = getattr(arr_or_shape, "shape", arr_or_shape)
+    if isinstance(arr_or_shape_or_extent, PixelExtent):
+        return (arr_or_shape_or_extent.height - 1) / 2, (arr_or_shape_or_extent.width - 1) / 2
+    shape = getattr(arr_or_shape_or_extent, "shape", arr_or_shape_or_extent)
     if len(shape) != 2:
         raise ValueError("Only do this on 2D images")
     return (shape[0] - 1) / 2, (shape[1] - 1) / 2
 
+def center_point(arr_or_shape_or_extent):
+    ycoord, xcoord = arr_center(arr_or_shape_or_extent)
+    return Point(y=ycoord, x=xcoord)
 
 def rough_peak_in_box(data, initial_guess, box_size):
     """
@@ -470,30 +475,20 @@ def combine_paired_cubes(cube_1, cube_2, mask_1, mask_2, fill_value=np.nan):
     return output
 
 
+@dataclass(kw_only=True)
+class Point:
+    y : Union[float, int]
+    x : Union[float, int]
 
-
-# @distributed.protocol.register_generic
-@dataclass
-class Pixel:
+@dataclass(kw_only=True)
+class Pixel(Point):
     y : int
     x : int
-
     def __post_init__(self):
         self.y = int(self.y)
         self.x = int(self.x)
 
-distributed.protocol.register_generic(Pixel)
-
-@dataclass
-class Point:
-    y : float
-    x : float
-
-distributed.protocol.register_generic(Point)
-
-
-# @distributed.protocol.register_generic
-@dataclass
+@dataclass(kw_only=True)
 class PixelExtent:
     height : int
     width : int
@@ -504,25 +499,16 @@ class PixelExtent:
 
 distributed.protocol.register_generic(PixelExtent)
 
-# @distributed.protocol.register_generic
 @dataclass
 class BBox:
     origin : Pixel
     extent : PixelExtent
 
     @classmethod
-    def from_center(cls, center : Pixel, extent : PixelExtent):
+    def from_center(cls, center : Point, extent : PixelExtent):
         cy, cx = center.y, center.x
         origin = Pixel(y=cy - (extent.height - 1) / 2, x=cx - (extent.width - 1)/ 2)
         return cls(origin=origin, extent=extent)
-
-    @classmethod
-    def from_spec(cls, spec):
-        try:
-            oy, ox, dy, dx = [int(x) for x in spec.split(',')]
-            return cls(origin=(oy, ox), extent=(dy, dx))
-        except ValueError:
-            raise ValueError(f"Invalid BBox spec {repr(spec)}")
 
     @property
     def center(self):
@@ -609,12 +595,11 @@ class BBox:
 distributed.protocol.register_generic(BBox)
 
 @dataclass
-class CutoutTemplateSpec:
+class ImageFeatureSpec:
     search_box : BBox
     template: np.ndarray
-    name: str
 
-distributed.protocol.register_generic(CutoutTemplateSpec)
+distributed.protocol.register_generic(ImageFeatureSpec)
 
 def gauss2d(shape, center, sigma):
     """Evaluate Gaussian distribution in 2D on an array of shape
@@ -668,22 +653,23 @@ def shifts_from_cutout(sci_arr, spec, upsample_factor=100):
     )
     return shifts
 
-def subpixel_location_from_cutout(sci_arr, spec: CutoutTemplateSpec, upsample_factor=100):
+def subpixel_location_from_cutout(sci_arr, spec: ImageFeatureSpec, upsample_factor=100):
     '''assuming the spec template is centered at the array center (npix-1)/2'''
-    sci_arr, template = pad_to_match(interpolate_nonfinite(sci_arr), spec.template)
+    subframe = sci_arr[spec.search_box.slices]
+    subframe, template = pad_to_match(interpolate_nonfinite(subframe), spec.template)
     # xcorr
     shifts, error, phasediff = skimage.registration.phase_cross_correlation(
-        reference_image=sci_arr,
+        reference_image=subframe,
         moving_image=template,
         upsample_factor=upsample_factor,
         normalization=None,
     )
     yc, xc = arr_center(spec.template)
-    return Point(yc + shifts[0], xc + shifts[1])
+    return Point(y=spec.search_box.origin.y + yc + shifts[0], x=spec.search_box.origin.x + xc + shifts[1])
 
 
 def aligned_cutout(
-    sci_arr: np.ndarray, spec: CutoutTemplateSpec, upsample_factor: int = 100
+    sci_arr: np.ndarray, spec: ImageFeatureSpec, upsample_factor: int = 100
 ):
     shifts = shifts_from_cutout(sci_arr, spec, upsample_factor=upsample_factor)
     subarr = interpolate_nonfinite(sci_arr)
@@ -1047,6 +1033,21 @@ def make_rotation_about_center(image_shape, rotation_deg):
         return xform
     else:
         return np.eye(3)
+
+def rescale_about_center(image, center : Point, scale_factor, output_shape, interpolation_fill_value=np.nan, missing_fill_value=np.nan):
+    trans = translation_matrix(center.x, center.y)
+    new_center = center_point(output_shape)
+    untrans = translation_matrix(-new_center.x, -new_center.y)
+    transform_mtx = (
+        trans
+        @
+        scaling_matrix(1/scale_factor, 1/scale_factor)
+        @
+        untrans
+    )
+    dest_image = np.zeros(output_shape, dtype=image.dtype)
+    matrix_transform_image(image, transform_mtx, dest_image, interpolation_fill_value=interpolation_fill_value, missing_fill_value=missing_fill_value)
+    return dest_image
 
 @numba.jit(inline='always', nopython=True, cache=True)
 def cpu_cubic1d(t, f_minus1, f_0, f_1, f_2):

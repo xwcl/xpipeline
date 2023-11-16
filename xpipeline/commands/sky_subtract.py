@@ -30,7 +30,7 @@ class SkySubtract(MultiInputCommand):
         log.debug(f"calling makedirs on {dest_fs} at {destination}")
         dest_fs.makedirs(destination, exist_ok=True)
 
-        all_inputs = self.get_all_inputs()
+        all_inputs = self.get_all_inputs(self.input)
         n_output_files = len(all_inputs)
         output_filepaths = [utils.join(destination, f"sky_subtract_{i:04}.fits") for i in range(n_output_files)]
         self.quit_if_outputs_exist(output_filepaths)

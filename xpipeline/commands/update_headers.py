@@ -29,7 +29,7 @@ class UpdateHeaders(MultiInputCommand):
         log.debug(f"calling makedirs on {dest_fs} at {destination}")
         dest_fs.makedirs(destination, exist_ok=True)
 
-        all_inputs = self.get_all_inputs()
+        all_inputs = self.get_all_inputs(self.input)
         output_filepaths = [utils.join(destination, utils.basename(filepath)) for filepath in all_inputs]
         self.quit_if_outputs_exist(output_filepaths)
 
