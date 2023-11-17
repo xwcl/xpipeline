@@ -121,7 +121,7 @@ def construct_output_fits(sci_arr, hdul, ext):
 @xconf.config
 class Align(base.MultiInputCommand):
     "Align images to common center"
-    saturated_input : typing.Union[str, None] = xconf.field(default=None, help="If applicable, saturated frames to reference to these unsaturated input frames")
+    obscured_peak_input : typing.Union[str, None] = xconf.field(default=None, help="If applicable, saturated frames to reference to these unsaturated input frames")
     center : FeatureConfig = xconf.field(default=DEFAULT_CENTER_FEATURE, help="Configuration for the search region for the rotation center of these input images and centered template to use")
     registration_features : typing.Optional[list[typing.Union[BoxFromCenter,BoxFromOrigin]]] = xconf.field(default_factory=list, help="Regions containing unsaturated features to correlate on")
     excluded_regions : typing.Optional[base.FileConfig] = xconf.field(default=None, help="Regions to fill with zeros before cross-registration, stored as DS9 region file (reg format)")
@@ -155,8 +155,8 @@ class Align(base.MultiInputCommand):
         output_filepaths = [utils.join(self.destination, f"aligned_{i:04}.fits") for i in range(n_output_files)]
         all_output_filepaths = output_filepaths.copy()
 
-        if self.saturated_input is not None:
-            sat_inputs = self.get_all_inputs(self.saturated_input)
+        if self.obscured_peak_input is not None:
+            sat_inputs = self.get_all_inputs(self.obscured_peak_input)
             output_sat_filepaths = [utils.join(self.destination, f"saturated_aligned_{i:04}.fits") for i in range(len(sat_inputs))]
             all_output_filepaths.extend(output_sat_filepaths)
         self.quit_if_outputs_exist(all_output_filepaths)
@@ -213,7 +213,7 @@ class Align(base.MultiInputCommand):
             ))
         
         # load saturated frames
-        if self.saturated_input is not None:
+        if self.obscured_peak_input is not None:
             sat_hduls = LazyPipelineCollection(sat_inputs).map(iofits.load_fits_from_path).precompute(scheduler=ray_dask_get)
             sat_masked_data = (
                 sat_hduls
