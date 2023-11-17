@@ -183,8 +183,9 @@ class PipelineCollection:
                 self._wrap_callable(lambda item, *args, **kwargs: (
                     item
                     if the_callable(item, *args, **kwargs) 
-                    else None, _delayed_kwargs
+                    else None), _delayed_kwargs
                 )(x, *args, **kwargs)
+                for x in self.items
             ]
         )
 
