@@ -3,6 +3,7 @@ import sys
 import typing
 import logging
 import xconf
+from functools import partial
 
 from .base import MultiInputCommand
 from . import base
@@ -64,17 +65,18 @@ class HeaderSelectionFilter:
     # HIERARCH TWEETERSPECK SEPARATIONS == 15
     # HIERARCH HOLOOP LOOP STATE == 2
 
-def apply_filters_to_hdulist(hdul, filters: list[HeaderSelectionFilter]):
+def apply_filters_to_hdulist(hdul, filename, filters: list[HeaderSelectionFilter]):
     keep = True
     for filt in filters:
         the_val = hdul[filt.ext].header.get(filt.keyword)
+        print(f"{the_val=} {filt.value=}")
         if filt.equal:
             keep = the_val == filt.value
         else:
             keep = the_val != filt.value
         if not keep:
             break
-    return keep
+    return filename if keep else None
 
 @xconf.config
 class CollectDataset(MultiInputCommand):
@@ -122,7 +124,16 @@ class CollectDataset(MultiInputCommand):
         self.quit_if_outputs_exist([output_filepath])
 
         inputs = LazyPipelineCollection(all_inputs).map(iofits.load_fits_from_path).precompute(scheduler=ray_dask_get)
-        inputs.filter(apply_filters_to_hdulist, self.filters).compute()
+
+        # recreate with filtered
+        all_inputs = [
+            x 
+            for x in 
+            inputs.zip_map(partial(apply_filters_to_hdulist, filters=self.filters), all_inputs).compute()
+            if x is not None
+        ]
+        print(f"{all_inputs=}")
+        inputs = LazyPipelineCollection(all_inputs).map(iofits.load_fits_from_path)
 
         (first,) = dask.compute(inputs.items[0])
         n_inputs = len(inputs.items)
