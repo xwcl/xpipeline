@@ -65,6 +65,7 @@ class AlignedCutouts(base.MultiInputCommand):
         default_factory=lambda: {'cutout': DEFAULT_CUTOUT},
         help="Specify one or more cutouts with names and template PSFs to generate aligned cutouts for",
     )
+    prefilter_sigma_px : float = xconf.field(default=0.0, help=">0 values mean Gaussian smoothing of the images before trying to register images")
     ext : typing.Union[str, int] = xconf.field(default=0, help="Extension index or name to load from input files")
     dq_ext : typing.Union[str, int] = xconf.field(default="DQ", help="Extension index or name for data quality array")
     excluded_regions : typing.Optional[base.FileConfig] = xconf.field(default_factory=list, help="Regions to fill with zeros before cross-registration, stored as DS9 region file (reg format)")
@@ -109,7 +110,6 @@ class AlignedCutouts(base.MultiInputCommand):
             spec = improc.ImageFeatureSpec(
                 search_box=search_box,
                 template=np.clip(template_array, 0, np.percentile(template_array, cutout_config.faux_saturation_percentile)),
-                name=name,
             )
             if cutout_config.use_first_as_template:
                 data = data_quality.get_masked_data(example_hdul, ext=self.ext, dq_ext=self.dq_ext, permitted_flags=constants.DQ_SATURATED)
@@ -126,7 +126,8 @@ class AlignedCutouts(base.MultiInputCommand):
             cutout_names,
             ext=self.ext,
             dq_ext=self.dq_ext,
-            excluded_pixels_mask=excluded_pixels_mask
+            excluded_pixels_mask=excluded_pixels_mask,
+            prefilter_sigma_px=self.prefilter_sigma_px,
         )
         res = output_coll.zip_map(iofits.write_fits, output_filepaths, overwrite=True)
 

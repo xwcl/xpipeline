@@ -6,7 +6,7 @@ import typing
 import xconf
 
 
-from .. import utils
+from .. import utils, constants
 from . import base
 
 log = logging.getLogger(__name__)
@@ -132,6 +132,8 @@ class Align(base.MultiInputCommand):
         default=base.LocalRayConfig(),
         help="Ray distributed framework configuration"
     )
+    prefilter_sigma_px : float = xconf.field(default=0.0, help=">0 values mean Gaussian smoothing of the images before trying to register features")
+    usm_sigma_px : float = xconf.field(default=0.0, help=">0 values indicate the smoothing kernel width for an unsharp mask before trying to register features")
 
 
     def main(self):
@@ -187,14 +189,19 @@ class Align(base.MultiInputCommand):
         
         # fit true centers
         masked_data = coll.map(data_quality.get_masked_data, ext=ext, dq_ext=dq_ext, permitted_flags=const.DQ_SATURATED, excluded_pixels_mask=excluded_pixels_mask)
+        registration_data = masked_data
         print(f"{self.center=}")
-        true_centers = (masked_data
+        if self.prefilter_sigma_px > 0:
+            registration_data = registration_data.map(lambda x: improc.gaussian_smooth(x, self.prefilter_sigma_px))
+        if self.usm_sigma_px > 0:
+            registration_data = registration_data.map(lambda x: x - improc.gaussian_smooth(x, self.usm_sigma_px))
+        true_centers = (registration_data
             .map(fit_feature, improc.ImageFeatureSpec(self.center.search_box.to_bbox(original_dimensions), self.center.template.load()))
             .end()
         )
+        aligned_images = masked_data.zip_map(make_aligned_image, true_centers, new_dimensions, new_ctr).precompute()
         aligned_frame_paths = (
-            masked_data
-            .zip_map(make_aligned_image, true_centers, new_dimensions, new_ctr)
+            aligned_images
             .zip_map(construct_output_fits, coll.items, self.ext)
             .zip_map(iofits.write_fits, output_filepaths)
             .end()
@@ -206,7 +213,7 @@ class Align(base.MultiInputCommand):
             search_box = feature_spec.to_bbox(original_dimensions)
             log.debug(f"make {search_box=} search")
             initial_template = example_data[search_box.slices]
-            d_offsets_per_feature.append((masked_data
+            d_offsets_per_feature.append((registration_data
                 .map(fit_feature, improc.ImageFeatureSpec(search_box=search_box, template=initial_template))
                 .zip_map(feature_coords_to_offsets, true_centers)
                 .collect(mean_combine_points)
@@ -214,17 +221,26 @@ class Align(base.MultiInputCommand):
         
         # load saturated frames
         if self.obscured_peak_input is not None:
+            d_median_unsat = masked_data.collect(improc.combine, constants.CombineOperation.MEDIAN)
+            median_unsat, = dask.compute(d_median_unsat)
             sat_hduls = LazyPipelineCollection(sat_inputs).map(iofits.load_fits_from_path).precompute(scheduler=ray_dask_get)
             sat_masked_data = (
                 sat_hduls
                 .map(data_quality.get_masked_data, ext=ext, dq_ext=dq_ext, permitted_flags=const.DQ_SATURATED, excluded_pixels_mask=excluded_pixels_mask)
             )
+            obscured_registration_data = sat_masked_data
+            if self.prefilter_sigma_px > 0:
+                obscured_registration_data = obscured_registration_data.map(lambda x: improc.gaussian_smooth(x, self.prefilter_sigma_px))
+            if self.usm_sigma_px > 0:
+                obscured_registration_data = obscured_registration_data.map(lambda x: x - improc.gaussian_smooth(x, self.usm_sigma_px))
+
+
             d_sat_frame_centers_by_feature = []
             for feature_spec, d_center_offset in zip(self.registration_features, d_offsets_per_feature):
                 search_box = feature_spec.to_bbox(original_dimensions)
                 log.debug(f"make {search_box=} search in saturated")
-                initial_template = example_data[search_box.slices]
-                d_sat_frame_centers_by_feature.append((sat_masked_data
+                initial_template = median_unsat[search_box.slices]
+                d_sat_frame_centers_by_feature.append((obscured_registration_data
                     # fit features in sat frames
                     .map(fit_feature, improc.ImageFeatureSpec(search_box=search_box, template=initial_template))
                     # apply delta from feature to center to each feature measurement to get center estimate
