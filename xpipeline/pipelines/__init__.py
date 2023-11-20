@@ -151,22 +151,24 @@ def sky_subtract(
 def align_to_templates(
     input_coll: PipelineCollection,
     cutout_specs: List[improc.ImageFeatureSpec],
+    cutout_names: list[str],
     *,
     upsample_factor: int = 100,
     ext: Union[int, str] = 0,
     dq_ext: Union[int, str] = "DQ",
     excluded_pixels_mask = None,
+    prefilter_sigma_px: float = 0.0,
 ) -> PipelineCollection:
     log.debug(f'align_to_templates {cutout_specs=}')
     # explode list of cutout_specs into individual cutout pipelines
     d_hdus_for_cutouts = []
-    for cspec in cutout_specs:
+    for name, cspec in zip(cutout_names, cutout_specs):
         d_hdus = (input_coll
-                  .map(data_quality.get_masked_data, ext=ext, dq_ext=dq_ext, permitted_flags=const.DQ_SATURATED, excluded_pixels_mask=excluded_pixels_mask)
-                  .map(improc.aligned_cutout, cspec, upsample_factor=upsample_factor)
-                  .map(iofits.DaskHDU, header={'EXTNAME': cspec.name})
-                  .items
-                  )
+            .map(data_quality.get_masked_data, ext=ext, dq_ext=dq_ext, permitted_flags=const.DQ_SATURATED, excluded_pixels_mask=excluded_pixels_mask)
+            .map(improc.aligned_cutout, cspec, upsample_factor=upsample_factor, prefilter_sigma_px=prefilter_sigma_px)
+            .map(iofits.DaskHDU, header={'EXTNAME': name})
+            .items
+        )
         d_hdus_for_cutouts.append(d_hdus)
 
     # collect as multi-extension FITS

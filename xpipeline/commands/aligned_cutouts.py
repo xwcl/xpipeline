@@ -98,7 +98,8 @@ class AlignedCutouts(base.MultiInputCommand):
         else:
             excluded_pixels_mask = np.zeros(dimensions, dtype=bool)
 
-        cutout_specs = {}
+        cutout_specs = []
+        cutout_names = []
 
         for name, cutout_config in self.cutouts.items():
             search_box = self._search_box_to_bbox(cutout_config.search_box, default_height, default_width)
@@ -115,12 +116,14 @@ class AlignedCutouts(base.MultiInputCommand):
                 data_driven_template = improc.aligned_cutout(data, spec)
                 improc.interpolate_nonfinite(data_driven_template, data_driven_template)
                 spec.template = data_driven_template
-            cutout_specs[name] = spec
+            cutout_names.append(name)
+            cutout_specs.append(spec)
             log.debug(spec)
 
         output_coll = pipelines.align_to_templates(
             coll,
-            [spec for _, spec in cutout_specs.items()],
+            cutout_specs,
+            cutout_names,
             ext=self.ext,
             dq_ext=self.dq_ext,
             excluded_pixels_mask=excluded_pixels_mask
