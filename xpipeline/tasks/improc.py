@@ -653,9 +653,23 @@ def shifts_from_cutout(sci_arr, spec, upsample_factor=100):
     )
     return shifts
 
-def subpixel_location_from_cutout(sci_arr, spec: ImageFeatureSpec, upsample_factor=100):
-    '''assuming the spec template is centered at the array center (npix-1)/2'''
+def subpixel_location_from_cutout(sci_arr, spec: ImageFeatureSpec, upsample_factor=100, prefilter_sigma_px: float = 0.0):
+    '''Compute the location of the feature given by `spec` to sub-pixel precision
+    assuming the spec template is centered at the array center (npix-1)/2
+
+    Parameters
+    ----------
+    sci_arr : 2D array
+    spec : ImageFeatureSpec
+    upsample_factor : int = 100
+        Supersampling factor for the FFT in the region of the
+        correlation peak to find a sub-pixel position
+    prefilter_sigma_px : float = 0.0
+        For values >0.0, prefilter sci_arr with a Gaussian smoothing
+        before applying `shifts_from_cutout` (cross-correlation registration)
+    '''
     subframe = sci_arr[spec.search_box.slices]
+    subframe = gaussian_smooth(subframe, prefilter_sigma_px)
     subframe, template = pad_to_match(interpolate_nonfinite(subframe), spec.template)
     # xcorr
     shifts, error, phasediff = skimage.registration.phase_cross_correlation(
@@ -669,19 +683,38 @@ def subpixel_location_from_cutout(sci_arr, spec: ImageFeatureSpec, upsample_fact
 
 
 def aligned_cutout(
-    sci_arr: np.ndarray, spec: ImageFeatureSpec, upsample_factor: int = 100
+    sci_arr: np.ndarray, spec: ImageFeatureSpec, upsample_factor: int = 100,
+    prefilter_sigma_px: float = 0.0,
 ):
-    shifts = shifts_from_cutout(sci_arr, spec, upsample_factor=upsample_factor)
-    subarr = interpolate_nonfinite(sci_arr)
-    subpix_subarr = shift2(
-        subarr,
+    '''Produce an interpolated subarray from sci_arr such that the 
+    image feature is aligned with the template in `spec`
+
+    Parameters
+    ----------
+    sci_arr : np.ndarray
+    spec : ImageFeatureSpec
+    upsample_factor : int = 100
+        Supersampling factor for the FFT in the region of the
+        correlation peak to find a sub-pixel position
+    prefilter_sigma_px : float = 0.0
+        For values >0.0, prefilter sci_arr with a Gaussian smoothing
+        before applying `shifts_from_cutout` (cross-correlation registration)
+    '''
+    sci_arr = interpolate_nonfinite(sci_arr)
+    if prefilter_sigma_px > 0:
+        correlate_on = gaussian_smooth(sci_arr, prefilter_sigma_px)
+    else:
+        correlate_on = sci_arr
+    shifts = shifts_from_cutout(correlate_on, spec, upsample_factor=upsample_factor)
+    subpix_sci_arr = shift2(
+        sci_arr,
         shifts[1] - spec.search_box.origin.x,
         shifts[0] - spec.search_box.origin.y,
         output_shape=spec.template.shape,
         anchor_to_center=False  # we're interpolating and cropping at the same time
     )
-    assert subpix_subarr.shape == spec.template.shape
-    return subpix_subarr
+    assert subpix_sci_arr.shape == spec.template.shape
+    return subpix_sci_arr
 
 def histogram_std(hist, bin_centers=None):
     '''Given a histogram of values and optionally coordinates
