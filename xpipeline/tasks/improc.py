@@ -1310,7 +1310,7 @@ class WallTimeRangeSpec:
 
 RotationRange = Union[PixelRotationRangeSpec, AngleRangeSpec, FrameIndexRangeSpec, WallTimeRangeSpec]
 
-def combine(cube : np.ndarray, operation: constants.CombineOperation):
+def combine(cube : np.ndarray, operation: constants.CombineOperation, normalize : Optional[constants.NormalizeToUnit] = None):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=RuntimeWarning)
         if operation is constants.CombineOperation.MEAN:
@@ -1319,8 +1319,14 @@ def combine(cube : np.ndarray, operation: constants.CombineOperation):
             out_image = np.nansum(cube, axis=0)
         elif operation is constants.CombineOperation.MEDIAN:
             out_image = np.nanmedian(cube, axis=0)
+        elif operation is constants.CombineOperation.STD:
+            out_image = np.nanstd(cube, axis=0)
         else:
             raise ValueError("Supported operations: sum, mean, median")
+    if normalize is constants.NormalizeToUnit.PEAK:
+        out_image /= np.nanmax(out_image)
+    elif normalize is constants.NormalizeToUnit.TOTAL:
+        out_image /= np.nansum(out_image)
     return out_image
 
 def combine_ranges(obs_sequences, obs_table, range_spec, operation: constants.CombineOperation = constants.CombineOperation.MEAN):

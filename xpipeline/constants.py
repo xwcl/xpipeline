@@ -20,6 +20,11 @@ class CombineOperation(Enum):
     MEAN = 'mean'
     SUM = 'sum'
     MEDIAN = 'median'
+    STD = 'std'
+
+class NormalizeToUnit(Enum):
+    PEAK = 'peak'
+    TOTAL = 'total'
 
 class CompareOperation(Enum):
     GT = 'gt'

@@ -32,6 +32,7 @@ class Combine(InputCommand):
     "Downsample dataset according to various criteria for ranges to average"
     combine : CombineConfig = xconf.field(help="Criteria by which to combine chunks of frames")
     combine_input_by : constants.CombineOperation = xconf.field(default=constants.CombineOperation.MEAN, help="Operation used to combine ranges of input frames to downsample before reduction")
+    normalize_to_unit : Optional[constants.NormalizeToUnit] = xconf.field(default=None, help="Whether to normalize the stacked frames to unit peak counts, unit total counts, or leave them as-is")
     
     def _load_dataset(self, dataset_path):
         from ..tasks import iofits
@@ -78,16 +79,15 @@ class Combine(InputCommand):
         
         # do combination
         if combine_all:
-            combined_obs = [improc.combine(obs, self.combine_input_by) for _, obs in obs_to_combine]
-            for x in combined_obs:
-                x /= np.sum(x)
-            log.info(f"Combined {total_n_frames} observations to make a normalized template")
+            combined_obs = [improc.combine(obs, self.combine_input_by, self.normalize_to_unit) for _, obs in obs_to_combine]
+            log.info(f"Combined {total_n_frames} observations")
         else:
             combined_obs, combined_metadata = improc.combine_ranges(
                 [obs for _, obs in obs_to_combine],
                 metadata,
                 range_spec,
-                operation=self.combine_input_by
+                operation=self.combine_input_by,
+                normalize=self.normalize_to_unit,
             )
             if 'OBSTABLE' in dataset_hdul:
                 dataset_hdul['OBSTABLE'].data = combined_metadata
