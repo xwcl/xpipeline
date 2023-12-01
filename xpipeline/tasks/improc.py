@@ -653,7 +653,7 @@ def shifts_from_cutout(sci_arr, spec, upsample_factor=100):
     )
     return shifts
 
-def subpixel_location_from_cutout(sci_arr, spec: ImageFeatureSpec, upsample_factor=100, prefilter_sigma_px: float = 0.0):
+def subpixel_location_from_cutout(sci_arr, spec: ImageFeatureSpec, upsample_factor=100, prefilter_sigma_px: Optional[float] = None):
     '''Compute the location of the feature given by `spec` to sub-pixel precision
     assuming the spec template is centered at the array center (npix-1)/2
 
@@ -669,7 +669,8 @@ def subpixel_location_from_cutout(sci_arr, spec: ImageFeatureSpec, upsample_fact
         before applying `shifts_from_cutout` (cross-correlation registration)
     '''
     subframe = sci_arr[spec.search_box.slices]
-    subframe = gaussian_smooth(subframe, prefilter_sigma_px)
+    if prefilter_sigma_px is not None:
+        subframe = gaussian_smooth(subframe, prefilter_sigma_px)
     subframe, template = pad_to_match(interpolate_nonfinite(subframe), spec.template)
     # xcorr
     shifts, error, phasediff = skimage.registration.phase_cross_correlation(
