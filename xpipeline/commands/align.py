@@ -111,7 +111,7 @@ def make_aligned_image(sci_arr, true_center, new_dimensions, new_ctr):
     from ..tasks import improc
     dx, dy = new_ctr.x - true_center.x, new_ctr.y - true_center.y
     new_shape = (new_dimensions.height, new_dimensions.width)
-    return improc.shift2(sci_arr.astype(float), dx, dy, new_shape)
+    return improc.shift2(sci_arr.astype(float), dx, dy, new_shape, anchor_to_center=True)
 
 def construct_output_fits(sci_arr, hdul, ext):
     new_hdul = hdul.copy()
@@ -178,6 +178,7 @@ class Align(base.MultiInputCommand):
         print(f"{self.center.search_box=}")
         new_dimensions = improc.PixelExtent(height=int(self.crop_to * example_data.shape[0]), width=int(self.crop_to * example_data.shape[1]))
         new_ctr = improc.center_point(new_dimensions)
+        orig_geom_ctr = improc.center_point(example_data)
         log.debug(f"Using {self.crop_to} crop factor, shifted frames have shape {new_dimensions} and center {new_ctr}")
 
         if isinstance(self.excluded_regions, base.FileConfig):
@@ -199,7 +200,7 @@ class Align(base.MultiInputCommand):
             .map(fit_feature, improc.ImageFeatureSpec(self.center.search_box.to_bbox(original_dimensions), self.center.template.load()))
             .end()
         )
-        aligned_images = masked_data.zip_map(make_aligned_image, true_centers, new_dimensions, new_ctr).precompute()
+        aligned_images = masked_data.zip_map(make_aligned_image, true_centers, new_dimensions, orig_geom_ctr).precompute()
         aligned_frame_paths = (
             aligned_images
             .zip_map(construct_output_fits, coll.items, self.ext)
@@ -249,7 +250,7 @@ class Align(base.MultiInputCommand):
             # average per-feature center estimates to get a frame center estimate
             d_true_centers = sat_masked_data.zip_map(estimate_true_center, *d_sat_frame_centers_by_feature).items
             aligned_sat_frame_paths = (sat_masked_data
-                .zip_map(make_aligned_image, d_true_centers, new_dimensions, new_ctr)
+                .zip_map(make_aligned_image, d_true_centers, new_dimensions, orig_geom_ctr)
                 .zip_map(construct_output_fits, sat_hduls.items, self.ext)
                 .zip_map(iofits.write_fits, output_sat_filepaths)
                 .end()
