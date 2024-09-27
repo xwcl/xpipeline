@@ -73,6 +73,10 @@ class FeatureConfig:
     )
     faux_saturation_percentile : float = xconf.field(default=100, help="Percentile at which to clip template to simulate saturation")
 
+@xconf.config
+class RegistrationFeature:
+    ref_box : typing.Union[BoxFromCenter,BoxFromOrigin] = xconf.field(help="Coordinates of feature in reference images")
+    search_box : typing.Union[BoxFromCenter,BoxFromOrigin] = xconf.field(help="Box containing feature in obscured-peak images")
 
 DEFAULT_CENTER_FEATURE = FeatureConfig()
 
@@ -123,7 +127,7 @@ class Align(base.MultiInputCommand):
     "Align images to common center"
     obscured_peak_input : typing.Union[str, None] = xconf.field(default=None, help="If applicable, saturated frames to reference to these unsaturated input frames")
     center : FeatureConfig = xconf.field(default=DEFAULT_CENTER_FEATURE, help="Configuration for the search region for the rotation center of these input images and centered template to use")
-    registration_features : typing.Optional[list[typing.Union[BoxFromCenter,BoxFromOrigin]]] = xconf.field(default_factory=list, help="Regions containing unsaturated features to correlate on")
+    registration_features : typing.Optional[list[typing.Union[RegistrationFeature,BoxFromCenter,BoxFromOrigin]]] = xconf.field(default_factory=list, help="Regions containing unsaturated features to correlate on")
     excluded_regions : typing.Optional[base.FileConfig] = xconf.field(default=None, help="Regions to fill with zeros before cross-registration, stored as DS9 region file (reg format)")
     crop_to : float = xconf.field(default=1.0, help="Crop to this value times the original dimensions when shifting (make this >1.0 if this shifts are moving regions of interest out of view)")
     ext : typing.Union[str, int] = xconf.field(default=0, help="Extension index or name to load from input files")
@@ -211,7 +215,10 @@ class Align(base.MultiInputCommand):
         # measure deltas from true centers to reference features
         d_offsets_per_feature = []
         for feature_spec in self.registration_features:
-            search_box = feature_spec.to_bbox(original_dimensions)
+            if isinstance(feature_spec, RegistrationFeature):
+                search_box = feature_spec.ref_box.to_bbox(original_dimensions)
+            else:
+                search_box = feature_spec.to_bbox(original_dimensions)
             log.debug(f"make {search_box=} search")
             initial_template = example_data[search_box.slices]
             d_offsets_per_feature.append((registration_data
@@ -238,9 +245,13 @@ class Align(base.MultiInputCommand):
 
             d_sat_frame_centers_by_feature = []
             for feature_spec, d_center_offset in zip(self.registration_features, d_offsets_per_feature):
-                search_box = feature_spec.to_bbox(original_dimensions)
+                if isinstance(feature_spec, RegistrationFeature):
+                    ref_search_box = feature_spec.ref_box.to_bbox(original_dimensions)
+                    search_box = feature_spec.search_box.to_bbox(original_dimensions)
+                else:
+                    ref_search_box = search_box = feature_spec.to_bbox(original_dimensions)
                 log.debug(f"make {search_box=} search in saturated")
-                initial_template = median_unsat[search_box.slices]
+                initial_template = median_unsat[ref_search_box.slices]
                 d_sat_frame_centers_by_feature.append((obscured_registration_data
                     # fit features in sat frames
                     .map(fit_feature, improc.ImageFeatureSpec(search_box=search_box, template=initial_template))

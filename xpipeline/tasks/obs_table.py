@@ -20,10 +20,15 @@ def _construct_dtype(varying_kw, columns):
     dtype = []
     dateful = []
     for kw in varying_kw:
+        # example = next(columns[kw])
+        # while isinstance(example, str)
         example = columns[kw][0]
         if any([isinstance(x, float) for x in columns[kw]]):
             dtype.append((kw, np.float32))
+        elif any([isinstance(x, int) for x in columns[kw]]):
+            dtype.append((kw, np.int32))
         elif isinstance(example, str):
+            print(columns[kw])
             max_length = max([len(entry) for entry in columns[kw]])
             dtype.append((kw, str, max_length))
             try:

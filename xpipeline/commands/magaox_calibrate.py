@@ -46,7 +46,7 @@ class MagaoxCalibrate(MultiInputCommand):
             bias_arr = bias_arr[bbox.slices]
 
         n_output_files = len(all_inputs)
-        output_filepaths = [utils.join(destination, f"{self.name}_{i:04}.fits") for i in range(n_output_files)]
+        output_filepaths = [utils.join(destination, f"{self.get_name()}_{i:04}.fits") for i in range(n_output_files)]
         self.quit_if_outputs_exist(output_filepaths)
 
         coll = LazyPipelineCollection(all_inputs).map(iofits.load_fits_from_path)
