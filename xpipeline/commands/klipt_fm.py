@@ -4,8 +4,8 @@ import xconf
 import ray
 from astropy.io import fits
 from astropy.convolution import convolve_fft
-from xconf import FileConfig, join, PathConfig, DirectoryConfig
-from xconf.contrib import BaseRayGrid
+# from xconf import FileConfig, join, PathConfig, DirectoryConfig
+from xconf.contrib import BaseRayGrid, FileConfig, PathConfig, DirectoryConfig
 import sys
 import logging
 from typing import Optional, Union
@@ -198,7 +198,7 @@ def _evaluate_point_kt(
     if save_to_dir is not None:
         save_to_dir.ensure_exists()
         destfs = save_to_dir.get_fs()
-        destfs.makedirs(join(save_to_dir.path, "gridpoints"), exist_ok=True)
+        destfs.makedirs(utils.join(save_to_dir.path, "gridpoints"), exist_ok=True)
         hdul = fits.HDUList([
             fits.PrimaryHDU(),
             fits.ImageHDU(finim, name='finim'),
@@ -208,7 +208,7 @@ def _evaluate_point_kt(
             # fits.ImageHDU(planet_mask.astype(int), name='planet_mask'),
             # fits.ImageHDU(ring_mask.astype(int), name='ring_mask'),
         ])
-        dest_path = join(save_to_dir.path, "gridpoints", f"point_{int(row['index'])}.fits")
+        dest_path = utils.join(save_to_dir.path, "gridpoints", f"point_{int(row['index'])}.fits")
         with destfs.open(dest_path, mode='wb') as fh:
             hdul.writeto(fh)
         log.info(f"Wrote gridpoint image to {dest_path}")
@@ -324,7 +324,7 @@ class KlipTFm(BaseCommand, BaseRayGrid):
             coverage_map_fn,
             covered_pix_mask_fn,
         )
-        coverage_map_path = join(self.destination.path, coverage_map_fn)
+        coverage_map_path = utils.join(self.destination.path, coverage_map_fn)
         if not dest_fs.exists(coverage_map_path):
             log.debug(f"Number of pixels retained per frame {np.count_nonzero(mask)=}")
             log.debug(f"Computing coverage map")
@@ -406,13 +406,13 @@ class KlipTFm(BaseCommand, BaseRayGrid):
         mask = np.ones(len(tbl), dtype=bool)
         still_todo = tbl['time_total_sec'] == 0
         dest_fs = self.destination.get_fs()
-        gridpoints_dir = join(self.destination.path, "gridpoints")
+        gridpoints_dir = utils.join(self.destination.path, "gridpoints")
         if self.save_images and dest_fs.exists(self.destination.path):
             log.debug(f"Checking {self.destination.path} for existing saved images")
             dest_fs.makedirs(gridpoints_dir, exist_ok=True)
             gridpoint_image_paths = dest_fs.ls(gridpoints_dir, detail=False)
             for i in range(len(tbl)):
-                point_filepath = join(self.destination.path, "gridpoints", f"point_{int(tbl[i]['index'])}.fits")
+                point_filepath = utils.join(self.destination.path, "gridpoints", f"point_{int(tbl[i]['index'])}.fits")
                 if point_filepath not in gridpoint_image_paths:
                     still_todo[i] = True
         mask &= still_todo

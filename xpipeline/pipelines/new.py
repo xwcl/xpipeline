@@ -10,7 +10,7 @@ from dataclasses import dataclass
 import dataclasses
 import xconf
 import numpy as np
-from xconf import FileConfig, DirectoryConfig
+from xconf.contrib import FileConfig, DirectoryConfig
 import sys
 import logging
 from typing import Optional, Union, ClassVar, Any
