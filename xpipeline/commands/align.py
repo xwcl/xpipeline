@@ -127,7 +127,7 @@ class Align(base.MultiInputCommand):
     "Align images to common center"
     obscured_peak_input : typing.Union[str, None] = xconf.field(default=None, help="If applicable, saturated frames to reference to these unsaturated input frames")
     center : FeatureConfig = xconf.field(default=DEFAULT_CENTER_FEATURE, help="Configuration for the search region for the rotation center of these input images and centered template to use")
-    registration_features : typing.Optional[list[typing.Union[RegistrationFeature,BoxFromCenter,BoxFromOrigin]]] = xconf.field(default_factory=list, help="Regions containing unsaturated features to correlate on")
+    registration_features : list[typing.Union[RegistrationFeature,BoxFromCenter,BoxFromOrigin]] = xconf.field(default_factory=list, help="Regions containing unsaturated features to correlate on")
     excluded_regions : typing.Optional[base.FileConfig] = xconf.field(default=None, help="Regions to fill with zeros before cross-registration, stored as DS9 region file (reg format)")
     crop_to : float = xconf.field(default=1.0, help="Crop to this value times the original dimensions when shifting (make this >1.0 if this shifts are moving regions of interest out of view)")
     ext : typing.Union[str, int] = xconf.field(default=0, help="Extension index or name to load from input files")

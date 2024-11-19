@@ -69,7 +69,7 @@ class DaskHDU:
     @classmethod
     def from_fits(cls, hdu, distributed=False):
         arr = np.asarray(hdu.data)
-        data = arr.view(arr.dtype.newbyteorder('='))
+        data = arr.view(arr.dtype.newbyteorder()).byteswap()
         if distributed:
             data = da.from_array(data)
         header = hdu.header
