@@ -63,7 +63,7 @@ def flag_saturation(hdul, saturation_level, ext=0, dq_ext="DQ"):
     dq[saturated] = dq[saturated] | const.DQ_SATURATED
     log.debug(
         "Flagged {}/{} pixels".format(
-            np.count_nonzero(saturated), np.product(data.shape)
+            np.count_nonzero(saturated), np.prod(data.shape)
         )
     )
     log.debug("Found {} saturated".format(np.count_nonzero(saturated)))
