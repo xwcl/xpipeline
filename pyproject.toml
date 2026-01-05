@@ -1,5 +1,73 @@
 [build-system]
-requires = ["setuptools>=42", "wheel", "setuptools_scm[toml]>=3.4"]
+requires = ["setuptools>=61", "setuptools_scm[toml]>=7"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xpipeline"
+dynamic = ["version"]
+description = "The eXtreme (and eXtensible) pipeline for analysis of high contrast imaging and spectroscopy data"
+readme = "README.md"
+requires-python = ">=3.13"
+authors = [
+  { name = "Joseph D. Long", email = "me@joseph-long.com" },
+]
+urls = { Homepage = "https://github.com/xwcl/xpipeline" }
+
+dependencies = [
+  "pytest>=6.2.1",
+  "numpy>=1.20.3",  # first version with period= argument to unwrap
+  "scipy>=1.4.1",
+  "matplotlib>=3.2.2",
+  "astropy>=4.2",
+  "dask>=2021.1.1",
+  "distributed>=2021.1.1",
+  "python-irodsclient>=0.8.6",
+  "coloredlogs>=15.0",
+  "scikit-image>=0.18.1",
+  "irods_fsspec",
+  "fsspec>=0.8.7",
+  "sphinx-argparse>=0.2.5",
+  "sphinx-rtd-theme>=0.4.3",
+  "python-dateutil>=2.8.1,<3",
+  "dacite>=1.6.0,<2.0",
+  "numba>=0.53,<1.0",
+  "memory-profiler>=0.58.0",
+  "ray[default]>=1.8",
+  "pylops>=1.14,<2.0",
+  "tqdm>=4.62",
+  "pandas>=1.3.4",
+  "xconf>=0.0.0",
+  "orjson>=3.9.15,<4",
+  "pyarrow>=22.0.0",
+  "psutil>=7.2.1",
+]
+
+[project.scripts]
+xp = "xpipeline.cli:main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+# roughly matches find_packages()
+where = ["."]
+include = ["xpipeline*"]
+
+[tool.setuptools.package-data]
+"xpipeline.ref" = [
+  "3.9um_Clio.dat",
+  "naco_betapic_preproc_absil2013_gonzalez2017.npz",
+]
+"xpipeline.ref.clio" = [
+  "3.9um_Clio.dat",
+  "vAPP_transmission.fits",
+  "vAPP_phase_top.fits",
+  "vAPP_phase_bottom.fits",
+  "clio_pupil_mask.fits",
+]
 
 [tool.setuptools_scm]
 write_to = "xpipeline/version.py"
+
+[tool.uv.sources]
+xconf = { path = "../xconf" }
