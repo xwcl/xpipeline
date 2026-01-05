@@ -41,9 +41,9 @@ class BoxFromOrigin(Box):
 
 @xconf.config
 class CutoutConfig:
-    search_box : typing.Union[BoxFromCenter,BoxFromOrigin,Box] = xconf.field(default=Box(), help="Search box to find the PSF to cross-correlate with the template")
+    search_box : typing.Union[BoxFromCenter,BoxFromOrigin,Box] = xconf.field(default_factory=Box, help="Search box to find the PSF to cross-correlate with the template")
     template : typing.Union[base.FitsConfig, GaussianTemplate] = xconf.field(
-        default=GaussianTemplate(),
+        default_factory=GaussianTemplate,
         help=utils.unwrap("""
     Template cross-correlated with the search region to align images to a common grid, either given as a FITS image
     or specified as a centered 2D Gaussian with given FWHM

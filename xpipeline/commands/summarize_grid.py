@@ -32,7 +32,7 @@ FilterSpec = Union[FilterPredicate, float, str]
 @xconf.config
 class SummarizeGrid(InputCommand):
     ext : str = xconf.field(default="grid", help="FITS binary table extension with calibration grid")
-    columns : GridColumnsConfig = xconf.field(default=GridColumnsConfig(), help="Grid column names")
+    columns : GridColumnsConfig = xconf.field(default_factory=GridColumnsConfig, help="Grid column names")
     arcsec_per_pixel : float = xconf.field(default=clio.CLIO2_PIXEL_SCALE.value)
     wavelength_um : float = xconf.field(help="Wavelength in microns")
     primary_diameter_m : float = xconf.field(default=magellan.PRIMARY_MIRROR_DIAMETER.to(u.m).value)
@@ -152,9 +152,9 @@ class SummarizeGrid(InputCommand):
         det_snrs = np.concatenate([detections_df['snr'], np.repeat(0, len(iwa_pa_degs))])
         detection_map = characterization.points_to_map(det_xs, det_ys, det_snrs, coverage_mask)
 
-        hdus = [iofits.DaskHDU(None, kind="primary")]
-        hdus.append(iofits.DaskHDU(contrast_lim_map, name="limits_snr5_contrast_map"))
-        hdus.append(iofits.DaskHDU(utils.convert_obj_cols_to_str(limits_df.to_records(index=False)), kind="bintable", name="limits"))
-        hdus.append(iofits.DaskHDU(detection_map, name="detection_snr_map"))
-        hdus.append(iofits.DaskHDU(utils.convert_obj_cols_to_str(detections_df.to_records(index=False)), kind="bintable", name="detection"))
-        iofits.write_fits(iofits.DaskHDUList(hdus), output_filepath)
+        hdus = [iofits.PicklableHDU(None, kind="primary")]
+        hdus.append(iofits.PicklableHDU(contrast_lim_map, name="limits_snr5_contrast_map"))
+        hdus.append(iofits.PicklableHDU(utils.convert_obj_cols_to_str(limits_df.to_records(index=False)), kind="bintable", name="limits"))
+        hdus.append(iofits.PicklableHDU(detection_map, name="detection_snr_map"))
+        hdus.append(iofits.PicklableHDU(utils.convert_obj_cols_to_str(detections_df.to_records(index=False)), kind="bintable", name="detection"))
+        iofits.write_fits(iofits.PicklableHDUList(hdus), output_filepath)

@@ -43,7 +43,7 @@ def _is_ignored_metadata_keyword(kw):
 
 
 
-class DaskHDU:
+class PicklableHDU:
     """Represent a FITS header-data unit in a way that is
     convenient for Dask to serialize and deserialize
     """
@@ -109,7 +109,7 @@ class DaskHDU:
         else:
             raise ValueError(f"Unknown kind: {self.kind}")
 
-register_generic(DaskHDU)
+register_generic(PicklableHDU)
 
 
 def _check_ext(key, hdu, idx):
@@ -120,7 +120,7 @@ def _check_ext(key, hdu, idx):
     return False
 
 
-class DaskHDUList:
+class PicklableHDUList:
     """Represent a list of FITS header-data units in a way that is
     convenient for Dask to serialize and deserialize
     """
@@ -128,7 +128,7 @@ class DaskHDUList:
     def __init__(self, hdus=None):
         if hdus is None:
             hdus = []
-        self.hdus : list[DaskHDU] = hdus
+        self.hdus : list[PicklableHDU] = hdus
 
     def append(self, hdu):
         self.hdus.append(hdu)
@@ -154,7 +154,7 @@ class DaskHDUList:
     def from_fits(cls, hdus, distributed=False):
         this_hdul = cls()
         for hdu in hdus:
-            this_hdul.hdus.append(DaskHDU.from_fits(hdu, distributed=distributed))
+            this_hdul.hdus.append(PicklableHDU.from_fits(hdu, distributed=distributed))
         return this_hdul
 
     def to_fits(self):
@@ -166,12 +166,12 @@ class DaskHDUList:
     @classmethod
     def from_array(cls, *args, **kwargs):
         """Convenience method to wrap a DaskHDU from an array in a new DaskHDUList"""
-        return cls([DaskHDU(*args, **kwargs)])
+        return cls([PicklableHDU(*args, **kwargs)])
 
     def copy(self):
         return self.__class__([hdu.copy() for hdu in self.hdus])
 
-    def updated_copy(self, *, new_data_for_exts=None, new_headers_for_exts=None, history=None):
+    def updated_copy(self, *, new_data_for_exts=None, new_headers_for_exts=None):
         """Return a copy of the DaskHDUList with each ext whose key appears in
         new_data_for_exts and new_headers_for_exts updated with new data and/or
         headers
@@ -212,7 +212,7 @@ class DaskHDUList:
         raise KeyError(f"No HDU {key}")
 
 
-register_generic(DaskHDUList)
+register_generic(PicklableHDUList)
 
 
 def load_fits(file_handle):
@@ -225,7 +225,7 @@ def load_fits(file_handle):
             for hdu in hdul:
                 hdu.header.add_history("xpipeline loaded and validated format")
         log.debug(f"Converting to DaskHDUList")
-        dask_hdul = DaskHDUList.from_fits(hdul)
+        dask_hdul = PicklableHDUList.from_fits(hdul)
     log.debug(f"Loaded {file_handle}: {dask_hdul.hdus}")
     return dask_hdul
 
@@ -267,7 +267,7 @@ def ensure_dq(hdul, like_ext=0):
         return hdul
     dq_data = np.zeros_like(hdul[like_ext].data, dtype=np.uint8)
     dq_header = {"EXTNAME": "DQ"}
-    hdul.hdus.append(DaskHDU(dq_data, header=dq_header))
+    hdul.hdus.append(PicklableHDU(dq_data, header=dq_header))
     msg = f"Created DQ extension based on extension {like_ext}"
     log.info(msg)
     hdul["DQ"].header.add_history(msg)

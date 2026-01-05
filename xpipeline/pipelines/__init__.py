@@ -12,7 +12,7 @@ from .. import core
 from ..core import PipelineCollection, reduce_bitwise_or
 
 from ..tasks import (
-    obs_table,
+    # obs_table,
     iofits,
     sky_model,
     detector,
@@ -47,12 +47,12 @@ def combine_extension_to_new_hdu(
         hdr = {'EXTNAME': ext}
     else:
         hdr = None
-    return dask.delayed(iofits.DaskHDU)(result, header=hdr, kind="image")
+    return dask.delayed(iofits.PicklableHDU)(result, header=hdr, kind="image")
 
 
 def compute_scale_factors(
-    inputs_collection_or_hdul : typing.Union[PipelineCollection,iofits.DaskHDUList],
-    template_hdul : iofits.DaskHDUList,
+    inputs_collection_or_hdul : typing.Union[PipelineCollection,iofits.PicklableHDUList],
+    template_hdul : iofits.PicklableHDUList,
     saturated_pixel_threshold : float,
 ):
     delayed_hdus = []
@@ -61,7 +61,7 @@ def compute_scale_factors(
             continue
         plane_shape = template_hdul[extname].data.shape
         log.debug(f'{plane_shape=}')
-        if isinstance(inputs_collection_or_hdul, iofits.DaskHDUList):
+        if isinstance(inputs_collection_or_hdul, iofits.PicklableHDUList):
             data_cube = da.from_array(inputs_collection_or_hdul[extname].data)
         else:
             data_cube = iofits.hdulists_to_dask_cube(inputs_collection_or_hdul.items, plane_shape, ext=extname)
@@ -72,13 +72,13 @@ def compute_scale_factors(
             for x in data_cube
         ])
         def _to_hdu(data, name=None):
-            return iofits.DaskHDU(data, name=name)
+            return iofits.PicklableHDU(data, name=name)
         delayed_hdus.append(dask.delayed(_to_hdu)(d_factors, name=extname if not isinstance(extname, int) else None))
 
     def _to_hdulist(*args):
-        hdus = [iofits.DaskHDU(data=None, kind="primary")]
+        hdus = [iofits.PicklableHDU(data=None, kind="primary")]
         hdus.extend(args)
-        return iofits.DaskHDUList(hdus)
+        return iofits.PicklableHDUList(hdus)
     return dask.delayed(_to_hdulist)(*delayed_hdus)
 
 
@@ -166,13 +166,13 @@ def align_to_templates(
         d_hdus = (input_coll
             .map(data_quality.get_masked_data, ext=ext, dq_ext=dq_ext, permitted_flags=const.DQ_SATURATED, excluded_pixels_mask=excluded_pixels_mask)
             .map(improc.aligned_cutout, cspec, upsample_factor=upsample_factor, prefilter_sigma_px=prefilter_sigma_px)
-            .map(iofits.DaskHDU, header={'EXTNAME': name})
+            .map(iofits.PicklableHDU, header={'EXTNAME': name})
             .items
         )
         d_hdus_for_cutouts.append(d_hdus)
 
     # collect as multi-extension FITS
-    def _collect(primary_hdu: iofits.DaskHDU, *args: iofits.DaskHDU):
+    def _collect(primary_hdu: iofits.PicklableHDU, *args: iofits.PicklableHDU):
         new_primary_hdu = primary_hdu.updated_copy(
             None,
             history="Detached header from full frame in conversion to multi-extension file",
@@ -180,7 +180,7 @@ def align_to_templates(
         new_primary_hdu.kind = 'primary'
         hdus = [new_primary_hdu]
         hdus.extend(args)
-        return iofits.DaskHDUList(hdus)
+        return iofits.PicklableHDUList(hdus)
 
     return input_coll.map(lambda x: x[ext]).zip_map(_collect, *d_hdus_for_cutouts)
 

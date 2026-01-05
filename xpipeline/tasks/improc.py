@@ -481,6 +481,11 @@ class Point:
     x : Union[float, int]
 
 @dataclass(kw_only=True)
+class DeltaPoint:
+    dy : Union[float, int]
+    dx : Union[float, int]
+
+@dataclass(kw_only=True)
 class Pixel(Point):
     y : int
     x : int

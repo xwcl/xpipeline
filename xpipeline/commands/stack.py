@@ -46,10 +46,10 @@ class Stack(BaseCommand):
         hdus = []
         for output_idx, components in outputs_to_components.items():
             output_stacked, coverage_stacked = self._process_one_output(components)
-            hdus.append(iofits.DaskHDU(output_stacked, name=f"STACK_{output_idx}"))
-            hdus.append(iofits.DaskHDU(coverage_stacked, name=f"COVERAGE_{output_idx}"))
+            hdus.append(iofits.PicklableHDU(output_stacked, name=f"STACK_{output_idx}"))
+            hdus.append(iofits.PicklableHDU(coverage_stacked, name=f"COVERAGE_{output_idx}"))
         
-        iofits.write_fits(iofits.DaskHDUList(hdus), output_filepath)
+        iofits.write_fits(iofits.PicklableHDUList(hdus), output_filepath)
 
             
     def _process_one_output(self, components : list[ComponentConfig]):

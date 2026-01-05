@@ -73,10 +73,11 @@ class Dispatcher(xconf.Dispatcher):
 
 # Split out for use in xpipeline.commands.base.init_worker
 def _configure_logging(level):
+    print('called _configure_logging')
     # remove existing handlers
-    root_logger = logging.getLogger()
-    for h in root_logger.handlers:
-        root_logger.removeHandler(h)
+    # root_logger = logging.getLogger()
+    # for h in root_logger.handlers:
+    #     root_logger.removeHandler(h)
     # apply verbosity
     for logger_name in Dispatcher.first_party_loggers:
         pkglog = logging.getLogger(logger_name)

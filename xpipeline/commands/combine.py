@@ -23,7 +23,7 @@ class CombineAllConfig:
 
 @xconf.config
 class CombineAnglesConfig:
-    angle : Union[AngleRangeConfig,PixelRotationRangeConfig] = xconf.field(default=AngleRangeConfig(), help="Combine frames with derotation angles within range")
+    angle : Union[AngleRangeConfig,PixelRotationRangeConfig] = xconf.field(default_factory=AngleRangeConfig, help="Combine frames with derotation angles within range")
 
 CombineConfig = Union[CombineFramesConfig, CombineWallTimeConfig, CombineAnglesConfig, CombineAllConfig]
 

@@ -11,7 +11,7 @@ log = logging.getLogger(__name__)
 
 @xconf.config
 class ExcludeRangeConfig:
-    angle : Union[AngleRangeConfig,PixelRotationRangeConfig] = xconf.field(default=AngleRangeConfig(), help="Apply exclusion to derotation angles")
+    angle : Union[AngleRangeConfig,PixelRotationRangeConfig] = xconf.field(default_factory=AngleRangeConfig, help="Apply exclusion to derotation angles")
     nearest_n_frames : int = xconf.field(default=0, help="Number of additional temporally-adjacent frames on either side of the target frame to exclude from the sequence when computing the KLIP eigenimages")
 
 @xconf.config
@@ -29,7 +29,7 @@ class Klip(BaseCommand):
     inputs : list[KlipInputConfig] = xconf.field(help="Input data to simultaneously reduce")
     obstable : FitsConfig = xconf.field(help="Metadata table in FITS")
     k_klip : int = xconf.field(default=10, help="Number of modes to subtract in starlight subtraction")
-    exclude : ExcludeRangeConfig = xconf.field(default=ExcludeRangeConfig(), help="How to exclude frames from reference sample")
+    exclude : ExcludeRangeConfig = xconf.field(default_factory=ExcludeRangeConfig, help="How to exclude frames from reference sample")
     strategy : constants.KlipStrategy = xconf.field(default=constants.KlipStrategy.DOWNDATE_SVD, help="Implementation of KLIP to use")
     reuse_eigenimages : bool = xconf.field(default=False, help="Apply KLIP without adjusting the eigenimages at each step (much faster, less powerful)")
     # combine_output_by : constants.CombineOperation = xconf.field(default=constants.CombineOperation.MEAN, help="Operation used to combine final derotated frames into a single output frame")
@@ -216,15 +216,15 @@ class Klip(BaseCommand):
         log.info(f"Computed in {elapsed} sec")
 
         iofits.write_fits(
-            iofits.DaskHDUList([iofits.DaskHDU(out_image)]), output_klip_final_fn
+            iofits.PicklableHDUList([iofits.PicklableHDU(out_image)]), output_klip_final_fn
         )
         if self.output_mean_image:
             iofits.write_fits(
-                iofits.DaskHDUList([iofits.DaskHDU(mean_image)]), output_mean_image_fn
+                iofits.PicklableHDUList([iofits.PicklableHDU(mean_image)]), output_mean_image_fn
             )
         if self.output_coverage_map:
             iofits.write_fits(
-                iofits.DaskHDUList([iofits.DaskHDU(coverage_image)]), output_coverage_map_fn
+                iofits.PicklableHDUList([iofits.PicklableHDU(coverage_image)]), output_coverage_map_fn
             )
 
 

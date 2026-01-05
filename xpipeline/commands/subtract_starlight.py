@@ -14,7 +14,7 @@ log = logging.getLogger(__name__)
 @xconf.config
 class ExcludeRangeConfig:
     angle_deg_col : str = xconf.field(default="derotation_angle_deg", help="Column with angle values per frame to use for exclusion")
-    angle : Union[AngleRangeConfig,PixelRotationRangeConfig] = xconf.field(default=AngleRangeConfig(), help="Apply exclusion to derotation angles")
+    angle : Union[AngleRangeConfig,PixelRotationRangeConfig] = xconf.field(default_factory=AngleRangeConfig, help="Apply exclusion to derotation angles")
     nearest_n_frames : int = xconf.field(default=0, help="Number of additional temporally-adjacent frames on either side of the target frame to exclude from the sequence when computing the KLIP eigenimages")
 
 @xconf.config
@@ -38,7 +38,7 @@ class SubtractStarlight(BaseCommand):
     destination : str = xconf.field(help="Destination path to save results")
     obstable : FitsConfig = xconf.field(help="Metadata table in FITS")
     k_klip : int = xconf.field(default=10, help="Number of modes to subtract in starlight subtraction")
-    exclude_ranges : ExcludeRangeConfig = xconf.field(default=ExcludeRangeConfig(), help="How to exclude frames from reference sample")
+    exclude_ranges : ExcludeRangeConfig = xconf.field(default_factory=ExcludeRangeConfig, help="How to exclude frames from reference sample")
     exclude_frames : Optional[ExcludeFramesConfig] = xconf.field(default=None, help="How to select frames to drop from the inputs")
     strategy : constants.KlipStrategy = xconf.field(default=constants.KlipStrategy.DOWNDATE_SVD, help="Implementation of KLIP to use")
     reuse_eigenimages : bool = xconf.field(default=False, help="Apply KLIP without adjusting the eigenimages at each step (much faster, less powerful)")
@@ -81,12 +81,12 @@ class SubtractStarlight(BaseCommand):
     def _save_initial_decomposition(self, initial_decomposition, output_initial_decomp_fn):
         from ..tasks import iofits
         hdus = [
-            iofits.DaskHDU(data=None, kind="primary"),
-            iofits.DaskHDU(initial_decomposition.mtx_u0, name="MTX_U0"),
-            iofits.DaskHDU(initial_decomposition.diag_s0, name="DIAG_S0"),
-            iofits.DaskHDU(initial_decomposition.mtx_v0, name="MTX_V0"),
+            iofits.PicklableHDU(data=None, kind="primary"),
+            iofits.PicklableHDU(initial_decomposition.mtx_u0, name="MTX_U0"),
+            iofits.PicklableHDU(initial_decomposition.diag_s0, name="DIAG_S0"),
+            iofits.PicklableHDU(initial_decomposition.mtx_v0, name="MTX_V0"),
         ]
-        iofits.write_fits(iofits.DaskHDUList(hdus), output_initial_decomp_fn)
+        iofits.write_fits(iofits.PicklableHDUList(hdus), output_initial_decomp_fn)
 
 
     def _make_mask(self, klip_input_cfg : KlipInputConfig, sci_arr : np.ndarray):
@@ -168,13 +168,13 @@ class SubtractStarlight(BaseCommand):
             outcubes, outmeans = result
         elapsed = time.perf_counter() - start
         log.info(f"Computed in {elapsed} sec")
-        hdus = [iofits.DaskHDU(data=None, kind="primary")]
+        hdus = [iofits.PicklableHDU(data=None, kind="primary")]
         for idx in range(len(outcubes)):
-            hdus.append(iofits.DaskHDU(outcubes[idx], name=f"SCI_{idx}"))
-            hdus.append(iofits.DaskHDU(outmeans[idx], name=f"MEAN_{idx}"))
+            hdus.append(iofits.PicklableHDU(outcubes[idx], name=f"SCI_{idx}"))
+            hdus.append(iofits.PicklableHDU(outmeans[idx], name=f"MEAN_{idx}"))
 
         iofits.write_fits(
-            iofits.DaskHDUList(hdus), output_subtracted_fn
+            iofits.PicklableHDUList(hdus), output_subtracted_fn
         )
 
     def _make_exclusions(self, exclude : ExcludeRangeConfig, obstable):

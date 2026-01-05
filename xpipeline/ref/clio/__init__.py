@@ -125,8 +125,8 @@ def serial_split_frames_cube(all_hduls, filenames, ext=0):
         for i in range(hdul[ext].data.shape[0]):
             outfile = f"{filename_base}_{i:03}.fits"
             start_time = dateutil.parser.parse(hdul[ext].header["DATE"])
-            new_hdul = iofits.DaskHDUList(
-                [iofits.DaskHDU(hdul[ext].data[i], hdul[ext].header.copy())]
+            new_hdul = iofits.PicklableHDUList(
+                [iofits.PicklableHDU(hdul[ext].data[i], hdul[ext].header.copy())]
             )
             # example INT card:
             # INT     =                 5000 / Integration time per frame in msec

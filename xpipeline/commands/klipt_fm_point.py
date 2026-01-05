@@ -202,7 +202,7 @@ class KlipTFm(BaseCommand, KlipTFmPointPipeline):
             log.debug(f"Number of pixels retained per frame {np.count_nonzero(mask)=}")
             log.debug(f"Computing coverage map")
             final_coverage = pipelines.adi_coverage(mask, angles)
-            iofits.write_fits(iofits.DaskHDUList([iofits.DaskHDU(final_coverage)]), coverage_map_path)
+            iofits.write_fits(iofits.PicklableHDUList([iofits.PicklableHDU(final_coverage)]), coverage_map_path)
             log.debug(f"Wrote coverage map to {coverage_map_path}")
         else:
             final_coverage = iofits.load_fits_from_path(coverage_map_path)[0].data
@@ -212,7 +212,7 @@ class KlipTFm(BaseCommand, KlipTFmPointPipeline):
         covered_pix_mask = binary_closing(covered_pix_mask)
         log.debug(f"Coverage map with {self.min_coverage_frac} fraction gives {np.count_nonzero(covered_pix_mask)} possible pixels to analyze")
         if not dest_fs.exists(covered_pix_mask_path):
-            iofits.write_fits(iofits.DaskHDUList([iofits.DaskHDU(covered_pix_mask.astype(int))]), covered_pix_mask_path)
+            iofits.write_fits(iofits.PicklableHDUList([iofits.PicklableHDU(covered_pix_mask.astype(int))]), covered_pix_mask_path)
             log.debug(f"Wrote covered pix mask to {covered_pix_mask_path}")
         return final_coverage, covered_pix_mask
 

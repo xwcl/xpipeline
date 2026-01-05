@@ -101,4 +101,4 @@ class Evaluate(BaseCommand):
             log.info(payload_str.decode('utf8'))
 
         if self.save_snr_map:
-            iofits.write_fits(iofits.DaskHDUList([iofits.DaskHDU(data=snr_image, kind='primary')]), output_snr_map_fn)
+            iofits.write_fits(iofits.PicklableHDUList([iofits.PicklableHDU(data=snr_image, kind='primary')]), output_snr_map_fn)

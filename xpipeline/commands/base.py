@@ -1,3 +1,4 @@
+import pathlib
 import typing
 import logging
 import numpy
@@ -201,7 +202,7 @@ class FileConfig:
         return fs.open(self.path, mode)
 
 @xconf.config
-class FitsConfig(FileConfig):
+class FitsConfig(FileConfig):  #TODO pathlibify
     path : str = xconf.field(help="Path from which to load the containing FITS file")
     ext : typing.Union[int,str] = xconf.field(default=0, help="Extension from which to load")
 
@@ -210,6 +211,27 @@ class FitsConfig(FileConfig):
         with self.open() as fh:
             hdul = iofits.load_fits(fh)
         return hdul[self.ext].data
+
+
+@xconf.config
+class FitsExtConfig:
+    path : pathlib.Path = xconf.field(help="Path from which to load the containing FITS file")
+    ext : typing.Union[int,str] = xconf.field(default=0, help="Extension from which to load")
+
+    def load(self):
+        from astropy.io import fits
+        with self.path.open('rb') as fh:
+            hdul = fits.open(fh)
+        return hdul[self.ext]
+
+@xconf.config
+class FitsImageConfig(FitsExtConfig):
+    def load(self):
+        from astropy.io import fits
+        with self.path.open('rb') as fh:
+            hdul = fits.open(fh)
+            image = hdul[self.ext].data.astype('=f8')
+        return image
 
 @xconf.config
 class FitsTableColumnConfig(FitsConfig):

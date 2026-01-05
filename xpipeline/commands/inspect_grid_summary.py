@@ -15,7 +15,7 @@ import numpy as np
 @xconf.config
 class InspectGridSummary(InputCommand):
     ext : str = xconf.field(default="grid", help="FITS binary table extension with calibration grid")
-    columns : GridColumnsConfig = xconf.field(default=GridColumnsConfig(), help="Grid column names")
+    columns : GridColumnsConfig = xconf.field(default_factory=GridColumnsConfig, help="Grid column names")
     arcsec_per_pixel : float = xconf.field(default=clio.CLIO2_PIXEL_SCALE.value)
     wavelength_um : float = xconf.field(help="Wavelength in microns")
     primary_diameter_m : float = xconf.field(default=magellan.PRIMARY_MIRROR_DIAMETER.to(u.m).value)

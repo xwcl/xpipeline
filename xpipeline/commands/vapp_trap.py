@@ -490,7 +490,7 @@ class VappTrap(InputCommand):
     sampling : SamplingConfig = xconf.field(help="Configure the sampling of the final derotated field for detection and contrast calibration")
     min_coverage_frac : float = xconf.field(help="")
     ray : Union[LocalRayConfig,RemoteRayConfig] = xconf.field(
-        default=LocalRayConfig(),
+        default_factory=LocalRayConfig,
         help="Ray distributed framework configuration"
     )
     ring_exclude_px : float = xconf.field(default=12, help="When selecting reference pixel timeseries, determines width of ring centered at radius of interest for which pixel vectors are excluded")
@@ -606,7 +606,7 @@ class VappTrap(InputCommand):
         if not dest_fs.exists(coverage_map_path):
             log.debug(f"Computing coverage map")
             final_coverage = pipelines.adi_coverage(mask, angles)
-            iofits.write_fits(iofits.DaskHDUList([iofits.DaskHDU(final_coverage)]), coverage_map_path)
+            iofits.write_fits(iofits.PicklableHDUList([iofits.PicklableHDU(final_coverage)]), coverage_map_path)
             log.debug(f"Wrote coverage map to {coverage_map_path}")
         else:
             final_coverage = iofits.load_fits_from_path(coverage_map_path)[0].data
@@ -617,7 +617,7 @@ class VappTrap(InputCommand):
         covered_pix_mask = binary_closing(covered_pix_mask)
         log.debug(f"Coverage map with {self.min_coverage_frac} fraction gives {np.count_nonzero(covered_pix_mask)} possible pixels to analyze")
         if not dest_fs.exists(covered_pix_mask_path):
-            iofits.write_fits(iofits.DaskHDUList([iofits.DaskHDU(covered_pix_mask.astype(int))]), covered_pix_mask_path)
+            iofits.write_fits(iofits.PicklableHDUList([iofits.PicklableHDU(covered_pix_mask.astype(int))]), covered_pix_mask_path)
             log.debug(f"Wrote covered pix mask to {covered_pix_mask_path}")
 
         log.debug("Generating grid")
@@ -670,9 +670,9 @@ class VappTrap(InputCommand):
         restored_from_checkpoint = np.count_nonzero(grid['time_total_sec'] != 0)
 
         def make_hdul(grid):
-            return iofits.DaskHDUList([
-                iofits.DaskHDU(None, kind="primary"),
-                iofits.DaskHDU(grid, kind="bintable", name="grid")
+            return iofits.PicklableHDUList([
+                iofits.PicklableHDU(None, kind="primary"),
+                iofits.PicklableHDU(grid, kind="bintable", name="grid")
             ])
 
         with tqdm(total=total) as pbar:

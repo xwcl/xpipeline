@@ -104,7 +104,7 @@ class Inject(InputCommand):
                 saturation_threshold=self.saturation_threshold
             )
             log.debug(f"Injected {extname}")
-            dataset_hdul.append(iofits.DaskHDU(signal_only, name=f"{extname}_SIGNAL"))
+            dataset_hdul.append(iofits.PicklableHDU(signal_only, name=f"{extname}_SIGNAL"))
         tbl = characterization.specs_to_table(companion_specs, characterization.CompanionSpec)
-        dataset_hdul.append(iofits.DaskHDU(tbl, name="INJECTED", kind="bintable"))
+        dataset_hdul.append(iofits.PicklableHDU(tbl, name="INJECTED", kind="bintable"))
         return dataset_hdul

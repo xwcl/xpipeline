@@ -1,3 +1,4 @@
+import pathlib
 import toml
 import time
 import xconf
@@ -231,11 +232,11 @@ class KlipTFm(BaseCommand, BaseRayGrid):
 
     # overridden from BaseRayGrid to incorporate custom worker init func
     ray : AnyRayConfig = xconf.field(
-        default=LocalRayConfig(),
+        default_factory=LocalRayConfig,
         help="Ray distributed framework configuration"
     )
     # TODO use DirectoryConfig more broadly, this just overrides the destination from BaseCommand
-    destination : DirectoryConfig = xconf.field(default=PathConfig(path="."), help="Directory for output files")
+    destination : pathlib.Path = xconf.field(default=pathlib.Path("."), help="Directory for output files")
     
     # new options
     input : FileConfig = xconf.field(help="Path to input FITS file with collected dataset and metadata")
@@ -329,7 +330,7 @@ class KlipTFm(BaseCommand, BaseRayGrid):
             log.debug(f"Number of pixels retained per frame {np.count_nonzero(mask)=}")
             log.debug(f"Computing coverage map")
             final_coverage = pipelines.adi_coverage(mask, angles)
-            iofits.write_fits(iofits.DaskHDUList([iofits.DaskHDU(final_coverage)]), coverage_map_path)
+            iofits.write_fits(iofits.PicklableHDUList([iofits.PicklableHDU(final_coverage)]), coverage_map_path)
             log.debug(f"Wrote coverage map to {coverage_map_path}")
         else:
             final_coverage = iofits.load_fits_from_path(coverage_map_path)[0].data
@@ -339,7 +340,7 @@ class KlipTFm(BaseCommand, BaseRayGrid):
         covered_pix_mask = binary_closing(covered_pix_mask)
         log.debug(f"Coverage map with {self.min_coverage_frac} fraction gives {np.count_nonzero(covered_pix_mask)} possible pixels to analyze")
         if not dest_fs.exists(covered_pix_mask_path):
-            iofits.write_fits(iofits.DaskHDUList([iofits.DaskHDU(covered_pix_mask.astype(int))]), covered_pix_mask_path)
+            iofits.write_fits(iofits.PicklableHDUList([iofits.PicklableHDU(covered_pix_mask.astype(int))]), covered_pix_mask_path)
             log.debug(f"Wrote covered pix mask to {covered_pix_mask_path}")
         return final_coverage, covered_pix_mask
 

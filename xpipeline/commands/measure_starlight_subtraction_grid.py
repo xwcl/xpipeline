@@ -113,7 +113,7 @@ class SamplingConfig:
 @xconf.config
 class MeasureStarlightSubtractionGrid(BaseRayGrid):
     ray : AnyRayConfig = xconf.field(
-        default=LocalRayConfig(),
+        default_factory=LocalRayConfig,
         help="Ray distributed framework configuration"
     )
     measure_subtraction : MeasureStarlightSubtraction = xconf.field(help="")

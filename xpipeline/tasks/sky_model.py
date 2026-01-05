@@ -44,16 +44,16 @@ class SkyModel:
             self.max_err,
             self.avg_err,
         )
-        components_hdu = iofits.DaskHDU(components)
+        components_hdu = iofits.PicklableHDU(components)
         components_hdu.header["EXTNAME"] = "COMPONENTS"
         components_hdu.header["MIN_ERR"] = min_err
         components_hdu.header["MAX_ERR"] = max_err
         components_hdu.header["AVG_ERR"] = avg_err
-        mean_sky_hdu = iofits.DaskHDU(mean_sky)
+        mean_sky_hdu = iofits.PicklableHDU(mean_sky)
         mean_sky_hdu.header["EXTNAME"] = "MEAN_SKY"
-        stddev_sky_hdu = iofits.DaskHDU(stddev_sky)
+        stddev_sky_hdu = iofits.PicklableHDU(stddev_sky)
         stddev_sky_hdu.header["EXTNAME"] = "STDDEV_SKY"
-        return iofits.DaskHDUList([components_hdu, mean_sky_hdu, stddev_sky_hdu])
+        return iofits.PicklableHDUList([components_hdu, mean_sky_hdu, stddev_sky_hdu])
 
     def to_hdulist(self):
         return self.to_dask_hdulist().to_fits()
@@ -178,7 +178,7 @@ def cross_validate(
 
 
 def background_subtract(
-    hdul: iofits.DaskHDUList,
+    hdul: iofits.PicklableHDUList,
     sky_model: SkyModel,
     mask_dilate_iters: int,
     n_sigma: float,

@@ -48,7 +48,7 @@ class LocalKLIP(KLIP):
                 with open(filepath, "rb") as fh:
                     log.debug(f"Loading frame from {filepath}")
                     hdul = fits.open(fh)
-                    inputs.append(iofits.DaskHDUList.from_fits(hdul))
+                    inputs.append(iofits.PicklableHDUList.from_fits(hdul))
             sci_arr = np.stack([x[0].data.astype("=f8") for x in inputs])
             rotation_keyword = self.args.angle_keyword
             rot_arr = np.asarray([x[0].header[rotation_keyword] for x in inputs])

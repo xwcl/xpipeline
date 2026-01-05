@@ -300,7 +300,7 @@ from ..tasks.characterization import generate_signal, inject_signals
 
 @xconf.config
 class ExcludeRangeConfig:
-    angle : Union[AngleRangeConfig,PixelRotationRangeConfig] = xconf.field(default=AngleRangeConfig(), help="Apply exclusion to derotation angles")
+    angle : Union[AngleRangeConfig,PixelRotationRangeConfig] = xconf.field(default_factory=AngleRangeConfig, help="Apply exclusion to derotation angles")
     nearest_n_frames : int = xconf.field(default=0, help="Number of additional temporally-adjacent frames on either side of the target frame to exclude from the sequence when computing the KLIP eigenimages")
 
 @xconf.config
@@ -308,7 +308,7 @@ class Klip:
     klip : bool = xconf.field(default=True, help="Include this option to explicitly select the Klip strategy")
     return_basis : bool = xconf.field(default=False, help="Bail out early and return the basis set")
     reuse : bool = xconf.field(default=False, help="Use the same basis set for all frames")
-    exclude : ExcludeRangeConfig = xconf.field(default=ExcludeRangeConfig(), help="How to exclude frames from reference sample")
+    exclude : ExcludeRangeConfig = xconf.field(default_factory=ExcludeRangeConfig, help="How to exclude frames from reference sample")
     decomposer : learning.Decomposers = xconf.field(default=learning.Decomposers.svd, help="Modal decomposer for data matrix")
 
     def _make_exclusions(self, exclude : ExcludeRangeConfig, derotation_angles):
@@ -1274,8 +1274,8 @@ class StarlightSubtractionFilterMeasurements:
 
 @xconf.config
 class PostFilter:
-    tophat : TophatPostFilter = xconf.field(default=TophatPostFilter(), help="Filter final derotated images with a circular aperture")
-    matched : MatchedPostFilter = xconf.field(default=MatchedPostFilter(), help="Filter final derotated images with a matched filter based on the model PSF")
+    tophat : TophatPostFilter = xconf.field(default_factory=TophatPostFilter, help="Filter final derotated images with a circular aperture")
+    matched : MatchedPostFilter = xconf.field(default_factory=MatchedPostFilter, help="Filter final derotated images with a matched filter based on the model PSF")
 
     def execute(
         self,
@@ -1299,10 +1299,10 @@ class PostFilter:
 class StarlightSubtract:
     strategy : Union[KlipTranspose,Klip,KlipSubspace,DynamicModeDecomposition] = xconf.field(help="Strategy with which to estimate and subtract starlight")
     resolution_element_px : float = xconf.field(help="One resolution element (lambda / D) in pixels")
-    image_stack: ImageStack = xconf.field(default=ImageStack(), help="How to combine images after starlight subtraction and filtering")
+    image_stack: ImageStack = xconf.field(default_factory=ImageStack, help="How to combine images after starlight subtraction and filtering")
     pre_stack_filter : Union[MatchedPreStackFilter,TophatPreStackFilter,NoOpPreStackFilter] = xconf.field(default=None, help="Process after removing starlight and before stacking")
     k_modes : KModesConfig = xconf.field(default_factory=KModesFractionConfig, help="Which values to try for number of modes to subtract")
-    post_filter : PostFilter = xconf.field(default=PostFilter())
+    post_filter : PostFilter = xconf.field(default_factory=PostFilter)
     return_inputs : bool = xconf.field(default=False, help="Whether original images before starlight subtraction should be returned")
     return_pre_stack_filtered : bool = xconf.field(default=False, help="Whether filtered images before stacking should be returned")
     return_decomposition : bool = xconf.field(default=False, help="Whether the computed decomposition should be returned")

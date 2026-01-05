@@ -29,7 +29,7 @@ class EvalKlip(Klip):
         location to exclude when calculating the noise (in other
         words, a value of 1 excludes two apertures total,
         one on each side)"""))
-    search : SearchConfig = xconf.field(help="Configure blind search", default=SearchConfig())
+    search : SearchConfig = xconf.field(help="Configure blind search", default_factory=SearchConfig)
     output_klip_final : bool = xconf.field(default=True, help="Whether to save the final KLIPped image for inspection")
 
     # def __post_init__(self):
@@ -196,19 +196,19 @@ class EvalKlip(Klip):
 
         if self.output_klip_final:
             iofits.write_fits(
-                iofits.DaskHDUList([
-                    iofits.DaskHDU(out_image),
-                    iofits.DaskHDU(characterization.specs_to_table(recovered_signals, characterization.RecoveredSignal), name='RECOVERED', kind='bintable'),
-                    iofits.DaskHDU(characterization.specs_to_table(all_candidates, characterization.Detection), name='CANDIDATES', kind='bintable')
+                iofits.PicklableHDUList([
+                    iofits.PicklableHDU(out_image),
+                    iofits.PicklableHDU(characterization.specs_to_table(recovered_signals, characterization.RecoveredSignal), name='RECOVERED', kind='bintable'),
+                    iofits.PicklableHDU(characterization.specs_to_table(all_candidates, characterization.Detection), name='CANDIDATES', kind='bintable')
                 ]), output_klip_final_fn
             )
         if self.output_mean_image:
             iofits.write_fits(
-                iofits.DaskHDUList([iofits.DaskHDU(mean_image)]), output_mean_image_fn
+                iofits.PicklableHDUList([iofits.PicklableHDU(mean_image)]), output_mean_image_fn
             )
         if self.output_coverage_map:
             iofits.write_fits(
-                iofits.DaskHDUList([iofits.DaskHDU(coverage_image)]), output_coverage_map_fn
+                iofits.PicklableHDUList([iofits.PicklableHDU(coverage_image)]), output_coverage_map_fn
             )
 
         end = time.perf_counter()

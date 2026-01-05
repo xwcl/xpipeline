@@ -1,7 +1,14 @@
+import tqdm
 import numpy as np
+from numpy.typing import ArrayLike, DTypeLike
 import sys
 import typing
+import ray
+import psutil
+from dataclasses import dataclass
 import logging
+from astropy.io import fits
+from typing import Optional, Union
 import xconf
 from functools import partial
 
@@ -65,18 +72,41 @@ class HeaderSelectionFilter:
     # HIERARCH TWEETERSPECK SEPARATIONS == 15
     # HIERARCH HOLOOP LOOP STATE == 2
 
-def apply_filters_to_hdulist(hdul, filename, filters: list[HeaderSelectionFilter]):
+def apply_filters_to_hdulist(hdul, filters: list[HeaderSelectionFilter]):
     keep = True
     for filt in filters:
         the_val = hdul[filt.ext].header.get(filt.keyword)
-        print(f"{the_val=} {filt.value=}")
         if filt.equal:
             keep = the_val == filt.value
         else:
             keep = the_val != filt.value
         if not keep:
             break
-    return filename if keep else None
+    return keep
+
+@dataclass
+class FileMetadata:
+    filename : str
+    header : fits.Header
+    ext_shapes : dict[str, tuple[int, int]]
+    ext_dtypes : dict[str, DTypeLike]
+
+@ray.remote
+def header_load_and_filter(input_fn : str, metadata_ext : Union[str, int], filters: list[HeaderSelectionFilter]) -> Optional[fits.Header]:
+    with open(input_fn, 'rb') as fh:
+        hdul = fits.open(fh)
+        keep = apply_filters_to_hdulist(hdul, filters)
+        if not keep:
+            return None
+        ext_shapes = {}
+        ext_dtypes = {}
+        for idx, exthdu in enumerate(hdul):
+            if exthdu.data is not None:
+                ext_shapes[exthdu.header.get('EXTNAME', idx)] = exthdu.data.shape
+                ext_dtypes[exthdu.header.get('EXTNAME', idx)] = exthdu.data.dtype
+        hdr = hdul[metadata_ext].header.copy()
+        return FileMetadata(filename=input_fn, header=hdr, ext_shapes=ext_shapes, ext_dtypes=ext_dtypes)
+
 
 @xconf.config
 class CollectDataset(MultiInputCommand):
@@ -87,25 +117,24 @@ class CollectDataset(MultiInputCommand):
         default="DATE-OBS", help="FITS keyword with date of observation as ISO-8601 string")
     dtype : str = xconf.field(default=None, help="Set output data type and width (default: use input)")
     obs : typing.Union[SimpleObservation, SimpleAdiObservation, VappAdiObservation] = xconf.field(
-        default=SimpleObservation(),
+        default_factory=SimpleObservation,
         help="Observation strategy metatdata"
     )
-    filters : typing.Optional[list[HeaderSelectionFilter]] = xconf.field(
+    filters : list[HeaderSelectionFilter] = xconf.field(
         default_factory=list,
         help="Filters to remove frames from the collection"
     )
     ray : base.AnyRayConfig = xconf.field(
-        default=base.LocalRayConfig(),
+        default_factory=base.LocalRayConfig,
         help="Ray distributed framework configuration"
     )
-
-    
+    batch_size : int = xconf.field(default=32)
 
     def main(self):
-        import dask
-        from ray.util.dask import ray_dask_get
+        # import dask
+        # from ray.util.dask import ray_dask_get
         self.ray.init()
-        from xpipeline.core import LazyPipelineCollection
+        # from xpipeline.core import LazyPipelineCollection
         import fsspec.spec
         import numpy as np
         from .. import utils
@@ -123,55 +152,65 @@ class CollectDataset(MultiInputCommand):
         output_filepath = utils.join(destination, utils.basename("collect_dataset.fits"))
         self.quit_if_outputs_exist([output_filepath])
 
-        inputs = LazyPipelineCollection(all_inputs).map(iofits.load_fits_from_path).precompute(scheduler=ray_dask_get)
+        log.debug(f"Memory avail: {psutil.virtual_memory().available / 1024 / 1024} MB")
 
-        # recreate with filtered
-        all_inputs = [
-            x 
-            for x in 
-            inputs.zip_map(partial(apply_filters_to_hdulist, filters=self.filters), all_inputs).compute()
-            if x is not None
-        ]
-        print(f"{all_inputs=}")
-        inputs = LazyPipelineCollection(all_inputs).map(iofits.load_fits_from_path)
+        # parallel load/parse headers
+        futs = []
+        for fn in all_inputs:
+            futs.append(header_load_and_filter.remote(fn, self.metadata_ext, self.filters))
+        metas: list[FileMetadata] = []
+        skipped = 0
+        with tqdm.tqdm(desc='load headers', total=len(all_inputs)) as pbar:
+            while futs:
+                finished_futs, futs = ray.wait(futs, num_returns=min(self.batch_size, len(futs)))
+                new_metas = ray.get(finished_futs)
+                for m in new_metas:
+                    if m is not None:
+                        metas.append(m)
+                    else:
+                        skipped += 1
+                pbar.update(len(finished_futs))
 
-        (first,) = dask.compute(inputs.items[0])
-        n_inputs = len(inputs.items)
-        cubes = {}
-        for ext in first.extnames:
-            if isinstance(ext, int):
-                rewrite_ext = "SCI" if ext == 0 else "SCI_{ext}"
-            else:
-                rewrite_ext = ext
-            if rewrite_ext in cubes:
-                raise RuntimeError(
-                    f"Name collision {ext=} {rewrite_ext=} {list(cubes.keys())=}"
-                )
-            if not len(first[ext].data.shape):
-                continue
-            cubes[rewrite_ext] = iofits.hdulists_to_dask_cube(
-                inputs.items,
-                ext=ext,
-                plane_shape=first[ext].data.shape,
-                dtype=first[ext].data.dtype,
-            )
 
+        log.info(f"Collecting {len(metas)} frames")
+        if len(self.filters):
+            log.info(f"Skipped {skipped}")
+
+        log.debug(f"Memory avail: {psutil.virtual_memory().available / 1024 / 1024} MB")
+
+        # sort metadata by date
+        metas.sort(key=lambda x: x.header[self.date_obs_keyword])
+
+        # figure out the memory requirements
+        example_meta = metas[0]
+        num_files_kept = len(metas)
+        total_size_bytes = 0
+        extnames = tuple(example_meta.ext_dtypes.keys())
+        for k in extnames:
+            shape = example_meta.ext_shapes[k]
+            dtype = example_meta.ext_dtypes[k]
+            # seems like there should be a better way to introspect itemsize...
+            size_bytes = np.prod(shape) * np.ones(1, dtype=dtype).itemsize
+            log.debug(f"extname: {k} -- {shape} <{dtype}> ({size_bytes/1024/1024} MB)")
+            total_size_bytes += size_bytes
+        log.info(f"Array data total: {total_size_bytes / 1024 / 1024} MB")
+        stats = psutil.virtual_memory()  # returns a named tuple
+        available = getattr(stats, 'available')
+        if total_size_bytes > 0.8 * available:
+            log.warning(f"Allocation may fail, {available / 1024 / 1024} MB available")
+        if total_size_bytes > available:
+            raise RuntimeError(f"Need at least {total_size_bytes} bytes RAM, but OS reports {available} bytes free")
+
+        # make a metadata table from the headers
         obs_table_name = "OBSTABLE"
         obs_table_mask_name = "OBSTABLE_MASK"
 
-        static_header, metadata_table = (inputs
-            .map(lambda hdulist: hdulist[self.metadata_ext].header.copy())
-            .collect(obs_table.construct_headers_table, _delayed_kwargs={"nout": 2})
-        )
-
-        static_header, metadata_table, cubes = dask.compute(
-            static_header, metadata_table, cubes
-        )
+        log.debug(f"Memory avail: {psutil.virtual_memory().available / 1024 / 1024} MB")
+        log.info("Constructing metadata table...")
+        static_header, metadata_table = obs_table.construct_headers_table([x.header for x in metas])
+        log.debug(f"Memory avail: {psutil.virtual_memory().available / 1024 / 1024} MB")
 
         date_obs_keyword = self.date_obs_keyword
-        sorted_index = np.argsort(metadata_table[date_obs_keyword])
-        metadata_table = metadata_table[sorted_index]
-
         obs_method = {}
 
         # compute derotation angles?
@@ -191,50 +230,36 @@ class CollectDataset(MultiInputCommand):
                 "derotation_angles"
             ] = f"{obs_table_name}.derotation_angle_deg"
 
-        
-
-        # handle paired vAPP cubes if requested
-        if hasattr(self.obs, 'vapp_left_ext'):
-            left_extname = self.obs.vapp_left_ext
-            right_extname = self.obs.vapp_right_ext
-            log.debug(
-                f"Before crop: {cubes[left_extname].shape=} {cubes[right_extname].shape=}"
-            )
-            cubes[left_extname], cubes[right_extname] = vapp.crop_paired_cubes(
-                cubes[left_extname], cubes[right_extname]
-            )
-            log.debug(
-                f"After crop: {cubes[left_extname].shape=} {cubes[right_extname].shape=}"
-            )
-            if "vapp" not in obs_method:
-                obs_method['vapp'] = {}
-            obs_method['vapp']['left'] = left_extname
-            obs_method['vapp']['right'] = right_extname
-        elif hasattr(self.obs, "ext"):
-            obs_method["ext"] = self.obs.ext if self.obs.ext != 0 else "SCI"
-        else:
-            raise RuntimeError(f"No extension specified as ext= or vapp_*_ext= (shouldn't happen at this point)")
-
         static_header["OBSMETHD"] = utils.flatten_obs_method(obs_method)
         log.debug(f"OBSMETHD {static_header['OBSMETHD']}")
 
-        hdul = iofits.DaskHDUList(
-            [iofits.DaskHDU(data=None, header=static_header, kind="primary")]
+        hdul = iofits.PicklableHDUList(
+            [iofits.PicklableHDU(data=None, header=static_header, kind="primary")]
         )
+        cubes = {}
+        for extname, shape in example_meta.ext_shapes.items():
+            cubes[extname] = np.zeros((num_files_kept,) + shape, dtype=example_meta.ext_dtypes[extname])
+        
+        for idx, meta in enumerate(tqdm.tqdm(metas, desc='copy data')):
+            with open(meta.filename, 'rb') as fh:
+                hdul = fits.open(fh)
+                for extname in cubes:
+                    cubes[extname][idx] = hdul[extname].data
+
         for extname, cube in cubes.items():
-            outcube = cube[sorted_index]
+            outcube = cube
             if self.dtype is not None:
                 output_dtype = _DTYPE_LOOKUP[self.dtype]
                 outcube = outcube.astype(output_dtype)
-            hdu = iofits.DaskHDU(outcube)
+            hdu = iofits.PicklableHDU(outcube)
             hdu.header["EXTNAME"] = extname
             hdul.append(hdu)
 
-        table_hdu = iofits.DaskHDU(metadata_table, kind="bintable")
+        table_hdu = iofits.PicklableHDU(metadata_table, kind="bintable")
         table_hdu.header["EXTNAME"] = obs_table_name
         hdul.append(table_hdu)
 
-        table_mask_hdu = iofits.DaskHDU(metadata_table.mask, kind="bintable")
+        table_mask_hdu = iofits.PicklableHDU(metadata_table.mask, kind="bintable")
         table_mask_hdu.header["EXTNAME"] = obs_table_mask_name
         hdul.append(table_mask_hdu)
 

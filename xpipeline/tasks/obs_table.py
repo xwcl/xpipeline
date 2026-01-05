@@ -72,7 +72,7 @@ def _date_timestamp_cols(varying_dtypes, dateful_kws):
     return varying_dtypes
     
 
-def construct_headers_table(all_headers : list[fits.Header]):
+def construct_headers_table(all_headers : list[fits.Header]) -> tuple[fits.Header, np.ma.MaskedArray]:
     """Given an iterable of astropy.io.fits.Header objects, identify
     repeated and varying keywords, extracting the former to a
     "static header" and the latter to a structured array
@@ -85,8 +85,8 @@ def construct_headers_table(all_headers : list[fits.Header]):
     Returns
     -------
     static_header : astropy.io.fits.Header
-    tbl_data : np.ndarray
-    tbl_mask : np.ndarray
+    tbl_data : numpy.ma.MaskedArray
+        masked array indicating where varying header values were missing or unparseable
     """
     non_varying_kw, varying_kw, varying_dtypes, dateful_kws = separate_varying_header_keywords(
         all_headers
@@ -107,7 +107,7 @@ def construct_headers_table(all_headers : list[fits.Header]):
                 else:
                     try:
                         tbl_data[idx][kw] = header[kw]
-                    except ValueError:
+                    except (ValueError, KeyError):
                         tbl_mask[idx][kw] = True  # true where invalid for inferred dtype
             else:
                 tbl_mask[idx][kw] = True  # true where value is missing/imputed and should be masked in maskedarray
