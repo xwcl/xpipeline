@@ -17,7 +17,7 @@ class ExcludeRangeConfig:
 @xconf.config
 class KlipInputConfig:
     sci_arr: FitsConfig
-    estimation_mask: FitsConfig
+    estimation_mask: Optional[FitsConfig]
     combination_mask: Optional[FitsConfig]
     initial_decomposition_path : str = None
     mask_min_r_px : Union[int,float] = xconf.field(default=None, help="Apply radial mask excluding pixels < mask_min_r_px from center")
@@ -180,7 +180,7 @@ class Klip(BaseCommand):
         destination = self.destination
         dest_fs = utils.get_fs(destination)
         dest_fs.makedirs(destination, exist_ok=True)
-        if self.initial_decomposition:
+        if self.initial_decomposition_only:
             outputs = [output_initial_decomp_fn]
         else:
             outputs = [output_klip_final_fn]

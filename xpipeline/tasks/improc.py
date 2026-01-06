@@ -658,7 +658,12 @@ def shifts_from_cutout(sci_arr, spec, upsample_factor=100):
     )
     return shifts
 
-def subpixel_location_from_cutout(sci_arr, spec: ImageFeatureSpec, upsample_factor=100, prefilter_sigma_px: Optional[float] = None):
+@dataclass
+class CutoutMeasurement:
+    location : Point
+    total_counts : float
+
+def subpixel_location_from_cutout(sci_arr, spec: ImageFeatureSpec, upsample_factor=100, prefilter_sigma_px: Optional[float] = None) -> CutoutMeasurement:
     '''Compute the location of the feature given by `spec` to sub-pixel precision
     assuming the spec template is centered at the array center (npix-1)/2
 
@@ -677,6 +682,7 @@ def subpixel_location_from_cutout(sci_arr, spec: ImageFeatureSpec, upsample_fact
     if prefilter_sigma_px is not None:
         subframe = gaussian_smooth(subframe, prefilter_sigma_px)
     subframe, template = pad_to_match(interpolate_nonfinite(subframe), spec.template)
+    total_counts = subframe.sum()
     # xcorr
     shifts, error, phasediff = skimage.registration.phase_cross_correlation(
         reference_image=subframe,
@@ -685,7 +691,8 @@ def subpixel_location_from_cutout(sci_arr, spec: ImageFeatureSpec, upsample_fact
         normalization=None,
     )
     yc, xc = arr_center(spec.template)
-    return Point(y=spec.search_box.origin.y + yc + shifts[0], x=spec.search_box.origin.x + xc + shifts[1])
+    pt = Point(y=spec.search_box.origin.y + yc + shifts[0], x=spec.search_box.origin.x + xc + shifts[1])
+    return CutoutMeasurement(location=pt, total_counts=total_counts)
 
 
 def aligned_cutout(

@@ -133,27 +133,39 @@ def _load_fits_frame(frame_fn) -> iofits.PicklableHDUList:
     return iofits.load_fits_from_path(frame_fn)
 load_fits_frame = ray.remote(_load_fits_frame)
 
-
-def _write_fits_frame(frame_hdul: iofits.PicklableHDUList, shifted_frame: ArrayLike, obsc_output_fn: pathlib.Path, ext : Union[int, str]=0):
-    shifted_frame_hdul = frame_hdul.updated_copy(new_data_for_exts={ext: shifted_frame})
-    iofits.write_fits(shifted_frame_hdul, obsc_output_fn)
-    return obsc_output_fn
-write_fits_frame = ray.remote(_write_fits_frame)
-
 def _data_from_hdul(hdul: fits.HDUList, ext: Union[str,int]):
     return hdul[ext].data.astype('=f8')
 data_from_hdul = ray.remote(_data_from_hdul)
 
 @dataclass
 class RegistrationMeasurements:
-    features: list[improc.Point]
-    center: Optional[improc.Point] = None
+    features: list[improc.CutoutMeasurement]
+    center: Optional[improc.CutoutMeasurement] = None
 
-def _measure_features(data: ArrayLike, specs: list[RegistrationFeature], center_spec: Optional[RegistrationFeature]=None, usm_sigma_px: Optional[float]=None) -> RegistrationMeasurements:
+def _write_fits_frame(frame_hdul: iofits.PicklableHDUList, shifted_frame: ArrayLike, obsc_output_fn: pathlib.Path, measurements : RegistrationMeasurements, center: improc.Point, ext : Union[int, str]=0):
+    new_headers = {}
+    for idx, feat in enumerate(measurements.features):
+        new_headers[f'REG{idx:02}XC'] = (feat.location.x, f'x center of feature {idx} in shifted frame')
+        new_headers[f'REG{idx:02}YC'] = (feat.location.y, f'y center of feature {idx} in shifted frame')
+        new_headers[f'REG{idx:02}T'] = (feat.total_counts, f'total counts of feature {idx}')
+    shifted_frame_hdul = frame_hdul.updated_copy(
+        new_data_for_exts={ext: shifted_frame},
+        new_headers_for_exts=new_headers
+    )
+    iofits.write_fits(shifted_frame_hdul, obsc_output_fn)
+    return obsc_output_fn
+write_fits_frame = ray.remote(_write_fits_frame)
+
+def _measure_features(
+        data: ArrayLike,
+        specs: list[RegistrationFeature],
+        center_spec: Optional[RegistrationFeature]=None,
+        usm_sigma_px: Optional[float]=None
+) -> RegistrationMeasurements:
     from ..tasks import improc
     if usm_sigma_px is not None:
         data = data - improc.gaussian_smooth(data, usm_sigma_px)
-    feature_measurements: list[improc.Point] = []
+    feature_measurements: list[improc.CutoutMeasurement] = []
     for spec in specs:
         feature_measurements.append(improc.subpixel_location_from_cutout(data, spec))
     center_measurement = None
@@ -176,8 +188,8 @@ def _summarize_offsets(*offsets: RegistrationMeasurements) -> list[improc.DeltaP
     per_feature_deltas = [([], []) for _ in range(n_features)]
     for meas in offsets:
         for idx, feat_meas in enumerate(meas.features):
-            dx = meas.center.x - feat_meas.x
-            dy = meas.center.y - feat_meas.y
+            dx = meas.center.location.x - feat_meas.location.x
+            dy = meas.center.location.y - feat_meas.location.y
             per_feature_deltas[idx][0].append(dx)
             per_feature_deltas[idx][1].append(dy)
     log.info(f"Using {len(offsets)} measurements of {n_features} features to get feature-to-center offsets")
@@ -193,8 +205,8 @@ def _center_from_features(feature_measurements: RegistrationMeasurements, featur
     center_est_xs = []
     center_est_ys = []
     for meas, offst in zip(feature_measurements.features, feature_offsets):
-        center_est_xs.append(meas.x + offst.dx)
-        center_est_ys.append(meas.y + offst.dy)
+        center_est_xs.append(meas.location.x + offst.dx)
+        center_est_ys.append(meas.location.y + offst.dy)
     # TODO track uncertainties
     return improc.Point(x=np.average(center_est_xs), y=np.average(center_est_ys))
 center_from_features = ray.remote(_center_from_features)
@@ -222,11 +234,11 @@ def _measure_and_shift_ref_frame(
     if output_fn is not None:
         shifted_frame = _make_shifted_frame(
             frame_data,
-            measurements.center,
+            measurements.center.location,
             new_ctr,
             new_dimensions
         )
-        _write_fits_frame(frame_hdul, shifted_frame, output_fn, ext=ext)
+        _write_fits_frame(frame_hdul, shifted_frame, output_fn, measurements, ext=ext)
     return measurements
 measure_and_shift_ref_frame = ray.remote(_measure_and_shift_ref_frame)
 
@@ -242,10 +254,10 @@ def _measure_and_shift_obsc_frame(
 ):
     frame_hdul = _load_fits_frame(obsc_frame_fn)
     frame_data = _data_from_hdul(frame_hdul, ext=ext)
-    measure_features_ref = _measure_features(frame_data, feature_specs, usm_sigma_px=usm_sigma_px)
-    center_est = _center_from_features(measure_features_ref, offsets_summary)
+    features_meas = _measure_features(frame_data, feature_specs, usm_sigma_px=usm_sigma_px)
+    center_est = _center_from_features(features_meas, offsets_summary)
     shifted_frame = _make_shifted_frame(frame_data, center_est, new_ctr, new_dimensions)
-    return _write_fits_frame(frame_hdul, shifted_frame, obsc_output_fn, ext=ext)
+    return _write_fits_frame(frame_hdul, shifted_frame, obsc_output_fn, features_meas, center_est, ext=ext)
 measure_and_shift_obsc_frame = ray.remote(_measure_and_shift_obsc_frame)
 
 

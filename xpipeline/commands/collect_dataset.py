@@ -190,10 +190,11 @@ class CollectDataset(MultiInputCommand):
             shape = example_meta.ext_shapes[k]
             dtype = example_meta.ext_dtypes[k]
             # seems like there should be a better way to introspect itemsize...
-            size_bytes = np.prod(shape) * np.ones(1, dtype=dtype).itemsize
-            log.debug(f"extname: {k} -- {shape} <{dtype}> ({size_bytes/1024/1024} MB)")
+            size_bytes = num_files_kept * np.prod(shape) * np.ones(1, dtype=dtype).itemsize
+            log.debug(f"extname: {k} -- {shape} [{dtype}] ({size_bytes/1024/1024} MB)")
             total_size_bytes += size_bytes
         log.info(f"Array data total: {total_size_bytes / 1024 / 1024} MB")
+
         stats = psutil.virtual_memory()  # returns a named tuple
         available = getattr(stats, 'available')
         if total_size_bytes > 0.8 * available:
@@ -210,7 +211,6 @@ class CollectDataset(MultiInputCommand):
         static_header, metadata_table = obs_table.construct_headers_table([x.header for x in metas])
         log.debug(f"Memory avail: {psutil.virtual_memory().available / 1024 / 1024} MB")
 
-        date_obs_keyword = self.date_obs_keyword
         obs_method = {}
 
         # compute derotation angles?
@@ -252,6 +252,8 @@ class CollectDataset(MultiInputCommand):
                 output_dtype = _DTYPE_LOOKUP[self.dtype]
                 outcube = outcube.astype(output_dtype)
             hdu = iofits.PicklableHDU(outcube)
+            if isinstance(extname, int):
+                extname = f"EXT_{extname}"
             hdu.header["EXTNAME"] = extname
             output_hdul.append(hdu)
 
