@@ -165,7 +165,7 @@ measure_features = ray.remote(_measure_features)
 def _make_shifted_frame(frame: ArrayLike, frame_ctr: improc.Point, new_ctr: improc.Point, output_extent : improc.PixelExtent):
     dx, dy = new_ctr.x - frame_ctr.x, new_ctr.y - frame_ctr.y
     new_shape = (output_extent.height, output_extent.width)
-    return improc.shift2(frame, dx, dy, new_shape, anchor_to_center=True)
+    return improc.shift2(frame, dx, dy, new_shape, anchor_to_center=False)
 make_shifted_frame = ray.remote(_make_shifted_frame)
 
 def _summarize_offsets(*offsets: RegistrationMeasurements) -> list[improc.DeltaPoint]:
@@ -219,13 +219,13 @@ def _measure_and_shift_ref_frame(
         center_spec=center_spec,
         usm_sigma_px=usm_sigma_px
     )
-    shifted_frame = _make_shifted_frame(
-        frame_data,
-        measurements.center,
-        new_ctr,
-        new_dimensions
-    )
     if output_fn is not None:
+        shifted_frame = _make_shifted_frame(
+            frame_data,
+            measurements.center,
+            new_ctr,
+            new_dimensions
+        )
         _write_fits_frame(frame_hdul, shifted_frame, output_fn, ext=ext)
     return measurements
 measure_and_shift_ref_frame = ray.remote(_measure_and_shift_ref_frame)
