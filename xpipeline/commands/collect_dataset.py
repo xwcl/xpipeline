@@ -233,7 +233,7 @@ class CollectDataset(MultiInputCommand):
         static_header["OBSMETHD"] = utils.flatten_obs_method(obs_method)
         log.debug(f"OBSMETHD {static_header['OBSMETHD']}")
 
-        hdul = iofits.PicklableHDUList(
+        output_hdul = iofits.PicklableHDUList(
             [iofits.PicklableHDU(data=None, header=static_header, kind="primary")]
         )
         cubes = {}
@@ -253,14 +253,14 @@ class CollectDataset(MultiInputCommand):
                 outcube = outcube.astype(output_dtype)
             hdu = iofits.PicklableHDU(outcube)
             hdu.header["EXTNAME"] = extname
-            hdul.append(hdu)
+            output_hdul.append(hdu)
 
         table_hdu = iofits.PicklableHDU(metadata_table, kind="bintable")
         table_hdu.header["EXTNAME"] = obs_table_name
-        hdul.append(table_hdu)
+        output_hdul.append(table_hdu)
 
         table_mask_hdu = iofits.PicklableHDU(metadata_table.mask, kind="bintable")
         table_mask_hdu.header["EXTNAME"] = obs_table_mask_name
-        hdul.append(table_mask_hdu)
+        output_hdul.append(table_mask_hdu)
 
-        iofits.write_fits(hdul, output_filepath, overwrite=True)
+        iofits.write_fits(output_hdul, output_filepath, overwrite=True)
